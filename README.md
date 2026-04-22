@@ -1,36 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# switch-platform
 
-## Getting Started
+The admin dashboard (and eventually provider portal) for Switchable Ltd.
 
-First, run the development server:
+- `admin.switchleads.co.uk` → internal admin UI (Charlotte, Sasha)
+- `app.switchleads.co.uk` → provider portal (Phase 4)
+
+Single codebase, hostname-based routing in `proxy.ts`.
+
+Full architecture, MVP scope, and build sequence live in the workspace at
+`Switch-Claude/platform/docs/admin-dashboard-scoping.md`.
+
+## Stack
+
+- Next.js 15 (App Router, Turbopack, Server Actions)
+- TypeScript
+- Tailwind CSS v4
+- shadcn/ui
+- Supabase (Postgres + Auth + SSR)
+- Deployed on Netlify
+
+## Local dev
 
 ```bash
+cp .env.local.example .env.local
+# fill in Supabase URL, anon key, ADMIN_ALLOWLIST
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Dev server runs at `http://localhost:3000`. Defaults to the admin surface. To
+test the provider surface locally, visit `http://app.localhost:3000` (most OSes
+resolve `.localhost` subdomains automatically).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Auth flow
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. User lands on any admin path → proxy redirects unauthenticated users to `/login`
+2. `/login` → email + password (Server Action)
+3. Server Action checks MFA factor state:
+   - No factor enrolled → redirect to `/enrol-mfa` (QR code setup)
+   - Factor enrolled → redirect to `/verify-mfa` (TOTP challenge)
+4. After AAL2 step-up → redirect to admin home
+5. Admin layout double-checks allowlist + AAL2 before rendering any protected content
 
-## Learn More
+Proxy and layout both enforce auth — defence in depth.
 
-To learn more about Next.js, take a look at the following resources:
+## Environment variables (production, set in Netlify)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key (RLS-protected) |
+| `ADMIN_ALLOWLIST` | Comma-separated list of admin emails |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Never in this repo
 
-## Deploy on Vercel
+- Service role key (set only in Supabase dashboard, never here)
+- Any secret not flagged `NEXT_PUBLIC_*`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Per `.claude/rules/data-infrastructure.md` in the workspace.
