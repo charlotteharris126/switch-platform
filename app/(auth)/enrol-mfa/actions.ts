@@ -3,19 +3,31 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
+type FactorRow = { id: string; status: string; friendly_name?: string | null };
+
 export async function startEnrolmentAction() {
   const supabase = await createClient();
 
+  // Clean up any stuck unverified factors from previous attempts. Supabase rejects
+  // duplicate friendly names, so without this, repeat clicks fail with "already exists".
+  const { data: factorsResp } = await supabase.auth.mfa.listFactors();
+  // SDK types are narrow here; the runtime payload includes both verified and unverified.
+  const allFactors = ((factorsResp as unknown as { all?: FactorRow[] })?.all ?? []) as FactorRow[];
+  const unverified = allFactors.filter((f) => f.status === "unverified");
+  for (const factor of unverified) {
+    await supabase.auth.mfa.unenroll({ factorId: factor.id });
+  }
+
   const { data, error } = await supabase.auth.mfa.enroll({
     factorType: "totp",
-    friendlyName: "Admin TOTP",
+    // Unique name per call so collisions never block enrolment, even if cleanup misses one.
+    friendlyName: `Admin TOTP (${new Date().toISOString()})`,
   });
 
   if (error || !data) {
     redirect(`/enrol-mfa?error=${encodeURIComponent(error?.message ?? "enrolment_failed")}`);
   }
 
-  // Pass factor id, qr code, and secret to the page via search params.
   const params = new URLSearchParams({
     factor_id: data.id,
     qr: data.totp.qr_code,
