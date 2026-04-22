@@ -8,19 +8,24 @@ type FactorRow = { id: string; status: string; friendly_name?: string | null };
 export async function startEnrolmentAction() {
   const supabase = await createClient();
 
-  // Clean up any stuck unverified factors from previous attempts. Supabase rejects
-  // duplicate friendly names, so without this, repeat clicks fail with "already exists".
-  const { data: factorsResp } = await supabase.auth.mfa.listFactors();
-  // SDK types are narrow here; the runtime payload includes both verified and unverified.
-  const allFactors = ((factorsResp as unknown as { all?: FactorRow[] })?.all ?? []) as FactorRow[];
-  const unverified = allFactors.filter((f) => f.status === "unverified");
-  for (const factor of unverified) {
-    await supabase.auth.mfa.unenroll({ factorId: factor.id });
+  // Best-effort cleanup of any stuck unverified factors. Wrapped in try/catch because
+  // the SDK's listFactors return shape varies between versions and we don't want a
+  // cleanup hiccup to block enrolment. The unique friendly name below is what actually
+  // prevents the duplicate-name collision.
+  try {
+    const { data: factorsResp } = await supabase.auth.mfa.listFactors();
+    const allFactors = ((factorsResp as unknown as { all?: FactorRow[] })?.all ?? []) as FactorRow[];
+    const unverified = allFactors.filter((f) => f.status === "unverified");
+    for (const factor of unverified) {
+      await supabase.auth.mfa.unenroll({ factorId: factor.id });
+    }
+  } catch {
+    // Ignore — cleanup is opportunistic. Enrolment with unique name still succeeds.
   }
 
   const { data, error } = await supabase.auth.mfa.enroll({
     factorType: "totp",
-    // Unique name per call so collisions never block enrolment, even if cleanup misses one.
+    // Unique per call → friendly-name collisions are impossible.
     friendlyName: `Admin TOTP (${new Date().toISOString()})`,
   });
 
