@@ -10,8 +10,9 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime, formatAgo, truncate } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
 
-export default async function DeadLetterPage() {
+export default async function ErrorsPage() {
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -39,21 +40,22 @@ export default async function DeadLetterPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Dead letter</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          {error ? (
-            <span className="text-rose-600">Error: {error.message}</span>
+      <PageHeader
+        eyebrow="Errors"
+        title="Failed webhooks"
+        subtitle={
+          error ? (
+            <span className="text-[#b3412e]">Error: {error.message}</span>
           ) : (
             <>
-              {rows.length} rows · {unresolved.length} unresolved
-              {over7d > 0 && <span className="text-rose-600"> · {over7d} over 7 days old</span>}
+              {rows.length} total · {unresolved.length} unresolved
+              {over7d > 0 && <span className="text-[#b3412e]"> · {over7d} over 7 days old</span>}
             </>
-          )}
-        </p>
-      </div>
+          )
+        }
+      />
 
-      <div className="bg-white border border-slate-200 rounded-md overflow-hidden">
+      <div className="bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
         <Table>
           <TableHeader>
             <TableRow>
@@ -70,7 +72,7 @@ export default async function DeadLetterPage() {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-slate-500 py-10">
+                <TableCell colSpan={8} className="text-center text-[#5a6a72] py-10">
                   Dead letter is empty.
                 </TableCell>
               </TableRow>
@@ -80,16 +82,16 @@ export default async function DeadLetterPage() {
                 const isResolved = !!r.replayed_at;
                 const isStale = !isResolved && ageMs > 7 * 24 * 3600 * 1000;
                 return (
-                  <TableRow key={r.id} className={isStale ? "bg-rose-50/50" : ""}>
+                  <TableRow key={r.id} className={isStale ? "bg-[#b3412e]/5" : ""}>
                     <TableCell className="font-mono text-xs">{r.id}</TableCell>
                     <TableCell className="text-xs whitespace-nowrap">
                       {formatDateTime(r.received_at)}
                     </TableCell>
-                    <TableCell className="text-xs text-slate-600 whitespace-nowrap">
+                    <TableCell className="text-xs text-[#5a6a72] whitespace-nowrap">
                       {formatAgo(r.received_at)}
                     </TableCell>
                     <TableCell className="text-xs">{r.source}</TableCell>
-                    <TableCell className="text-xs text-slate-600">
+                    <TableCell className="text-xs text-[#5a6a72]">
                       {truncate(r.error_context, 60)}
                     </TableCell>
                     <TableCell>
@@ -114,7 +116,7 @@ export default async function DeadLetterPage() {
                       {r.replay_submission_id ? (
                         <Link
                           href={`/leads/${r.replay_submission_id}`}
-                          className="text-blue-600 hover:underline font-mono"
+                          className="text-[#cd8b76] hover:text-[#b3412e] font-semibold font-mono"
                         >
                           #{r.replay_submission_id}
                         </Link>

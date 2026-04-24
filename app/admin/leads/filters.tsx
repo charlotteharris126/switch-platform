@@ -28,14 +28,14 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
   }
 
   const selectClass =
-    "h-8 text-xs border border-slate-200 rounded-md bg-white px-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 min-w-32";
+    "h-9 text-xs border border-[#dad4cb] rounded-lg bg-white px-3 text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76] min-w-32";
   const inputClass =
-    "h-8 text-xs border border-slate-200 rounded-md bg-white px-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300";
+    "h-9 text-xs border border-[#dad4cb] rounded-lg bg-white px-3 text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76]";
 
   return (
-    <div className="flex flex-wrap gap-2 items-end bg-white border border-slate-200 rounded-md p-3">
+    <div className="flex flex-wrap gap-3 items-end bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">Search</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Search</span>
         <input
           className={inputClass + " w-56"}
           placeholder="name or email…"
@@ -47,7 +47,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">Funding route</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Funding route</span>
         <select
           className={selectClass}
           value={current.funding_route ?? ""}
@@ -63,7 +63,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">Course</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Course</span>
         <select
           className={selectClass}
           value={current.course_id ?? ""}
@@ -79,7 +79,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">Routed to</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Routed to</span>
         <select
           className={selectClass}
           value={current.provider ?? ""}
@@ -95,7 +95,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">Status</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Status</span>
         <select
           className={selectClass}
           value={current.routed ?? ""}
@@ -108,7 +108,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">DQ</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">DQ</span>
         <select
           className={selectClass}
           value={current.dq ?? ""}
@@ -121,7 +121,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">Has phone</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Has phone</span>
         <select
           className={selectClass}
           value={current.has_phone ?? ""}
@@ -134,7 +134,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">From</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">From</span>
         <input
           type="date"
           className={inputClass}
@@ -144,7 +144,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-slate-500">To</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">To</span>
         <input
           type="date"
           className={inputClass}
@@ -155,7 +155,7 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
 
       <button
         onClick={clearAll}
-        className="h-8 px-3 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md"
+        className="h-9 px-4 text-[11px] font-bold uppercase tracking-[0.08em] text-[#143643] border border-[#dad4cb] rounded-full hover:bg-[#f4f1ed] hover:border-[#cd8b76]/50"
         disabled={pending}
       >
         Clear

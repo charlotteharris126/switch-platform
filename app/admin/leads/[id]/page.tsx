@@ -33,7 +33,7 @@ export default async function LeadDetailPage({
 
   if (error) {
     return (
-      <div className="text-rose-600">
+      <div className="text-[#b3412e]">
         Error loading lead: {error.message}
       </div>
     );
@@ -98,10 +98,10 @@ export default async function LeadDetailPage({
   return (
     <div className="max-w-6xl space-y-6">
       <div>
-        <Link href="/leads" className="text-xs text-slate-500 hover:text-slate-700">
+        <Link href="/leads" className="text-[11px] font-bold uppercase tracking-[1.5px] text-[#cd8b76] hover:text-[#b3412e]">
           ← Back to leads
         </Link>
-        <h1 className="text-2xl font-semibold text-slate-900 mt-2">
+        <h1 className="text-[28px] font-extrabold text-[#11242e] mt-2 tracking-tight">
           Lead #{lead.id} — {fullName}
         </h1>
         <div className="flex gap-2 mt-2 items-center">
@@ -114,7 +114,7 @@ export default async function LeadDetailPage({
           ) : (
             <Badge variant="secondary">Unrouted</Badge>
           )}
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-[#5a6a72]">
             Submitted {formatDateTime(lead.submitted_at)}
           </span>
         </div>
@@ -185,7 +185,7 @@ export default async function LeadDetailPage({
         </CardHeader>
         <CardContent className="p-0">
           {routing.length === 0 ? (
-            <p className="text-xs text-slate-500 p-4">No routing events yet.</p>
+            <p className="text-xs text-[#5a6a72] p-4">No routing events yet.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -220,7 +220,7 @@ export default async function LeadDetailPage({
                       )}
                     </TableCell>
                     <TableCell className="text-xs">{formatDateTime(r.delivered_at)}</TableCell>
-                    <TableCell className="text-xs text-slate-500">{r.route_reason ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-[#5a6a72]">{r.route_reason ?? "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -232,11 +232,11 @@ export default async function LeadDetailPage({
       {/* Dead letter */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Dead letter replays ({deadLetters.length})</CardTitle>
+          <CardTitle className="text-sm">Error replays ({deadLetters.length})</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {deadLetters.length === 0 ? (
-            <p className="text-xs text-slate-500 p-4">No dead letter history for this lead.</p>
+            <p className="text-xs text-[#5a6a72] p-4">No error history for this lead.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -254,7 +254,7 @@ export default async function LeadDetailPage({
                       {formatDateTime(d.received_at)}
                     </TableCell>
                     <TableCell className="text-xs">{d.source}</TableCell>
-                    <TableCell className="text-xs text-slate-500">{d.error_context ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-[#5a6a72]">{d.error_context ?? "—"}</TableCell>
                     <TableCell className="text-xs">{formatDateTime(d.replayed_at)}</TableCell>
                   </TableRow>
                 ))}
@@ -271,9 +271,9 @@ export default async function LeadDetailPage({
         </CardHeader>
         <CardContent className="p-0">
           {!lead.session_id ? (
-            <p className="text-xs text-slate-500 p-4">No session_id on this lead.</p>
+            <p className="text-xs text-[#5a6a72] p-4">No session_id on this lead.</p>
           ) : partials.length === 0 ? (
-            <p className="text-xs text-slate-500 p-4">No partial captures for this session.</p>
+            <p className="text-xs text-[#5a6a72] p-4">No partial captures for this session.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -314,10 +314,10 @@ export default async function LeadDetailPage({
         </CardHeader>
         <CardContent>
           <details>
-            <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700">
+            <summary className="text-xs text-[#5a6a72] cursor-pointer hover:text-[#11242e]">
               Show JSON
             </summary>
-            <pre className="text-xs bg-slate-900 text-slate-100 p-4 rounded-md mt-2 overflow-auto max-h-96">
+            <pre className="text-xs bg-[#11242e] text-[#f4f1ed] p-4 rounded-md mt-2 overflow-auto max-h-96">
               {JSON.stringify(lead.raw_payload, null, 2)}
             </pre>
           </details>
@@ -330,8 +330,8 @@ export default async function LeadDetailPage({
 function FieldRow({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-slate-500 min-w-32">{label}</span>
-      <span className="text-slate-900 font-mono break-all">{value || "—"}</span>
+      <span className="text-[#5a6a72] min-w-32">{label}</span>
+      <span className="text-[#11242e] font-mono break-all">{value || "—"}</span>
     </div>
   );
 }

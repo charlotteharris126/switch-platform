@@ -31,7 +31,7 @@ export default async function ProviderDetailPage({
     .maybeSingle();
 
   if (error) {
-    return <div className="text-rose-600">Error loading provider: {error.message}</div>;
+    return <div className="text-[#b3412e]">Error loading provider: {error.message}</div>;
   }
   if (!provider) notFound();
 
@@ -72,10 +72,10 @@ export default async function ProviderDetailPage({
   return (
     <div className="max-w-6xl space-y-6">
       <div>
-        <Link href="/providers" className="text-xs text-slate-500 hover:text-slate-700">
+        <Link href="/providers" className="text-[11px] font-bold uppercase tracking-[1.5px] text-[#cd8b76] hover:text-[#b3412e]">
           ← Back to providers
         </Link>
-        <h1 className="text-2xl font-semibold text-slate-900 mt-2">{provider.company_name}</h1>
+        <h1 className="text-[28px] font-extrabold text-[#11242e] mt-2 tracking-tight">{provider.company_name}</h1>
         <div className="flex gap-2 mt-2 items-center">
           {provider.active ? (
             <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Active</Badge>
@@ -83,7 +83,7 @@ export default async function ProviderDetailPage({
             <Badge variant="secondary">Inactive</Badge>
           )}
           {provider.pilot_status && <Badge variant="secondary">{provider.pilot_status}</Badge>}
-          <span className="text-xs text-slate-500 font-mono">{provider.provider_id}</span>
+          <span className="text-xs text-[#5a6a72] font-mono">{provider.provider_id}</span>
         </div>
       </div>
 
@@ -147,7 +147,7 @@ export default async function ProviderDetailPage({
           <CardHeader>
             <CardTitle className="text-sm">Notes</CardTitle>
           </CardHeader>
-          <CardContent className="text-xs whitespace-pre-wrap text-slate-700">
+          <CardContent className="text-xs whitespace-pre-wrap text-[#11242e]">
             {provider.notes}
           </CardContent>
         </Card>
@@ -159,9 +159,9 @@ export default async function ProviderDetailPage({
         </CardHeader>
         <CardContent>
           {courses.length === 0 ? (
-            <p className="text-xs text-slate-500">No courses registered.</p>
+            <p className="text-xs text-[#5a6a72]">No courses registered.</p>
           ) : (
-            <pre className="text-xs bg-slate-50 p-3 rounded overflow-auto max-h-80">
+            <pre className="text-xs bg-[#f4f1ed] p-3 rounded overflow-auto max-h-80">
               {JSON.stringify(courses, null, 2)}
             </pre>
           )}
@@ -174,7 +174,7 @@ export default async function ProviderDetailPage({
         </CardHeader>
         <CardContent className="p-0">
           {routing.length === 0 ? (
-            <p className="text-xs text-slate-500 p-4">No leads routed yet.</p>
+            <p className="text-xs text-[#5a6a72] p-4">No leads routed yet.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -195,7 +195,7 @@ export default async function ProviderDetailPage({
                     <TableCell className="text-xs">
                       <Link
                         href={`/leads/${r.submission_id}`}
-                        className="text-blue-600 hover:underline font-mono"
+                        className="text-[#cd8b76] hover:text-[#b3412e] font-semibold font-mono"
                       >
                         #{r.submission_id}
                       </Link>
@@ -217,9 +217,9 @@ export default async function ProviderDetailPage({
         </CardHeader>
         <CardContent>
           {enrolments.length === 0 ? (
-            <p className="text-xs text-slate-500">No enrolments recorded.</p>
+            <p className="text-xs text-[#5a6a72]">No enrolments recorded.</p>
           ) : (
-            <pre className="text-xs bg-slate-50 p-3 rounded overflow-auto max-h-96">
+            <pre className="text-xs bg-[#f4f1ed] p-3 rounded overflow-auto max-h-96">
               {JSON.stringify(enrolments, null, 2)}
             </pre>
           )}
@@ -232,8 +232,8 @@ export default async function ProviderDetailPage({
 function FieldRow({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-slate-500 min-w-32">{label}</span>
-      <span className="text-slate-900 font-mono break-all">{value || "—"}</span>
+      <span className="text-[#5a6a72] min-w-32">{label}</span>
+      <span className="text-[#11242e] font-mono break-all">{value || "—"}</span>
     </div>
   );
 }

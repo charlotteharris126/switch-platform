@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
 
 export default async function ProvidersPage() {
   const supabase = await createClient();
@@ -39,18 +40,19 @@ export default async function ProvidersPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Providers</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          {error ? (
-            <span className="text-rose-600">Error: {error.message}</span>
+      <PageHeader
+        eyebrow="Partners"
+        title="Providers"
+        subtitle={
+          error ? (
+            <span className="text-[#b3412e]">Error: {error.message}</span>
           ) : (
             <>{rows.length} providers</>
-          )}
-        </p>
-      </div>
+          )
+        }
+      />
 
-      <div className="bg-white border border-slate-200 rounded-md overflow-hidden">
+      <div className="bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
         <Table>
           <TableHeader>
             <TableRow>
@@ -67,7 +69,7 @@ export default async function ProvidersPage() {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-slate-500 py-10">
+                <TableCell colSpan={8} className="text-center text-[#5a6a72] py-10">
                   No providers yet.
                 </TableCell>
               </TableRow>
@@ -77,15 +79,15 @@ export default async function ProvidersPage() {
                   <TableCell>
                     <Link
                       href={`/providers/${encodeURIComponent(p.provider_id)}`}
-                      className="text-sm font-medium text-blue-600 hover:underline"
+                      className="text-sm font-medium text-[#143643] hover:text-[#cd8b76]"
                     >
                       {p.company_name}
                     </Link>
-                    <div className="text-xs text-slate-500 font-mono">{p.provider_id}</div>
+                    <div className="text-xs text-[#5a6a72] font-mono">{p.provider_id}</div>
                   </TableCell>
                   <TableCell className="text-xs">
                     <div>{p.contact_name ?? "—"}</div>
-                    <div className="text-slate-500">{p.contact_email ?? ""}</div>
+                    <div className="text-[#5a6a72]">{p.contact_email ?? ""}</div>
                   </TableCell>
                   <TableCell className="text-xs">
                     {p.pilot_status ? (
@@ -99,7 +101,7 @@ export default async function ProvidersPage() {
                   <TableCell className="text-xs">
                     {p.pricing_model ?? "—"}
                     {p.per_enrolment_fee != null && (
-                      <span className="text-slate-500"> · £{p.per_enrolment_fee}</span>
+                      <span className="text-[#5a6a72]"> · £{p.per_enrolment_fee}</span>
                     )}
                   </TableCell>
                   <TableCell className="text-xs">{p.free_enrolments_remaining ?? "—"}</TableCell>

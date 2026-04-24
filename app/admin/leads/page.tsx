@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime, truncate } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
 import { LeadFilters } from "./filters";
 
 const PAGE_SIZE = 50;
@@ -105,18 +106,19 @@ export default async function LeadsPage({
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Leads</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          {error ? (
-            <span className="text-rose-600">Error: {error.message}</span>
+      <PageHeader
+        eyebrow="Leads"
+        title="Lead submissions"
+        subtitle={
+          error ? (
+            <span className="text-[#b3412e]">Error: {error.message}</span>
           ) : (
             <>
-              {totalCount.toLocaleString()} total, showing {rows.length} on page {page} of {totalPages}
+              {totalCount.toLocaleString()} total · showing {rows.length} on page {page} of {totalPages}
             </>
-          )}
-        </p>
-      </div>
+          )
+        }
+      />
 
       <LeadFilters
         fundingRoutes={fundingRoutes}
@@ -125,7 +127,7 @@ export default async function LeadsPage({
         current={sp}
       />
 
-      <div className="mt-6 bg-white border border-slate-200 rounded-md overflow-hidden">
+      <div className="mt-6 bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
         <Table>
           <TableHeader>
             <TableRow>
@@ -143,25 +145,25 @@ export default async function LeadsPage({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-slate-500 py-10">
+                <TableCell colSpan={9} className="text-center text-[#5a6a72] py-10">
                   No leads match these filters.
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((r) => (
-                <TableRow key={r.id} className="hover:bg-slate-50">
+                <TableRow key={r.id} className="hover:bg-[#f4f1ed]/60">
                   <TableCell className="font-mono text-xs">
-                    <Link href={`/leads/${r.id}`} className="text-blue-600 hover:underline">
+                    <Link href={`/leads/${r.id}`} className="text-[#cd8b76] hover:text-[#b3412e] font-semibold">
                       {r.id}
                     </Link>
                   </TableCell>
-                  <TableCell className="text-xs text-slate-600 whitespace-nowrap">
+                  <TableCell className="text-xs text-[#5a6a72] whitespace-nowrap">
                     {formatDateTime(r.submitted_at)}
                   </TableCell>
                   <TableCell className="text-sm">
                     {[r.first_name, r.last_name].filter(Boolean).join(" ") || "—"}
                   </TableCell>
-                  <TableCell className="text-xs text-slate-600">{truncate(r.email, 30)}</TableCell>
+                  <TableCell className="text-xs text-[#5a6a72]">{truncate(r.email, 30)}</TableCell>
                   <TableCell className="text-xs">{truncate(r.course_id, 28)}</TableCell>
                   <TableCell className="text-xs">{r.funding_route ?? "—"}</TableCell>
                   <TableCell>
@@ -180,7 +182,7 @@ export default async function LeadsPage({
                     )}
                   </TableCell>
                   <TableCell className="text-xs">{r.primary_routed_to ?? "—"}</TableCell>
-                  <TableCell className="text-xs text-slate-500">{truncate(r.utm_campaign, 20)}</TableCell>
+                  <TableCell className="text-xs text-[#5a6a72]">{truncate(r.utm_campaign, 20)}</TableCell>
                 </TableRow>
               ))
             )}
@@ -189,7 +191,7 @@ export default async function LeadsPage({
       </div>
 
       {totalPages > 1 && (
-        <div className="mt-4 flex items-center justify-between text-sm text-slate-600">
+        <div className="mt-4 flex items-center justify-between text-sm text-[#5a6a72]">
           <span>
             Page {page} of {totalPages}
           </span>
@@ -197,7 +199,7 @@ export default async function LeadsPage({
             {page > 1 && (
               <Link
                 href={buildPageHref(sp, page - 1)}
-                className="inline-flex items-center h-7 px-3 rounded-md border border-slate-200 bg-white text-xs hover:bg-slate-50"
+                className="inline-flex items-center h-8 px-4 rounded-full border border-[#dad4cb] bg-white text-[11px] font-bold uppercase tracking-[0.08em] text-[#143643] hover:bg-[#f4f1ed] hover:border-[#cd8b76]/50"
               >
                 Previous
               </Link>
@@ -205,7 +207,7 @@ export default async function LeadsPage({
             {page < totalPages && (
               <Link
                 href={buildPageHref(sp, page + 1)}
-                className="inline-flex items-center h-7 px-3 rounded-md border border-slate-200 bg-white text-xs hover:bg-slate-50"
+                className="inline-flex items-center h-8 px-4 rounded-full border border-[#dad4cb] bg-white text-[11px] font-bold uppercase tracking-[0.08em] text-[#143643] hover:bg-[#f4f1ed] hover:border-[#cd8b76]/50"
               >
                 Next
               </Link>

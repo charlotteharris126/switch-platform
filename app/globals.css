@@ -4,12 +4,59 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* SwitchLeads brand — Montserrat (self-hosted).
+   Source of truth for weights + palette: switchleads/site/docs/brand-reference.md */
+@font-face {
+  font-family: "Montserrat";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/montserrat-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Montserrat";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/montserrat-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Montserrat";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/montserrat-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Montserrat";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/montserrat-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Montserrat";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("/fonts/montserrat-800.woff2") format("woff2");
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-heading: "Montserrat", ui-sans-serif, system-ui, sans-serif;
+
+  /* SwitchLeads brand palette — direct tokens for ad-hoc use */
+  --color-sl-navy: #11242e;
+  --color-sl-teal: #143643;
+  --color-sl-terracotta: #cd8b76;
+  --color-sl-terracotta-soft: #e0a892;
+  --color-sl-offwhite: #f4f1ed;
+  --color-sl-lightgrey: #e6e6e6;
+
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,73 +96,50 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* Light surfaces (content area) */
+  --background: #f4f1ed;         /* off-white page */
+  --foreground: #11242e;         /* navy text */
+  --card: #ffffff;
+  --card-foreground: #11242e;
+  --popover: #ffffff;
+  --popover-foreground: #11242e;
+
+  /* Primary (buttons, accents) = terracotta on dark, teal on light */
+  --primary: #143643;
+  --primary-foreground: #f4f1ed;
+
+  --secondary: #e6e6e6;
+  --secondary-foreground: #11242e;
+  --muted: #ede9e3;
+  --muted-foreground: #5a6a72;
+  --accent: #cd8b76;
+  --accent-foreground: #11242e;
+  --destructive: #b3412e;
+
+  --border: #dad4cb;
+  --input: #dad4cb;
+  --ring: #cd8b76;
+
+  --chart-1: #cd8b76;
+  --chart-2: #143643;
+  --chart-3: #11242e;
+  --chart-4: #e0a892;
+  --chart-5: #5a6a72;
+
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+
+  /* Sidebar = dark teal gradient (navy → teal), terracotta accent */
+  --sidebar: #143643;
+  --sidebar-foreground: rgba(244, 241, 237, 0.65);
+  --sidebar-primary: #cd8b76;
+  --sidebar-primary-foreground: #11242e;
+  --sidebar-accent: rgba(244, 241, 237, 0.08);
+  --sidebar-accent-foreground: #f4f1ed;
+  --sidebar-border: rgba(244, 241, 237, 0.1);
+  --sidebar-ring: #cd8b76;
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
+/* No dark-mode overrides for the admin dashboard — single branded theme. */
 
 @layer base {
   * {
@@ -123,8 +147,28 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: "Montserrat", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   html {
-    @apply font-sans;
+    font-family: "Montserrat", ui-sans-serif, system-ui, sans-serif;
   }
+  h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.02em;
+  }
+}
+
+/* SwitchLeads eyebrow label (small caps, terracotta pill) */
+.sl-eyebrow {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #cd8b76;
+  background: rgba(205, 139, 118, 0.12);
+  padding: 6px 12px;
+  border-radius: 100px;
+  border: 1px solid rgba(205, 139, 118, 0.25);
 }
