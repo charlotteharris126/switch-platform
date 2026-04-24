@@ -5,22 +5,16 @@ import { createClient } from "@/lib/supabase/server";
 
 type FactorRow = { id: string; status: string; friendly_name?: string | null };
 
-function isRedirectError(e: unknown): boolean {
-  // Next.js wraps redirect() in a thrown error with a digest starting NEXT_REDIRECT.
-  // We must NOT swallow that — re-throw so the framework handles it.
-  return (
-    typeof e === "object" &&
-    e !== null &&
-    "digest" in e &&
-    typeof (e as { digest?: unknown }).digest === "string" &&
-    (e as { digest: string }).digest.startsWith("NEXT_REDIRECT")
-  );
-}
+type EnrolResult =
+  | { type: "success"; factor_id: string; qr: string; secret: string }
+  | { type: "error"; message: string };
 
 export async function startEnrolmentAction() {
-  // Diagnostic wrapper — if anything throws unexpectedly, surface the stage + message
-  // in the URL so we can see what's actually breaking.
+  // Capture result inside try; perform redirect OUTSIDE.
+  // (Per Next.js docs: redirect() throws and must not sit inside a catch path.)
+  let result: EnrolResult;
   let stage = "init";
+
   try {
     stage = "create_client";
     const supabase = await createClient();
@@ -45,22 +39,31 @@ export async function startEnrolmentAction() {
 
     if (error || !data) {
       console.error("[mfa-enrol] enroll returned error", error);
-      redirect(`/enrol-mfa?error=${encodeURIComponent(error?.message ?? "enrolment_failed_no_data")}`);
+      result = { type: "error", message: error?.message ?? "enrolment_failed_no_data" };
+    } else {
+      result = {
+        type: "success",
+        factor_id: data.id,
+        qr: data.totp.qr_code,
+        secret: data.totp.secret,
+      };
     }
-
-    stage = "redirect_to_qr";
-    const params = new URLSearchParams({
-      factor_id: data.id,
-      qr: data.totp.qr_code,
-      secret: data.totp.secret,
-    });
-    redirect(`/enrol-mfa?${params.toString()}`);
   } catch (e) {
-    // Re-throw redirect "errors" — Next.js needs to handle them as redirects.
-    if (isRedirectError(e)) throw e;
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`[mfa-enrol] crashed at stage=${stage}`, e);
-    redirect(`/enrol-mfa?error=${encodeURIComponent(`crash_${stage}_${msg.slice(0, 200)}`)}`);
+    result = { type: "error", message: `crash_${stage}_${msg.slice(0, 200)}` };
+  }
+
+  // Redirects sit outside any try/catch so Next.js can handle their throw correctly.
+  if (result.type === "success") {
+    const params = new URLSearchParams({
+      factor_id: result.factor_id,
+      qr: result.qr,
+      secret: result.secret,
+    });
+    redirect(`/enrol-mfa?${params.toString()}`);
+  } else {
+    redirect(`/enrol-mfa?error=${encodeURIComponent(result.message)}`);
   }
 }
 
@@ -68,29 +71,38 @@ export async function verifyEnrolmentAction(formData: FormData) {
   const factorId = formData.get("factor_id") as string;
   const code = (formData.get("code") as string)?.trim();
 
+  let result: { type: "success" } | { type: "error"; message: string };
+
   if (!factorId || !code || code.length < 6) {
     redirect(`/enrol-mfa?error=invalid_code`);
   }
 
-  const supabase = await createClient();
+  try {
+    const supabase = await createClient();
 
-  const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({
-    factorId,
-  });
-  if (challengeError) {
-    redirect(`/enrol-mfa?error=${encodeURIComponent(challengeError.message)}`);
+    const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({
+      factorId,
+    });
+    if (challengeError) {
+      result = { type: "error", message: challengeError.message };
+    } else {
+      const { error: verifyError } = await supabase.auth.mfa.verify({
+        factorId,
+        challengeId: challengeData!.id,
+        code,
+      });
+      result = verifyError
+        ? { type: "error", message: "invalid_code" }
+        : { type: "success" };
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[mfa-verify-enrol] crashed", e);
+    result = { type: "error", message: `crash_${msg.slice(0, 200)}` };
   }
 
-  const { error: verifyError } = await supabase.auth.mfa.verify({
-    factorId,
-    challengeId: challengeData!.id,
-    code,
-  });
-
-  if (verifyError) {
-    redirect(`/enrol-mfa?error=invalid_code`);
+  if (result.type === "success") {
+    redirect("/");
   }
-
-  // Enrolment complete. AAL2 is now active for the session.
-  redirect("/");
+  redirect(`/enrol-mfa?error=${encodeURIComponent(result.message)}`);
 }
