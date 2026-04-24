@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import Image from "next/image";
 import { AuthCard } from "@/components/auth-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +11,7 @@ import { signOutAction } from "../verify-mfa/actions";
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_code: "Code didn't match. Codes refresh every 30 seconds.",
   enrolment_failed: "Enrolment failed. Try again or contact support.",
+  enrolment_failed_no_data: "Enrolment failed. Try again or contact support.",
 };
 
 function describeError(error: string | undefined): string | null {
@@ -22,9 +22,9 @@ function describeError(error: string | undefined): string | null {
 export default async function EnrolMfaPage({
   searchParams,
 }: {
-  searchParams: Promise<{ factor_id?: string; qr?: string; secret?: string; error?: string }>;
+  searchParams: Promise<{ factor_id?: string; secret?: string; error?: string }>;
 }) {
-  const { factor_id, qr, secret, error } = await searchParams;
+  const { factor_id, secret, error } = await searchParams;
   const errorMessage = describeError(error);
 
   const supabase = await createClient();
@@ -34,7 +34,7 @@ export default async function EnrolMfaPage({
   }
 
   // First visit (no factor_id): show "start" button which generates a factor.
-  if (!factor_id || !qr || !secret) {
+  if (!factor_id || !secret) {
     return (
       <AuthCard
         title="Set up two-factor authentication"
@@ -42,8 +42,8 @@ export default async function EnrolMfaPage({
       >
         <ol className="text-sm text-slate-600 space-y-2 mb-6 list-decimal list-inside">
           <li>Install an authenticator app (Google Authenticator, 1Password, Authy)</li>
-          <li>Click below — we'll show a QR code</li>
-          <li>Scan it with your app, then enter the 6-digit code it shows</li>
+          <li>Click below to generate your secret code</li>
+          <li>Add it to your authenticator manually, then enter the 6-digit code</li>
         </ol>
 
         {errorMessage ? (
@@ -69,31 +69,25 @@ export default async function EnrolMfaPage({
     );
   }
 
-  // Second visit: show QR + verification form.
+  // Second visit: show secret + verification form.
   return (
     <AuthCard
-      title="Scan and verify"
-      description="Scan this code with your authenticator app, then enter the 6-digit code."
+      title="Add this secret to your authenticator"
+      description="In your app, choose 'Add account' → 'Manual entry'. Use any account name you like."
     >
-      <div className="flex justify-center mb-4">
-        <Image
-          src={qr}
-          alt="MFA QR code"
-          width={200}
-          height={200}
-          className="border border-slate-200 rounded-md p-2 bg-white"
-          unoptimized
-        />
-      </div>
-
-      <details className="mb-4 text-xs text-slate-500">
-        <summary className="cursor-pointer hover:text-slate-700">
-          Can't scan? Show secret manually
-        </summary>
-        <p className="mt-2 font-mono break-all bg-slate-50 p-2 rounded border border-slate-200">
+      <div className="mb-4">
+        <Label className="text-xs text-slate-500 uppercase tracking-wider mb-2 block">
+          Secret
+        </Label>
+        <p className="font-mono text-lg break-all bg-slate-50 p-3 rounded border border-slate-200 select-all">
           {secret}
         </p>
-      </details>
+        <p className="text-xs text-slate-500 mt-2">
+          Tap or click to select. Time-based (TOTP), 6 digits, 30 second period.
+        </p>
+      </div>
+
+      <Separator className="my-4" />
 
       <form action={verifyEnrolmentAction} className="space-y-4">
         <input type="hidden" name="factor_id" value={factor_id} />

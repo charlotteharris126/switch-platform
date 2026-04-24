@@ -6,12 +6,10 @@ import { createClient } from "@/lib/supabase/server";
 type FactorRow = { id: string; status: string; friendly_name?: string | null };
 
 type EnrolResult =
-  | { type: "success"; factor_id: string; qr: string; secret: string }
+  | { type: "success"; factor_id: string; secret: string }
   | { type: "error"; message: string };
 
 export async function startEnrolmentAction() {
-  // Capture result inside try; perform redirect OUTSIDE.
-  // (Per Next.js docs: redirect() throws and must not sit inside a catch path.)
   let result: EnrolResult;
   let stage = "init";
 
@@ -41,10 +39,13 @@ export async function startEnrolmentAction() {
       console.error("[mfa-enrol] enroll returned error", error);
       result = { type: "error", message: error?.message ?? "enrolment_failed_no_data" };
     } else {
+      // We deliberately do NOT pass the QR code via URL — Supabase returns it as a full
+      // SVG XML string which is too large for URL search params. The user types the
+      // secret manually into their authenticator instead. QR rendering can be added
+      // later as a client-side render from the secret.
       result = {
         type: "success",
         factor_id: data.id,
-        qr: data.totp.qr_code,
         secret: data.totp.secret,
       };
     }
@@ -58,7 +59,6 @@ export async function startEnrolmentAction() {
   if (result.type === "success") {
     const params = new URLSearchParams({
       factor_id: result.factor_id,
-      qr: result.qr,
       secret: result.secret,
     });
     redirect(`/enrol-mfa?${params.toString()}`);
