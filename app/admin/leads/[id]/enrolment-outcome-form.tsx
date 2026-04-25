@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { markEnrolmentOutcome, type EnrolmentOutcome } from "./actions";
 
 interface Props {
@@ -19,11 +20,12 @@ const OUTCOMES: Array<{ value: EnrolmentOutcome; label: string; description: str
 
 export function EnrolmentOutcomeForm({ submissionId, currentStatus, currentNotes, isRouted }: Props) {
   const [pending, startTransition] = useTransition();
+  // Optimistic display state — updates instantly, reverts on error
+  const [displayStatus, setDisplayStatus] = useState<string | null>(currentStatus);
   const [selectedOutcome, setSelectedOutcome] = useState<EnrolmentOutcome | null>(
     isOutcome(currentStatus) ? currentStatus : null,
   );
   const [notes, setNotes] = useState(currentNotes ?? "");
-  const [feedback, setFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   if (!isRouted) {
     return (
@@ -36,10 +38,12 @@ export function EnrolmentOutcomeForm({ submissionId, currentStatus, currentNotes
 
   function handleSubmit() {
     if (!selectedOutcome) {
-      setFeedback({ kind: "error", message: "Pick an outcome before saving." });
+      toast.warning("Pick an outcome before saving.");
       return;
     }
-    setFeedback(null);
+    // Optimistic: update display immediately
+    const previousDisplay = displayStatus;
+    setDisplayStatus(selectedOutcome);
     startTransition(async () => {
       const result = await markEnrolmentOutcome({
         submissionId,
@@ -47,9 +51,13 @@ export function EnrolmentOutcomeForm({ submissionId, currentStatus, currentNotes
         notes: notes.trim() || null,
       });
       if (result.ok) {
-        setFeedback({ kind: "success", message: `Saved. Enrolment id ${result.enrolmentId}.` });
+        toast.success("Outcome saved", {
+          description: `Marked as ${selectedOutcome.replace(/_/g, " ")}.`,
+        });
       } else {
-        setFeedback({ kind: "error", message: result.error ?? "Save failed." });
+        // Revert optimistic update
+        setDisplayStatus(previousDisplay);
+        toast.error("Save failed", { description: result.error ?? "Unknown error." });
       }
     });
   }
@@ -57,9 +65,9 @@ export function EnrolmentOutcomeForm({ submissionId, currentStatus, currentNotes
   return (
     <div className="bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
       <h3 className="text-sm font-extrabold text-[#11242e] mb-1">Enrolment outcome</h3>
-      {currentStatus && (
+      {displayStatus && (
         <p className="text-[11px] text-[#5a6a72] mb-3">
-          Currently: <span className="font-bold uppercase tracking-wide text-[#143643]">{currentStatus.replace(/_/g, " ")}</span>
+          Currently: <span className="font-bold uppercase tracking-wide text-[#143643]">{displayStatus.replace(/_/g, " ")}</span>
         </p>
       )}
 
@@ -74,9 +82,10 @@ export function EnrolmentOutcomeForm({ submissionId, currentStatus, currentNotes
               disabled={pending}
               title={o.description}
               className={
-                selected
-                  ? "px-4 h-9 text-xs font-bold uppercase tracking-[0.08em] rounded-full bg-[#cd8b76] text-white border border-[#cd8b76] shadow-[0_1px_2px_rgba(17,36,46,0.08)]"
-                  : "px-4 h-9 text-xs font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60"
+                "px-4 h-9 text-xs font-bold uppercase tracking-[0.08em] rounded-full border transition-all duration-150 active:scale-[0.97] " +
+                (selected
+                  ? "bg-[#cd8b76] text-white border-[#cd8b76] shadow-[0_2px_6px_rgba(205,139,118,0.35)]"
+                  : "bg-white text-[#143643] border-[#dad4cb] hover:border-[#cd8b76]/60 hover:bg-[#fbf9f5] hover:-translate-y-px")
               }
             >
               {o.label}
@@ -102,15 +111,10 @@ export function EnrolmentOutcomeForm({ submissionId, currentStatus, currentNotes
           type="button"
           onClick={handleSubmit}
           disabled={pending || !selectedOutcome}
-          className="h-9 px-5 text-[11px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#143643] text-white hover:bg-[#11242e] disabled:opacity-40 disabled:cursor-not-allowed"
+          className="h-9 px-5 text-[11px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#143643] text-white hover:bg-[#11242e] active:scale-[0.97] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#143643] shadow-[0_2px_6px_rgba(17,36,46,0.15)]"
         >
           {pending ? "Saving..." : "Save outcome"}
         </button>
-        {feedback && (
-          <span className={feedback.kind === "success" ? "text-xs text-emerald-700" : "text-xs text-[#b3412e]"}>
-            {feedback.message}
-          </span>
-        )}
       </div>
     </div>
   );

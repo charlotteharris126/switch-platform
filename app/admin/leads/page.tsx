@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatDateTime, truncate } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { LeadFilters } from "./filters";
+import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 const PAGE_SIZE = 50;
 
@@ -122,6 +123,7 @@ export default async function LeadsPage({
 
   return (
     <div>
+      <RealtimeRefresh tables={[{ schema: "leads", table: "submissions" }]} />
       <PageHeader
         eyebrow="Leads"
         title="Lead submissions"

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { editProvider } from "./actions";
 
 interface Props {
@@ -29,10 +30,7 @@ export function EditProviderForm({ providerId, initial }: Props) {
   const [active, setActive] = useState(initial.active);
   const [pilotStatus, setPilotStatus] = useState(initial.pilotStatus);
   const [notes, setNotes] = useState(initial.notes ?? "");
-  const [feedback, setFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
-
   function handleSave() {
-    setFeedback(null);
     const ccEmails = ccEmailsText
       .split(/[,\n]/)
       .map((s) => s.trim())
@@ -51,9 +49,9 @@ export function EditProviderForm({ providerId, initial }: Props) {
         notes: notes.trim() || null,
       });
       if (result.ok) {
-        setFeedback({ kind: "success", message: "Saved." });
+        toast.success("Provider saved");
       } else {
-        setFeedback({ kind: "error", message: result.error ?? "Save failed." });
+        toast.error("Save failed", { description: result.error ?? "Unknown error." });
       }
     });
   }
@@ -96,9 +94,10 @@ export function EditProviderForm({ providerId, initial }: Props) {
                 onClick={() => setPilotStatus(s)}
                 disabled={pending}
                 className={
-                  selected
-                    ? "px-4 h-9 text-xs font-bold uppercase tracking-[0.08em] rounded-full bg-[#cd8b76] text-white border border-[#cd8b76]"
-                    : "px-4 h-9 text-xs font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60"
+                  "px-4 h-9 text-xs font-bold uppercase tracking-[0.08em] rounded-full border transition-all duration-150 active:scale-[0.97] " +
+                  (selected
+                    ? "bg-[#cd8b76] text-white border-[#cd8b76] shadow-[0_2px_6px_rgba(205,139,118,0.35)]"
+                    : "bg-white text-[#143643] border-[#dad4cb] hover:border-[#cd8b76]/60 hover:bg-[#fbf9f5] hover:-translate-y-px")
                 }
               >
                 {s.replace(/_/g, " ")}
@@ -135,15 +134,10 @@ export function EditProviderForm({ providerId, initial }: Props) {
           type="button"
           onClick={handleSave}
           disabled={pending || !contactEmail.trim()}
-          className="h-9 px-5 text-[11px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#143643] text-white hover:bg-[#11242e] disabled:opacity-40 disabled:cursor-not-allowed"
+          className="h-9 px-5 text-[11px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#143643] text-white hover:bg-[#11242e] active:scale-[0.97] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#143643] shadow-[0_2px_6px_rgba(17,36,46,0.15)]"
         >
           {pending ? "Saving..." : "Save changes"}
         </button>
-        {feedback && (
-          <span className={feedback.kind === "success" ? "text-xs text-emerald-700" : "text-xs text-[#b3412e]"}>
-            {feedback.message}
-          </span>
-        )}
       </div>
     </div>
   );

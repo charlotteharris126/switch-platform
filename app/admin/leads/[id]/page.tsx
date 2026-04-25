@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
 import { EnrolmentOutcomeForm } from "./enrolment-outcome-form";
+import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 export default async function LeadDetailPage({
   params,
@@ -110,6 +111,14 @@ export default async function LeadDetailPage({
 
   return (
     <div className="max-w-6xl space-y-6">
+      <RealtimeRefresh
+        tables={[
+          { schema: "leads", table: "submissions" },
+          { schema: "leads", table: "routing_log" },
+          { schema: "crm", table: "enrolments" },
+        ]}
+        channel={`rt-lead-${lead.id}`}
+      />
       <div>
         <Link href="/leads" className="text-[11px] font-bold uppercase tracking-[1.5px] text-[#cd8b76] hover:text-[#b3412e]">
           ← Back to leads

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { PageHeader } from "@/components/page-header";
 import { formatDateTime } from "@/lib/format";
+import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 // One page that surfaces every actionable lead state, so Charlotte never
 // has to skim the full leads list to find what needs doing.
@@ -116,6 +117,12 @@ export default async function ActionsPage() {
 
   return (
     <div className="max-w-6xl space-y-6">
+      <RealtimeRefresh
+        tables={[
+          { schema: "leads", table: "submissions" },
+          { schema: "crm", table: "enrolments" },
+        ]}
+      />
       <PageHeader
         eyebrow="Actions"
         title="What needs your attention"

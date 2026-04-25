@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
+import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 type Period = "week" | "month" | "all";
 
@@ -183,6 +184,13 @@ export default async function AdminHomePage({
 
   return (
     <div className="max-w-6xl">
+      <RealtimeRefresh
+        tables={[
+          { schema: "leads", table: "submissions" },
+          { schema: "crm", table: "enrolments" },
+          { schema: "leads", table: "dead_letter" },
+        ]}
+      />
       <PageHeader
         eyebrow="Overview"
         title="Where the business is"
