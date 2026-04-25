@@ -17,6 +17,7 @@ import { signOutAction } from "@/app/(auth)/verify-mfa/actions";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview" },
+  { href: "/actions", label: "Actions" },
   { href: "/leads", label: "Leads" },
   { href: "/providers", label: "Providers" },
   { href: "/errors", label: "Errors" },
