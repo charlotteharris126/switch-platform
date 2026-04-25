@@ -17,6 +17,10 @@ export const metadata: Metadata = {
   title: "Switchable Platform",
   description: "Internal admin and provider portal for Switchable Ltd",
   robots: { index: false, follow: false },
+  icons: {
+    icon: "/brand/favicon.svg",
+    shortcut: "/brand/favicon.svg",
+  },
 };
 
 export default function RootLayout({

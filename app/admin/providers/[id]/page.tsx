@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDate, formatDateTime } from "@/lib/format";
+import { EditProviderForm } from "./edit-provider-form";
 
 export default async function ProviderDetailPage({
   params,
@@ -152,6 +153,20 @@ export default async function ProviderDetailPage({
           </CardContent>
         </Card>
       )}
+
+      <EditProviderForm
+        providerId={provider.provider_id}
+        initial={{
+          contactName: provider.contact_name,
+          contactEmail: provider.contact_email,
+          contactPhone: provider.contact_phone,
+          ccEmails: provider.cc_emails ?? [],
+          autoRouteEnabled: Boolean(provider.auto_route_enabled),
+          active: Boolean(provider.active),
+          pilotStatus: provider.pilot_status,
+          notes: provider.notes,
+        }}
+      />
 
       <Card>
         <CardHeader>
