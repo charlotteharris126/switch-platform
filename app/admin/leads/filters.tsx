@@ -4,13 +4,20 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 
 type Props = {
+  fundingCategories: string[];
   fundingRoutes: string[];
   courseIds: string[];
   providers: { provider_id: string; company_name: string }[];
   current: Record<string, string | undefined>;
 };
 
-export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Props) {
+const CATEGORY_LABELS: Record<string, string> = {
+  gov: "Government / fully funded",
+  self: "Self-funded",
+  loan: "Loan-funded",
+};
+
+export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, providers, current }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
@@ -47,7 +54,23 @@ export function LeadFilters({ fundingRoutes, courseIds, providers, current }: Pr
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Funding route</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Funding category</span>
+        <select
+          className={selectClass}
+          value={current.funding_category ?? ""}
+          onChange={(e) => updateParam("funding_category", e.target.value)}
+        >
+          <option value="">Any</option>
+          {fundingCategories.map((c) => (
+            <option key={c} value={c}>
+              {CATEGORY_LABELS[c] ?? c}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Funding scheme</span>
         <select
           className={selectClass}
           value={current.funding_route ?? ""}

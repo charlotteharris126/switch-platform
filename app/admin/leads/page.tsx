@@ -16,6 +16,7 @@ import { LeadFilters } from "./filters";
 const PAGE_SIZE = 50;
 
 type SearchParams = {
+  funding_category?: string;
   funding_route?: string;
   course_id?: string;
   provider?: string;
@@ -37,6 +38,7 @@ type LeadRow = {
   email: string | null;
   phone: string | null;
   course_id: string | null;
+  funding_category: string | null;
   funding_route: string | null;
   primary_routed_to: string | null;
   is_dq: boolean;
@@ -59,12 +61,13 @@ export default async function LeadsPage({
     .schema("leads")
     .from("submissions")
     .select(
-      "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign",
+      "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign",
       { count: "exact" }
     )
     .order("submitted_at", { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1);
 
+  if (sp.funding_category) q = q.eq("funding_category", sp.funding_category);
   if (sp.funding_route) q = q.eq("funding_route", sp.funding_route);
   if (sp.course_id) q = q.eq("course_id", sp.course_id);
   if (sp.provider) q = q.eq("primary_routed_to", sp.provider);
@@ -72,8 +75,17 @@ export default async function LeadsPage({
   if (sp.dq === "no") q = q.eq("is_dq", false);
   if (sp.has_phone === "yes") q = q.not("phone", "is", null);
   if (sp.has_phone === "no") q = q.is("phone", null);
-  if (sp.routed === "yes") q = q.not("primary_routed_to", "is", null);
-  if (sp.routed === "no") q = q.is("primary_routed_to", null);
+  // "Routed" / "Unrouted" exclude archived rows. Archived rows are owner-test
+  // submissions or other deliberately-removed leads that should never appear in
+  // active counts. Without this exclusion, retroactively-archived test rows
+  // that had primary_routed_to set inflate the routed count above what reaches
+  // the providers' sheets.
+  if (sp.routed === "yes") {
+    q = q.not("primary_routed_to", "is", null).is("archived_at", null);
+  }
+  if (sp.routed === "no") {
+    q = q.is("primary_routed_to", null).is("archived_at", null);
+  }
   if (sp.from) q = q.gte("submitted_at", sp.from);
   if (sp.to) q = q.lte("submitted_at", sp.to);
   if (sp.q) {
@@ -86,12 +98,16 @@ export default async function LeadsPage({
   const { data, count, error } = await q;
 
   // Load filter dropdown options in parallel with the main query.
-  const [routesRes, coursesRes, providersRes] = await Promise.all([
+  const [categoriesRes, routesRes, coursesRes, providersRes] = await Promise.all([
+    supabase.schema("leads").from("submissions").select("funding_category").not("funding_category", "is", null),
     supabase.schema("leads").from("submissions").select("funding_route").not("funding_route", "is", null),
     supabase.schema("leads").from("submissions").select("course_id").not("course_id", "is", null),
     supabase.schema("crm").from("providers").select("provider_id,company_name").order("company_name"),
   ]);
 
+  const fundingCategories = Array.from(
+    new Set((categoriesRes.data ?? []).map((r: { funding_category: string | null }) => r.funding_category).filter(Boolean))
+  ) as string[];
   const fundingRoutes = Array.from(
     new Set((routesRes.data ?? []).map((r: { funding_route: string | null }) => r.funding_route).filter(Boolean))
   ) as string[];
@@ -121,6 +137,7 @@ export default async function LeadsPage({
       />
 
       <LeadFilters
+        fundingCategories={fundingCategories}
         fundingRoutes={fundingRoutes}
         courseIds={courseIds}
         providers={providers}
@@ -165,7 +182,18 @@ export default async function LeadsPage({
                   </TableCell>
                   <TableCell className="text-xs text-[#5a6a72]">{truncate(r.email, 30)}</TableCell>
                   <TableCell className="text-xs">{truncate(r.course_id, 28)}</TableCell>
-                  <TableCell className="text-xs">{r.funding_route ?? "—"}</TableCell>
+                  <TableCell className="text-xs">
+                    {r.funding_category ? (
+                      <span>
+                        <span className="font-semibold uppercase tracking-wide text-[10px] text-[#143643]">{r.funding_category}</span>
+                        {r.funding_route && r.funding_route !== r.funding_category ? (
+                          <span className="text-[#5a6a72]"> · {r.funding_route}</span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      r.funding_route ?? "—"
+                    )}
+                  </TableCell>
                   <TableCell>
                     {r.is_dq ? (
                       <Badge variant="destructive" className="text-xs">

@@ -143,7 +143,8 @@ export default async function LeadDetailPage({
           </CardHeader>
           <CardContent className="text-xs space-y-2">
             <FieldRow label="Course ID" value={lead.course_id} />
-            <FieldRow label="Funding route" value={lead.funding_route} />
+            <FieldRow label="Funding category" value={lead.funding_category} />
+            <FieldRow label="Funding scheme" value={lead.funding_route} />
             <FieldRow label="Age band" value={lead.age_band} />
             <FieldRow label="Employment" value={lead.employment_status} />
             <FieldRow
