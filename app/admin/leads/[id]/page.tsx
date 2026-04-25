@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
+import { EnrolmentOutcomeForm } from "./enrolment-outcome-form";
 
 export default async function LeadDetailPage({
   params,
@@ -40,8 +41,8 @@ export default async function LeadDetailPage({
   }
   if (!lead) notFound();
 
-  // Parallel fetch: routing history, dead letter, partial captures on the same session_id.
-  const [routingRes, deadLetterRes, partialsRes] = await Promise.all([
+  // Parallel fetch: routing history, dead letter, partial captures on the same session_id, current enrolment outcome.
+  const [routingRes, deadLetterRes, partialsRes, enrolmentRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("routing_log")
@@ -62,7 +63,19 @@ export default async function LeadDetailPage({
           .eq("session_id", lead.session_id)
           .order("last_seen_at", { ascending: false })
       : Promise.resolve({ data: [] as unknown[], error: null }),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id, status, notes, status_updated_at, provider_id")
+      .eq("submission_id", leadId)
+      .order("status_updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
+
+  const enrolment = (enrolmentRes.data ?? null) as
+    | { id: number; status: string; notes: string | null; status_updated_at: string; provider_id: string }
+    | null;
 
   const routing = (routingRes.data ?? []) as Array<{
     id: number;
@@ -178,6 +191,16 @@ export default async function LeadDetailPage({
           </CardContent>
         </Card>
       </div>
+
+      {/* Enrolment outcome — only visible for non-DQ routed leads */}
+      {!lead.is_dq && (
+        <EnrolmentOutcomeForm
+          submissionId={lead.id}
+          currentStatus={enrolment?.status ?? null}
+          currentNotes={enrolment?.notes ?? null}
+          isRouted={Boolean(lead.primary_routed_to)}
+        />
+      )}
 
       {/* Routing log */}
       <Card>
