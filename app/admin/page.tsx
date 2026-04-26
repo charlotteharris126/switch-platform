@@ -135,39 +135,34 @@ export default async function AdminHomePage({
     // Active providers (point-in-time)
     supabase.schema("crm").from("providers").select("provider_id", { count: "exact", head: true }).eq("active", true),
 
-    // Macro totals — these are the big-picture numbers Charlotte looks at first.
-    // Each is "unique people" (parent_submission_id IS NULL) and excludes
-    // archived test/cleanup rows. Period-aware via submitted_at.
+    // Macro totals — these are LIFETIME numbers. They don't change when the
+    // period selector switches. Only the lifecycle tiles below respect the
+    // period filter. Each macro is "unique people"
+    // (parent_submission_id IS NULL) and excludes archived test/cleanup rows.
 
-    // Total qualified unique leads — unique people, not DQ'd.
-    subPeriod(
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id", { count: "exact", head: true })
-        .eq("is_dq", false)
-        .is("parent_submission_id", null)
-        .is("archived_at", null),
-    ),
-    // Total unique waitlist leads — unique people, DQ'd.
-    subPeriod(
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id", { count: "exact", head: true })
-        .eq("is_dq", true)
-        .is("parent_submission_id", null)
-        .is("archived_at", null),
-    ),
-    // Total form submissions — every form fill (including children), excluding
-    // archived test rows. Useful for ad performance / volume tracking.
-    subPeriod(
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id", { count: "exact", head: true })
-        .is("archived_at", null),
-    ),
+    // Total qualified unique leads — lifetime, unique people, not DQ'd.
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("is_dq", false)
+      .is("parent_submission_id", null)
+      .is("archived_at", null),
+    // Total unique waitlist leads — lifetime, unique people, DQ'd.
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("is_dq", true)
+      .is("parent_submission_id", null)
+      .is("archived_at", null),
+    // Total form submissions — lifetime, every form fill (including children),
+    // excluding archived test rows.
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .is("archived_at", null),
   ]);
 
   const tiles: Array<{ label: string; value: number; href: string; emphasis?: "primary" | "warn" | "good" }> = [
@@ -237,7 +232,7 @@ export default async function AdminHomePage({
         title="Where the business is"
         subtitle={
           <span>
-            Lifecycle counts. Period applies to lead and enrolment tiles; errors and providers are point-in-time.
+            Lifetime totals at the top (period-independent). Lifecycle breakdown below applies the period selector.
           </span>
         }
       />
@@ -263,7 +258,11 @@ export default async function AdminHomePage({
         })}
       </div>
 
-      {/* Macro totals — big-picture numbers above the lifecycle breakdown */}
+      {/* Macro totals — lifetime, period-independent. Big-picture numbers above
+          the lifecycle breakdown. */}
+      <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">
+        Lifetime totals
+      </p>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="bg-[#143643] text-white rounded-xl p-6 shadow-[0_4px_12px_rgba(17,36,46,0.15)]">
           <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#cd8b76]">
