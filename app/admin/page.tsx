@@ -78,14 +78,17 @@ export default async function AdminHomePage({
         .select("id", { count: "exact", head: true })
         .in("status", ["open", "contacted"]),
     ),
-    // Waitlist (DQ leads, not archived)
+    // Waitlist (DQ leads, not archived, unique people only — child re-applications
+    // and waitlist-enrichment children are linked to parents via parent_submission_id
+    // and excluded from the count to avoid double-counting).
     subPeriod(
       supabase
         .schema("leads")
         .from("submissions")
         .select("id", { count: "exact", head: true })
         .eq("is_dq", true)
-        .is("archived_at", null),
+        .is("archived_at", null)
+        .is("parent_submission_id", null),
     ),
     // Presumed enrolled (auto-flipped)
     enrolPeriod(
