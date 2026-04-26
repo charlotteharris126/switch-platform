@@ -42,6 +42,30 @@ export default async function LeadDetailPage({
   }
   if (!lead) notFound();
 
+  // Re-application context: if this lead has a parent, fetch it. If this lead
+  // IS a parent (re_submission_count > 0), fetch the children.
+  const [parentRes, childrenRes] = await Promise.all([
+    lead.parent_submission_id
+      ? supabase
+          .schema("leads")
+          .from("submissions")
+          .select("id, submitted_at, primary_routed_to")
+          .eq("id", lead.parent_submission_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    lead.re_submission_count > 0
+      ? supabase
+          .schema("leads")
+          .from("submissions")
+          .select("id, submitted_at, primary_routed_to")
+          .eq("parent_submission_id", leadId)
+          .order("submitted_at", { ascending: false })
+      : Promise.resolve({ data: [] as unknown[], error: null }),
+  ]);
+
+  const parent = (parentRes.data ?? null) as { id: number; submitted_at: string; primary_routed_to: string | null } | null;
+  const children = (childrenRes.data ?? []) as Array<{ id: number; submitted_at: string; primary_routed_to: string | null }>;
+
   // Parallel fetch: routing history, dead letter, partial captures on the same session_id, current enrolment outcome.
   const [routingRes, deadLetterRes, partialsRes, enrolmentRes] = await Promise.all([
     supabase
@@ -200,6 +224,35 @@ export default async function LeadDetailPage({
           </CardContent>
         </Card>
       </div>
+
+      {/* Re-application banner */}
+      {(parent || children.length > 0) && (
+        <Card className="border-[#cd8b76]/60 bg-[#fbf9f5]">
+          <CardContent className="pt-4">
+            {parent && (
+              <p className="text-xs text-[#143643]">
+                <span className="font-bold uppercase tracking-wide text-[10px] text-[#cd8b76]">Re-application</span>
+                <br />
+                This is a follow-up of <Link href={`/leads/${parent.id}`} className="font-bold text-[#cd8b76] hover:underline">lead #{parent.id}</Link> ({formatDateTime(parent.submitted_at)}). Originally routed to {parent.primary_routed_to ?? "—"}.
+              </p>
+            )}
+            {children.length > 0 && (
+              <p className="text-xs text-[#143643]">
+                <span className="font-bold uppercase tracking-wide text-[10px] text-[#cd8b76]">Reapplied {children.length} time{children.length === 1 ? "" : "s"}</span>
+                <br />
+                Subsequent submissions:{" "}
+                {children.map((c, i) => (
+                  <span key={c.id}>
+                    <Link href={`/leads/${c.id}`} className="font-bold text-[#cd8b76] hover:underline">#{c.id}</Link>
+                    {" "}({formatDateTime(c.submitted_at)})
+                    {i < children.length - 1 ? ", " : ""}
+                  </span>
+                ))}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Enrolment outcome — only visible for non-DQ routed leads */}
       {!lead.is_dq && (
