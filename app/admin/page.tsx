@@ -57,6 +57,10 @@ export default async function AdminHomePage({
     disputedRes,
     errorsRes,
     providersRes,
+    // Macro totals — single big-picture numbers. Period-aware via submitted_at.
+    qualifiedUniqueRes,
+    waitlistUniqueRes,
+    formSubmissionsRes,
   ] = await Promise.all([
     // Unrouted (qualified, awaiting decision)
     subPeriod(
@@ -130,6 +134,40 @@ export default async function AdminHomePage({
       .is("replayed_at", null),
     // Active providers (point-in-time)
     supabase.schema("crm").from("providers").select("provider_id", { count: "exact", head: true }).eq("active", true),
+
+    // Macro totals — these are the big-picture numbers Charlotte looks at first.
+    // Each is "unique people" (parent_submission_id IS NULL) and excludes
+    // archived test/cleanup rows. Period-aware via submitted_at.
+
+    // Total qualified unique leads — unique people, not DQ'd.
+    subPeriod(
+      supabase
+        .schema("leads")
+        .from("submissions")
+        .select("id", { count: "exact", head: true })
+        .eq("is_dq", false)
+        .is("parent_submission_id", null)
+        .is("archived_at", null),
+    ),
+    // Total unique waitlist leads — unique people, DQ'd.
+    subPeriod(
+      supabase
+        .schema("leads")
+        .from("submissions")
+        .select("id", { count: "exact", head: true })
+        .eq("is_dq", true)
+        .is("parent_submission_id", null)
+        .is("archived_at", null),
+    ),
+    // Total form submissions — every form fill (including children), excluding
+    // archived test rows. Useful for ad performance / volume tracking.
+    subPeriod(
+      supabase
+        .schema("leads")
+        .from("submissions")
+        .select("id", { count: "exact", head: true })
+        .is("archived_at", null),
+    ),
   ]);
 
   const tiles: Array<{ label: string; value: number; href: string; emphasis?: "primary" | "warn" | "good" }> = [
@@ -225,6 +263,46 @@ export default async function AdminHomePage({
         })}
       </div>
 
+      {/* Macro totals — big-picture numbers above the lifecycle breakdown */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="bg-[#143643] text-white rounded-xl p-6 shadow-[0_4px_12px_rgba(17,36,46,0.15)]">
+          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#cd8b76]">
+            Total qualified unique leads
+          </p>
+          <p className="text-4xl font-extrabold mt-2 tracking-tight">
+            {(qualifiedUniqueRes.count ?? 0).toLocaleString()}
+          </p>
+          <p className="text-[10px] text-white/60 mt-2">
+            Unique people who passed DQ. Children + waitlist excluded.
+          </p>
+        </div>
+        <div className="bg-white border-2 border-[#143643] rounded-xl p-6 shadow-[0_4px_12px_rgba(17,36,46,0.08)]">
+          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">
+            Total unique waitlist leads
+          </p>
+          <p className="text-4xl font-extrabold mt-2 tracking-tight text-[#11242e]">
+            {(waitlistUniqueRes.count ?? 0).toLocaleString()}
+          </p>
+          <p className="text-[10px] text-[#5a6a72] mt-2">
+            Unique people DQ'd onto waitlist.
+          </p>
+        </div>
+        <div className="bg-white border border-[#dad4cb] rounded-xl p-6">
+          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">
+            Total form submissions
+          </p>
+          <p className="text-4xl font-extrabold mt-2 tracking-tight text-[#11242e]">
+            {(formSubmissionsRes.count ?? 0).toLocaleString()}
+          </p>
+          <p className="text-[10px] text-[#5a6a72] mt-2">
+            Every form fill (incl. re-applications + enrichments). Archived test rows excluded.
+          </p>
+        </div>
+      </div>
+
+      <h2 className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3 mt-8">
+        Lifecycle breakdown
+      </h2>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4 mb-8">
         {tiles.map((t) => (
           <Link
