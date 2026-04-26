@@ -53,7 +53,8 @@ export default async function AdminHomePage({
     waitlistRes,
     presumedRes,
     enrolledRes,
-    notEnrolledRes,
+    cannotReachRes,
+    lostRes,
     disputedRes,
     errorsRes,
     providersRes,
@@ -72,15 +73,14 @@ export default async function AdminHomePage({
         .is("primary_routed_to", null)
         .is("archived_at", null),
     ),
-    // Routed (active) — routed + not archived. Subtract terminal-outcome rows
-    // from this count via a follow-up query, OR just count crm.enrolments in
-    // open/contacted state. Going with the latter for simplicity.
+    // Routed (active) — routed leads still in the open state. After migration
+    // 0028 the only early state is 'open'; 'contacted' was folded in.
     enrolPeriod(
       supabase
         .schema("crm")
         .from("enrolments")
         .select("id", { count: "exact", head: true })
-        .in("status", ["open", "contacted"]),
+        .eq("status", "open"),
     ),
     // Waitlist (DQ leads, not archived, unique people only — child re-applications
     // and waitlist-enrichment children are linked to parents via parent_submission_id
@@ -94,7 +94,7 @@ export default async function AdminHomePage({
         .is("archived_at", null)
         .is("parent_submission_id", null),
     ),
-    // Presumed enrolled (auto-flipped)
+    // Presumed enrolled (auto-flipped at 14d, awaiting confirmation/dispute)
     enrolPeriod(
       supabase
         .schema("crm")
@@ -110,21 +110,32 @@ export default async function AdminHomePage({
         .select("id", { count: "exact", head: true })
         .eq("status", "enrolled"),
     ),
-    // Not enrolled (closed without billing)
+    // Cannot reach — provider tried, no answer. Operational signal: numbers,
+    // preferred call time, automated nudges.
     enrolPeriod(
       supabase
         .schema("crm")
         .from("enrolments")
         .select("id", { count: "exact", head: true })
-        .eq("status", "not_enrolled"),
+        .eq("status", "cannot_reach"),
     ),
-    // Disputed
+    // Lost — provider made contact, learner won't enrol. Sales signal:
+    // qualification, course-fit, funding clarity. Reason captured per-row.
     enrolPeriod(
       supabase
         .schema("crm")
         .from("enrolments")
         .select("id", { count: "exact", head: true })
-        .eq("status", "disputed"),
+        .eq("status", "lost"),
+    ),
+    // Disputed — flag on presumed_enrolled rows. Independent of status; counts
+    // any row with disputed_at set, even if resolution moved status onward.
+    enrolPeriod(
+      supabase
+        .schema("crm")
+        .from("enrolments")
+        .select("id", { count: "exact", head: true })
+        .not("disputed_at", "is", null),
     ),
     // Unresolved errors (point-in-time)
     supabase
@@ -195,8 +206,14 @@ export default async function AdminHomePage({
       emphasis: "good",
     },
     {
-      label: "Not enrolled",
-      value: notEnrolledRes.count ?? 0,
+      label: "Cannot reach",
+      value: cannotReachRes.count ?? 0,
+      href: "/leads?routed=yes",
+      emphasis: cannotReachRes.count && cannotReachRes.count > 0 ? "warn" : undefined,
+    },
+    {
+      label: "Lost",
+      value: lostRes.count ?? 0,
       href: "/leads?routed=yes",
     },
     {

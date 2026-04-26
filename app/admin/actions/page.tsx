@@ -44,21 +44,20 @@ export default async function ActionsPage() {
       .is("archived_at", null)
       .order("submitted_at", { ascending: true }),
 
-    // Approaching 14-day auto-flip: routed_at older than 12 days, but
-    // crm.enrolments status is NULL or in early state. Done as a SQL view-
-    // style filter via two queries combined client-side; a dedicated view
-    // would be cleaner once the pattern is proven.
+    // Approaching 14-day auto-flip: routed_at older than 12 days, status still
+    // 'open'. After migration 0028 the only early state is 'open' — 'contacted'
+    // was folded in.
     supabase
       .schema("crm")
       .from("enrolments")
       .select("id, submission_id, provider_id, status, sent_to_provider_at, updated_at")
-      .in("status", ["open", "contacted"])
+      .eq("status", "open")
       .lt("sent_to_provider_at", new Date(Date.now() - 12 * 24 * 3600 * 1000).toISOString()),
 
     supabase
       .schema("crm")
       .from("enrolments")
-      .select("id, submission_id, provider_id, status, sent_to_provider_at, status_updated_at, dispute_deadline_at, notes")
+      .select("id, submission_id, provider_id, status, sent_to_provider_at, status_updated_at, dispute_deadline_at, notes, disputed_at, disputed_reason")
       .eq("status", "presumed_enrolled")
       .order("status_updated_at", { ascending: true }),
   ]);
@@ -90,6 +89,8 @@ export default async function ActionsPage() {
     status_updated_at: string;
     dispute_deadline_at: string | null;
     notes: string | null;
+    disputed_at: string | null;
+    disputed_reason: string | null;
   }>;
 
   // For the approaching-flip + presumed-enrolled sections we want learner
@@ -267,7 +268,7 @@ export default async function ActionsPage() {
             )}
           </CardTitle>
           <p className="text-xs text-[#5a6a72] mt-1">
-            Auto-flipped after 14 days of provider silence. Confirm <em>enrolled</em> (triggers billing), <em>disputed</em> (provider says didn&apos;t enrol), or <em>not enrolled</em> (closes without billing). Open the lead and use the Enrolment outcome form.
+            Auto-flipped after 14 days of provider silence. Resolve to <em>enrolled</em> (triggers billing) or <em>lost</em> (closes without billing). If the provider rebuts the flip, mark <em>disputed</em> on the lead — that pauses billing while you investigate. Open the lead and use the Enrolment outcome form.
           </p>
         </CardHeader>
         <CardContent className="p-0">
@@ -299,11 +300,20 @@ export default async function ActionsPage() {
                         {sub ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || "—" : "—"}
                       </TableCell>
                       <TableCell className="text-xs">{r.provider_id}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDateTime(r.status_updated_at)}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">
+                        {formatDateTime(r.status_updated_at)}
+                        {r.disputed_at && (
+                          <Badge className="ml-2 text-[9px] bg-[#cd8b76] text-white hover:bg-[#cd8b76]">
+                            DISPUTED
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="text-xs whitespace-nowrap">
                         {r.dispute_deadline_at ? formatDateTime(r.dispute_deadline_at) : "—"}
                       </TableCell>
-                      <TableCell className="text-xs text-[#5a6a72]">{r.notes ?? "—"}</TableCell>
+                      <TableCell className="text-xs text-[#5a6a72]">
+                        {r.disputed_reason ?? r.notes ?? "—"}
+                      </TableCell>
                     </TableRow>
                   );
                 })}

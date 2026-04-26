@@ -91,7 +91,7 @@ export default async function LeadDetailPage({
     supabase
       .schema("crm")
       .from("enrolments")
-      .select("id, status, notes, status_updated_at, provider_id")
+      .select("id, status, notes, status_updated_at, provider_id, lost_reason, disputed_at, disputed_reason")
       .eq("submission_id", leadId)
       .order("status_updated_at", { ascending: false })
       .limit(1)
@@ -99,7 +99,16 @@ export default async function LeadDetailPage({
   ]);
 
   const enrolment = (enrolmentRes.data ?? null) as
-    | { id: number; status: string; notes: string | null; status_updated_at: string; provider_id: string }
+    | {
+        id: number;
+        status: string;
+        notes: string | null;
+        status_updated_at: string;
+        provider_id: string;
+        lost_reason: string | null;
+        disputed_at: string | null;
+        disputed_reason: string | null;
+      }
     | null;
 
   const routing = (routingRes.data ?? []) as Array<{
@@ -260,6 +269,9 @@ export default async function LeadDetailPage({
           submissionId={lead.id}
           currentStatus={enrolment?.status ?? null}
           currentNotes={enrolment?.notes ?? null}
+          currentLostReason={enrolment?.lost_reason ?? null}
+          currentDisputedAt={enrolment?.disputed_at ?? null}
+          currentDisputedReason={enrolment?.disputed_reason ?? null}
           isRouted={Boolean(lead.primary_routed_to)}
         />
       )}
