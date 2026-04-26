@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { EditProviderForm } from "./edit-provider-form";
+import { ProviderTabs } from "./tabs";
 
 export default async function ProviderDetailPage({
   params,
@@ -87,6 +88,8 @@ export default async function ProviderDetailPage({
           <span className="text-xs text-[#5a6a72] font-mono">{provider.provider_id}</span>
         </div>
       </div>
+
+      <ProviderTabs providerId={provider.provider_id} active="overview" />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card>
