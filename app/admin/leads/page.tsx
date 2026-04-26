@@ -28,6 +28,10 @@ type SearchParams = {
   from?: string;
   to?: string;
   page?: string;
+  // Show child rows (re-applications + waitlist-enrichment children) too.
+  // Default OFF — list shows unique people. Pass ?show_children=yes to see
+  // every row.
+  show_children?: string;
 };
 
 type LeadRow = {
@@ -45,6 +49,7 @@ type LeadRow = {
   is_dq: boolean;
   dq_reason: string | null;
   utm_campaign: string | null;
+  re_submission_count: number;
 };
 
 export default async function LeadsPage({
@@ -62,11 +67,20 @@ export default async function LeadsPage({
     .schema("leads")
     .from("submissions")
     .select(
-      "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign",
+      "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign,re_submission_count",
       { count: "exact" }
     )
     .order("submitted_at", { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1);
+
+  // Default: show one row per unique person. Re-application children and
+  // waitlist-enrichment children are hidden so the list isn't cluttered with
+  // what looks like duplicates. Drill into a parent's lead detail page to
+  // see all child submissions in the re-application banner.
+  // Pass ?show_children=yes to override for audit / debugging.
+  if (sp.show_children !== "yes") {
+    q = q.is("parent_submission_id", null);
+  }
 
   if (sp.funding_category) q = q.eq("funding_category", sp.funding_category);
   if (sp.funding_route) q = q.eq("funding_route", sp.funding_route);
@@ -197,19 +211,26 @@ export default async function LeadsPage({
                     )}
                   </TableCell>
                   <TableCell>
-                    {r.is_dq ? (
-                      <Badge variant="destructive" className="text-xs">
-                        DQ{r.dq_reason ? `: ${truncate(r.dq_reason, 18)}` : ""}
-                      </Badge>
-                    ) : r.primary_routed_to ? (
-                      <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
-                        Routed
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary" className="text-xs">
-                        Unrouted
-                      </Badge>
-                    )}
+                    <div className="flex flex-wrap gap-1">
+                      {r.is_dq ? (
+                        <Badge variant="destructive" className="text-xs">
+                          DQ{r.dq_reason ? `: ${truncate(r.dq_reason, 18)}` : ""}
+                        </Badge>
+                      ) : r.primary_routed_to ? (
+                        <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                          Routed
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="text-xs">
+                          Unrouted
+                        </Badge>
+                      )}
+                      {r.re_submission_count > 0 && (
+                        <Badge className="text-xs bg-[#cd8b76] text-white hover:bg-[#cd8b76]">
+                          Reapplied {r.re_submission_count}×
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-xs">{r.primary_routed_to ?? "—"}</TableCell>
                   <TableCell className="text-xs text-[#5a6a72]">{truncate(r.utm_campaign, 20)}</TableCell>
