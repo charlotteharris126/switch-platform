@@ -10,6 +10,16 @@ const SHARED_AUTH_PATHS = [
   "/enrol-mfa",
   "/reset-password",
   "/api/auth/callback",
+  // Third-party OAuth callbacks (channel posting tokens — Session G.2+).
+  // The redirect URI registered with LinkedIn / Meta / TikTok is the bare
+  // /api/auth/<provider>/callback path on admin.switchleads.co.uk, so the
+  // proxy must NOT prepend /admin/. The connect routes are listed too
+  // because they redirect to the third-party authorise URL and need no
+  // surface rewrite.
+  "/api/auth/linkedin/connect",
+  "/api/auth/linkedin/callback",
+  "/api/auth/meta/connect",
+  "/api/auth/meta/callback",
 ];
 
 function detectSurface(hostname: string): "admin" | "provider" {
