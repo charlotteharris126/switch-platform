@@ -78,13 +78,13 @@ export default async function AdminHomePage({
     errorsRes,
   ] = await Promise.all([
     // ── Lifetime ───────────────────────────────────────────────────────────
-    // Qualified unique leads (lifetime, not DQ'd, not children, not archived)
+    // Qualified unique people (distinct emails across non-DQ, non-archived
+    // submissions). Same dedupe rule as the Routed KPI so the two reconcile.
     supabase
       .schema("leads")
       .from("submissions")
-      .select("id", { count: "exact", head: true })
+      .select("email")
       .eq("is_dq", false)
-      .is("parent_submission_id", null)
       .is("archived_at", null),
     // Routed unique people: distinct emails across all routed live submissions
     // (parents + children, excluding archived). One person submitting twice
@@ -120,9 +120,8 @@ export default async function AdminHomePage({
       supabase
         .schema("leads")
         .from("submissions")
-        .select("id", { count: "exact", head: true })
+        .select("email")
         .eq("is_dq", false)
-        .is("parent_submission_id", null)
         .is("archived_at", null),
     ),
     enrolPeriod(
@@ -202,12 +201,16 @@ export default async function AdminHomePage({
 
   const billingRows = (billingStateRes.data ?? []) as ProviderBillingRow[];
 
-  const routedEmails = (totalRoutedRes.data ?? []) as Array<{ email: string | null }>;
-  const totalRouted = new Set(
-    routedEmails
-      .map((r) => r.email?.toLowerCase().trim() ?? "")
-      .filter((e) => e.length > 0)
-  ).size;
+  const distinctEmailCount = (rows: Array<{ email: string | null }> | null | undefined): number =>
+    new Set(
+      (rows ?? [])
+        .map((r) => r.email?.toLowerCase().trim() ?? "")
+        .filter((e) => e.length > 0)
+    ).size;
+
+  const totalRouted = distinctEmailCount(totalRoutedRes.data as Array<{ email: string | null }>);
+  const qualifiedUnique = distinctEmailCount(qualifiedUniqueRes.data as Array<{ email: string | null }>);
+  const weekQualifiedUnique = distinctEmailCount(weekQualifiedRes.data as Array<{ email: string | null }>);
   const totalEnrolments = totalEnrolmentsRes.count ?? 0;
   // Two conversion rates: confirmed-only and including presumed.
   const confirmedEnrolled = billingRows.reduce((s, r) => s + (r.confirmed_enrolled ?? 0), 0);
@@ -261,7 +264,7 @@ export default async function AdminHomePage({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Headline
             label="Qualified leads"
-            value={qualifiedUniqueRes.count ?? 0}
+            value={qualifiedUnique}
             note="Unique people, not DQ'd"
             href="/leads?dq=no"
             theme="dark"
@@ -383,7 +386,7 @@ export default async function AdminHomePage({
           </div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
-          <SmallTile label="Qualified" value={weekQualifiedRes.count ?? 0} href="/leads?dq=no" />
+          <SmallTile label="Qualified" value={weekQualifiedUnique} href="/leads?dq=no" />
           <SmallTile label="Enrolments" value={weekEnrolmentsRes.count ?? 0} emphasis="good" href="/providers" />
           <SmallTile label="Awaiting outcome" value={awaitingOutcome} note="Routed, no enrolment outcome yet" href="/actions" />
           <SmallTile label="Cannot reach" value={cannotReachRes.count ?? 0} emphasis={(cannotReachRes.count ?? 0) > 0 ? "warn" : undefined} />
