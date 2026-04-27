@@ -4,6 +4,22 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-27: Migration 0036 + awaiting-outcome fix
+
+**Type:** View redefinition + UI data fix.
+
+1. **Migration 0036** (`0036_provider_billing_state_distinct_emails.sql`): redefines `crm.vw_provider_billing_state.total_routed` from `COUNT(*) FROM leads.routing_log GROUP BY provider_id` to `COUNT(DISTINCT lower(trim(email))) FROM leads.submissions WHERE primary_routed_to = ... AND archived_at IS NULL`. Matches the overview KPI definition. Conversion-rate denominator updated to match.
+
+   **Why:** the old definition counted every routing-log row, including archived test rows, the Anita orphan from data-ops/010, and multi-routings of the same person. Sum across providers was 97 vs the overview's 89. Confusing when comparing the two pages. Now: EMS 60, CD 15, WYK 15 (sum 90; 1 person, Jade, overlaps EMS+CD so global = 89).
+
+2. **`/admin` Awaiting outcome tile**: was querying `crm.enrolments WHERE status='open'`, which only catches the rare case of an explicitly-set "open" row. Most routed leads have NO enrolments row (provider hasn't given an outcome yet, "implicitly open"). Tile was showing 1; should show ~84. Fixed by computing as routed-in-period IDs minus IDs with a terminal-status enrolment row (enrolled, presumed_enrolled, lost, cannot_reach). The other status tiles (cannot_reach, lost) stay as-is because those statuses always have explicit enrolments rows.
+
+**Impact:** providers page total_routed now reconciles with overview KPI. Awaiting Outcome tile shows the real point-in-time number rather than 0/1 of explicit-open rows.
+
+**Signed off:** Owner (session 14).
+
+---
+
 ## 2026-04-27: DQ leak fix in lead router (ticket 869d2rxap)
 
 **Type:** Edge Function fix + downstream-data backfill.

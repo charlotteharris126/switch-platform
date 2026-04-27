@@ -66,7 +66,8 @@ export default async function AdminHomePage({
     // Period-aware lifecycle
     weekQualifiedRes,
     weekEnrolmentsRes,
-    openRes,
+    routedInPeriodRes,
+    terminalEnrolmentsRes,
     cannotReachRes,
     lostRes,
     waitlistUniqueRes,
@@ -131,13 +132,25 @@ export default async function AdminHomePage({
         .select("id", { count: "exact", head: true })
         .in("status", ["enrolled", "presumed_enrolled"]),
     ),
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "open"),
-    ),
+    // Awaiting outcome: routed leads (live) with no terminal enrolment status.
+    // Most routed leads have NO crm.enrolments row at all (they sit "implicitly
+    // open" until the provider sets a status). Filtering on status='open'
+    // misses every implicit-open row. Instead: fetch routed-in-period IDs +
+    // every terminal-status submission_id, subtract in JS.
+    (() => {
+      const q = supabase
+        .schema("leads")
+        .from("submissions")
+        .select("id")
+        .not("primary_routed_to", "is", null)
+        .is("archived_at", null);
+      return cutoff ? q.gte("routed_at", cutoff) : q;
+    })(),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("submission_id")
+      .in("status", ["enrolled", "presumed_enrolled", "lost", "cannot_reach"]),
     enrolPeriod(
       supabase
         .schema("crm")
@@ -204,6 +217,17 @@ export default async function AdminHomePage({
   // Pilot stats: free remaining + billable across providers
   const totalFreeRemaining = billingRows.reduce((sum, r) => sum + (r.free_enrolments_remaining ?? 0), 0);
   const totalBillable = billingRows.reduce((sum, r) => sum + (r.billable_count ?? 0), 0);
+
+  // Awaiting outcome (period-aware): routed-in-period leads minus those with
+  // a terminal-status enrolment row. "Implicitly open" leads (no enrolments
+  // row at all) count as awaiting because the provider hasn't acted yet.
+  const routedInPeriodIds = new Set(
+    ((routedInPeriodRes.data ?? []) as Array<{ id: number }>).map((r) => r.id)
+  );
+  const terminalSubmissionIds = new Set(
+    ((terminalEnrolmentsRes.data ?? []) as Array<{ submission_id: number }>).map((r) => r.submission_id)
+  );
+  const awaitingOutcome = [...routedInPeriodIds].filter((id) => !terminalSubmissionIds.has(id)).length;
 
   // Things that need attention
   const unrouted = unroutedRes.count ?? 0;
@@ -361,7 +385,7 @@ export default async function AdminHomePage({
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
           <SmallTile label="Qualified" value={weekQualifiedRes.count ?? 0} href="/leads?dq=no" />
           <SmallTile label="Enrolments" value={weekEnrolmentsRes.count ?? 0} emphasis="good" href="/providers" />
-          <SmallTile label="Awaiting outcome" value={openRes.count ?? 0} note="Status: open" href="/actions" />
+          <SmallTile label="Awaiting outcome" value={awaitingOutcome} note="Routed, no enrolment outcome yet" href="/actions" />
           <SmallTile label="Cannot reach" value={cannotReachRes.count ?? 0} emphasis={(cannotReachRes.count ?? 0) > 0 ? "warn" : undefined} />
           <SmallTile label="Lost" value={lostRes.count ?? 0} />
           <SmallTile label="Waitlist (DQ)" value={waitlistUniqueRes.count ?? 0} href="/leads?dq=yes" />
