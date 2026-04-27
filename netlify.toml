@@ -1,21 +1,17 @@
+# Repo-root netlify.toml.
+#
+# Tells Netlify the deployable app lives in ./app — Next.js dashboard published
+# to admin.switchleads.co.uk. Netlify cd's to ./app before reading the rest of
+# the build config, so app/netlify.toml provides the per-build settings (build
+# command, plugins, headers).
+#
+# Path filter: only trigger a build when something inside ./app changed. Doc
+# updates, migration files, Edge Functions changes, agent notes do not need to
+# burn a Netlify build.
+#
+# This file exists because the repo became a monorepo on 2026-04-26 covering
+# app/ + supabase/ + docs/ — see platform/docs/changelog.md.
+
 [build]
-  command = "npm run build"
-  publish = ".next"
-
-[build.environment]
-  NODE_VERSION = "22"
-
-[[plugins]]
-  package = "@netlify/plugin-nextjs"
-
-# Security headers — applied to every response unless overridden.
-# CSP intentionally absent for now; will be tuned in Session E once we know
-# every external origin in use (Supabase, Brevo widgets, etc.).
-[[headers]]
-  for = "/*"
-  [headers.values]
-    X-Frame-Options = "DENY"
-    X-Content-Type-Options = "nosniff"
-    Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "geolocation=(), camera=(), microphone=(), payment=()"
-    Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
+  base    = "app"
+  ignore  = "git diff --quiet HEAD^ HEAD ./app/"

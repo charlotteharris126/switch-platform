@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Switchable Ltd — Operations Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --navy:      #11242e;
+      --teal:      #143643;
+      --teal-mid:  #1a4a5c;
+      --copper:    #cd8b76;
+      --copper-lt: #d9a494;
+      --offwhite:  #f4f1ed;
+      --grey-lt:   #e6e6e6;
+      --grey-mid:  #9aabb3;
+      --text-dim:  rgba(244,241,237,0.55);
+      --green:     #4caf89;
+      --amber:     #e8a838;
+      --red:       #d95f5f;
+      --blue:      #5b9bd5;
+      --sidebar-w: 220px;
+      --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+
+    body { font-family: var(--font); background: #0e1f28; color: var(--offwhite); display: flex; min-height: 100vh; font-size: 14px; }
+
+    /* SIDEBAR */
+    .sidebar {
+      width: var(--sidebar-w); background: var(--navy); display: flex; flex-direction: column;
+      position: fixed; top: 0; left: 0; height: 100vh; z-index: 100; border-right: 1px solid rgba(255,255,255,0.06);
+    }
+    .sidebar-logo { padding: 22px 20px 18px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .sidebar-logo .brand { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; color: var(--copper); text-transform: uppercase; }
+    .sidebar-logo .sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .sidebar-nav { flex: 1; padding: 12px 0; overflow-y: auto; }
+    .nav-section { padding: 16px 20px 6px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--grey-mid); }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px; padding: 9px 20px;
+      color: rgba(244,241,237,0.7); cursor: pointer; transition: all 0.15s; font-size: 13.5px;
+      border-left: 2px solid transparent;
+    }
+    .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--offwhite); }
+    .nav-item.active { background: rgba(205,139,118,0.1); color: var(--copper); border-left-color: var(--copper); }
+    .nav-item svg { opacity: 0.7; flex-shrink: 0; }
+    .nav-item.active svg { opacity: 1; }
+    .nav-badge { margin-left: auto; background: var(--copper); color: white; font-size: 10px; font-weight: 700; border-radius: 10px; padding: 1px 6px; }
+    .sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.06); }
+    .sidebar-footer .version { font-size: 11px; color: var(--text-dim); }
+
+    /* MAIN */
+    .main { margin-left: var(--sidebar-w); flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+    .topbar {
+      background: var(--teal); border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 50;
+    }
+    .topbar-title { font-size: 16px; font-weight: 600; }
+    .topbar-right { display: flex; align-items: center; gap: 16px; }
+    .topbar-date { font-size: 12px; color: var(--text-dim); }
+    .topbar-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+    .status-dot.live { background: var(--green); }
+
+    .content { padding: 28px; flex: 1; }
+    .page { display: none; }
+    .page.active { display: block; }
+
+    /* CARDS */
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+    .stat-card {
+      background: var(--teal); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px;
+      padding: 20px; position: relative; overflow: hidden;
+    }
+    .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--copper); border-radius: 10px 10px 0 0; }
+    .stat-card.green::before { background: var(--green); }
+    .stat-card.amber::before { background: var(--amber); }
+    .stat-card.blue::before { background: var(--blue); }
+    .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--grey-mid); margin-bottom: 10px; }
+    .stat-num { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 6px; }
+    .stat-sub { font-size: 12px; color: var(--text-dim); }
+    .stat-trend { font-size: 11px; margin-top: 8px; }
+    .stat-trend.up { color: var(--green); }
+    .stat-trend.warn { color: var(--amber); }
+
+    /* PANELS */
+    .panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px; }
+    .panel { background: var(--teal); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; }
+    .panel.full { grid-column: 1 / -1; }
+    .panel-head {
+      padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .panel-title { font-size: 13px; font-weight: 600; }
+    .panel-action { font-size: 12px; color: var(--copper); cursor: pointer; }
+    .panel-action:hover { text-decoration: underline; }
+    .panel-body { padding: 0; }
+
+    /* TABLE */
+    table { width: 100%; border-collapse: collapse; }
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--grey-mid); padding: 10px 20px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06); font-weight: 500; }
+    td { padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 13px; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    /* BADGES */
+    .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px; white-space: nowrap; }
+    .badge-green { background: rgba(76,175,137,0.15); color: var(--green); }
+    .badge-amber { background: rgba(232,168,56,0.15); color: var(--amber); }
+    .badge-red { background: rgba(217,95,95,0.15); color: var(--red); }
+    .badge-blue { background: rgba(91,155,213,0.15); color: var(--blue); }
+    .badge-grey { background: rgba(154,171,179,0.15); color: var(--grey-mid); }
+    .badge-copper { background: rgba(205,139,118,0.15); color: var(--copper); }
+
+    /* PROGRESS BAR */
+    .progress-wrap { margin-bottom: 20px; }
+    .progress-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .progress-label { font-size: 12px; width: 130px; flex-shrink: 0; color: var(--offwhite); }
+    .progress-bar-wrap { flex: 1; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+    .progress-bar { height: 100%; border-radius: 3px; background: var(--copper); transition: width 0.4s; }
+    .progress-bar.green { background: var(--green); }
+    .progress-bar.blue { background: var(--blue); }
+    .progress-val { font-size: 12px; color: var(--grey-mid); width: 36px; text-align: right; flex-shrink: 0; }
+
+    /* ACTIVITY FEED */
+    .activity-list { padding: 4px 0; }
+    .activity-item { display: flex; gap: 14px; padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.04); align-items: flex-start; }
+    .activity-item:last-child { border-bottom: none; }
+    .activity-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+    .activity-dot.green { background: var(--green); }
+    .activity-dot.amber { background: var(--amber); }
+    .activity-dot.copper { background: var(--copper); }
+    .activity-dot.blue { background: var(--blue); }
+    .activity-dot.grey { background: var(--grey-mid); }
+    .activity-text { font-size: 13px; line-height: 1.4; }
+    .activity-time { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+    /* LEAD DETAIL */
+    .lead-name { font-weight: 600; }
+    .lead-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+    .days-chip { font-size: 11px; background: rgba(255,255,255,0.06); border-radius: 4px; padding: 2px 7px; color: var(--grey-mid); }
+    .days-chip.urgent { background: rgba(217,95,95,0.12); color: var(--red); }
+
+    /* ACTION BUTTONS */
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; }
+    .btn-primary { background: var(--copper); color: white; }
+    .btn-primary:hover { background: var(--copper-lt); }
+    .btn-ghost { background: rgba(255,255,255,0.06); color: var(--offwhite); }
+    .btn-ghost:hover { background: rgba(255,255,255,0.1); }
+    .btn-danger { background: rgba(217,95,95,0.15); color: var(--red); }
+    .btn-danger:hover { background: rgba(217,95,95,0.25); }
+
+    /* FILTER ROW */
+    .filter-row { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+    .filter-input {
+      background: var(--teal); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+      color: var(--offwhite); padding: 8px 12px; font-size: 13px; outline: none; flex: 1; max-width: 280px;
+    }
+    .filter-input:focus { border-color: var(--copper); }
+    .filter-select {
+      background: var(--teal); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+      color: var(--offwhite); padding: 8px 12px; font-size: 13px; outline: none; cursor: pointer;
+    }
+    .filter-select:focus { border-color: var(--copper); }
+
+    /* PIPELINE KANBAN */
+    .kanban { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+    .kanban-col { background: rgba(255,255,255,0.03); border-radius: 8px; padding: 14px; }
+    .kanban-col-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--grey-mid); margin-bottom: 12px; display: flex; justify-content: space-between; }
+    .kanban-count { background: rgba(255,255,255,0.08); border-radius: 10px; padding: 1px 7px; font-size: 11px; color: var(--offwhite); }
+    .kanban-card { background: var(--teal); border: 1px solid rgba(255,255,255,0.07); border-radius: 7px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: border-color 0.15s; }
+    .kanban-card:hover { border-color: rgba(205,139,118,0.4); }
+    .kanban-card-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .kanban-card-meta { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; }
+    .kanban-card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+    .ktag { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.07); color: var(--grey-mid); }
+
+    /* REVENUE CHART (simple bars) */
+    .chart-wrap { padding: 20px; }
+    .chart-bars { display: flex; align-items: flex-end; gap: 8px; height: 140px; margin-bottom: 8px; }
+    .chart-bar-group { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
+    .chart-bar { width: 100%; border-radius: 4px 4px 0 0; transition: opacity 0.2s; min-height: 4px; }
+    .chart-bar:hover { opacity: 0.8; }
+    .chart-bar.enrol { background: var(--copper); }
+    .chart-bar.target { background: rgba(205,139,118,0.25); border: 1px dashed rgba(205,139,118,0.5); border-bottom: none; }
+    .chart-label { font-size: 10px; color: var(--grey-mid); margin-top: 6px; }
+    .chart-legend { display: flex; gap: 16px; margin-top: 8px; }
+    .chart-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
+    .chart-legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+
+    /* PROVIDER CARDS */
+    .provider-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .provider-card { background: var(--teal); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 18px; }
+    .provider-card-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
+    .provider-name { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+    .provider-contact { font-size: 12px; color: var(--text-dim); }
+    .provider-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .provider-stat-val { font-size: 18px; font-weight: 700; }
+    .provider-stat-label { font-size: 10px; color: var(--grey-mid); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+    .provider-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; }
+    .provider-actions { display: flex; gap: 8px; }
+
+    /* BILLING TABLE EXTRAS */
+    .billing-amount { font-weight: 700; }
+    .billing-amount.earned { color: var(--green); }
+    .billing-amount.pending { color: var(--amber); }
+
+    /* ALERT BANNER */
+    .alert { display: flex; align-items: center; gap: 12px; background: rgba(232,168,56,0.1); border: 1px solid rgba(232,168,56,0.25); border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; }
+    .alert svg { flex-shrink: 0; color: var(--amber); }
+    .alert strong { color: var(--amber); }
+    .alert a { color: var(--copper); text-decoration: underline; cursor: pointer; }
+
+    /* COMPLIANCE PAGE */
+    .compliance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .compliance-item { display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .compliance-item:last-child { border-bottom: none; }
+    .compliance-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .compliance-icon.ok { background: rgba(76,175,137,0.15); color: var(--green); }
+    .compliance-icon.warn { background: rgba(232,168,56,0.15); color: var(--amber); }
+    .compliance-icon.bad { background: rgba(217,95,95,0.15); color: var(--red); }
+    .compliance-label { font-size: 13px; font-weight: 600; }
+    .compliance-sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+    .compliance-status { margin-left: auto; }
+
+    /* EMPTY STATE */
+    .empty { text-align: center; padding: 48px 20px; color: var(--text-dim); }
+    .empty-icon { font-size: 32px; margin-bottom: 12px; }
+    .empty p { font-size: 13px; }
+
+    /* SCROLLBAR */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+
+    @media (max-width: 1100px) {
+      .stat-grid { grid-template-columns: repeat(2,1fr); }
+      .kanban { grid-template-columns: repeat(3,1fr); }
+      .provider-grid { grid-template-columns: repeat(2,1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="brand">Switchable Ltd</div>
+    <div class="sub">Operations Dashboard</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">Overview</div>
+    <div class="nav-item active" onclick="showPage('overview', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Overview
+    </div>
+    <div class="nav-section">Leads</div>
+    <div class="nav-item" onclick="showPage('leads', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Lead Pipeline
+      <span class="nav-badge">12</span>
+    </div>
+    <div class="nav-item" onclick="showPage('matching', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Lead Matching
+    </div>
+    <div class="nav-section">Providers</div>
+    <div class="nav-item" onclick="showPage('providers', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Providers
+    </div>
+    <div class="nav-item" onclick="showPage('enrolments', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      Enrolments
+    </div>
+    <div class="nav-section">Revenue</div>
+    <div class="nav-item" onclick="showPage('billing', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      Billing
+    </div>
+    <div class="nav-section">Compliance</div>
+    <div class="nav-item" onclick="showPage('compliance', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      Compliance
+      <span class="nav-badge" style="background:#d95f5f">1</span>
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="version">Demo build — mock data only</div>
+  </div>
+</aside>
+
+<!-- MAIN CONTENT -->
+<main class="main">
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="topbar-title" id="page-title">Overview</div>
+    <div class="topbar-right">
+      <div class="topbar-date">Monday 6 April 2026</div>
+      <div class="topbar-status">
+        <div class="status-dot"></div>
+        Pre-trading
+      </div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ==================== OVERVIEW ==================== -->
+    <div class="page active" id="page-overview">
+
+      <div class="alert">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <div><strong>Action needed:</strong> Activate form is not live — Fillout ID not embedded. Providers cannot complete onboarding. <a onclick="showPage('providers', document.querySelectorAll('.nav-item')[4])">View providers</a></div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Revenue this month</div>
+          <div class="stat-num">£0</div>
+          <div class="stat-sub">Target: £10,000/month by Apr 2027</div>
+          <div class="stat-trend warn">12 months to target</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Leads in pipeline</div>
+          <div class="stat-num">305</div>
+          <div class="stat-sub">Captured, awaiting provider match</div>
+          <div class="stat-trend up">305 consented, 0 delivered</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Active providers</div>
+          <div class="stat-num">0</div>
+          <div class="stat-sub">Signed and onboarded</div>
+          <div class="stat-trend warn">3 in funnel — funnel not live</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">Enrolments confirmed</div>
+          <div class="stat-num">0</div>
+          <div class="stat-sub">Across all providers</div>
+          <div class="stat-trend warn">First 3 are free (pilot)</div>
+        </div>
+      </div>
+
+      <div class="panel-grid">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Path to £10k/month</div>
+            <div class="panel-action" onclick="showPage('billing', document.querySelectorAll('.nav-item')[6])">View billing</div>
+          </div>
+          <div class="panel-body" style="padding:20px">
+            <div style="margin-bottom:18px">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+                <span style="font-size:12px;color:var(--text-dim)">Current</span>
+                <span style="font-size:13px;font-weight:700;color:var(--red)">£0 / month</span>
+              </div>
+              <div style="height:8px;background:rgba(255,255,255,0.07);border-radius:4px;overflow:hidden">
+                <div style="height:100%;width:0%;background:var(--copper);border-radius:4px"></div>
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:6px">£10,000/month target</div>
+            </div>
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.6">
+              At £150/enrolment, you need <strong style="color:var(--offwhite)">67 enrolments/month</strong> from 8–12 active providers. First milestone: sign 1 provider and deliver first batch of leads.
+            </div>
+            <div style="margin-top:18px">
+              <div class="progress-wrap">
+                <div class="progress-row">
+                  <div class="progress-label">Funnel complete</div>
+                  <div class="progress-bar-wrap"><div class="progress-bar" style="width:90%"></div></div>
+                  <div class="progress-val">90%</div>
+                </div>
+                <div class="progress-row">
+                  <div class="progress-label">Provider signed</div>
+                  <div class="progress-bar-wrap"><div class="progress-bar" style="width:0%"></div></div>
+                  <div class="progress-val">0%</div>
+                </div>
+                <div class="progress-row">
+                  <div class="progress-label">Leads delivered</div>
+                  <div class="progress-bar-wrap"><div class="progress-bar blue" style="width:0%"></div></div>
+                  <div class="progress-val">0%</div>
+                </div>
+                <div class="progress-row">
+                  <div class="progress-label">First enrolment</div>
+                  <div class="progress-bar-wrap"><div class="progress-bar green" style="width:0%"></div></div>
+                  <div class="progress-val">0%</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Recent activity</div>
+          </div>
+          <div class="activity-list">
+            <div class="activity-item">
+              <div class="activity-dot copper"></div>
+              <div>
+                <div class="activity-text">Provider agreement published to Notion — ready to embed in activate form</div>
+                <div class="activity-time">Yesterday, 17:41</div>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-dot blue"></div>
+              <div>
+                <div class="activity-text">Key Dates page created in Notion — ICO, Companies House, domains tracked</div>
+                <div class="activity-time">Yesterday, 17:15</div>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-dot amber"></div>
+              <div>
+                <div class="activity-text">Email hosting renewal due — legal@switchable.careers expires 5 June 2026</div>
+                <div class="activity-time">Yesterday, 17:00</div>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-dot green"></div>
+              <div>
+                <div class="activity-text">SwitchLeads cookie policy written and published to Notion</div>
+                <div class="activity-time">Yesterday, 14:22</div>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-dot grey"></div>
+              <div>
+                <div class="activity-text">Workspace restructure complete — all agents configured, skill files moved</div>
+                <div class="activity-time">Yesterday, 11:05</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel full">
+          <div class="panel-head">
+            <div class="panel-title">Revenue projection (mock)</div>
+            <div class="panel-action">Based on 8 providers, 15% conversion, £10/lead</div>
+          </div>
+          <div class="chart-wrap">
+            <div class="chart-bars">
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:8%"></div>
+                <div class="chart-label">Apr</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:14%"></div>
+                <div class="chart-label">May</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:22%"></div>
+                <div class="chart-label">Jun</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:33%"></div>
+                <div class="chart-label">Jul</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:45%"></div>
+                <div class="chart-label">Aug</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:55%"></div>
+                <div class="chart-label">Sep</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:65%"></div>
+                <div class="chart-label">Oct</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:75%"></div>
+                <div class="chart-label">Nov</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:83%"></div>
+                <div class="chart-label">Dec</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:90%"></div>
+                <div class="chart-label">Jan</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar target" style="height:96%"></div>
+                <div class="chart-label">Feb</div>
+              </div>
+              <div class="chart-bar-group">
+                <div class="chart-bar enrol" style="height:100%"></div>
+                <div class="chart-label">Mar</div>
+              </div>
+            </div>
+            <div class="chart-legend">
+              <div class="chart-legend-item"><div class="chart-legend-dot" style="background:var(--copper)"></div> Projected revenue</div>
+              <div class="chart-legend-item"><div class="chart-legend-dot" style="background:rgba(205,139,118,0.3);border:1px dashed var(--copper)"></div> Target trajectory to £10k</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== LEADS ==================== -->
+    <div class="page" id="page-leads">
+      <div class="filter-row">
+        <input class="filter-input" type="text" placeholder="Search leads...">
+        <select class="filter-select">
+          <option>All statuses</option>
+          <option>New</option>
+          <option>Matched</option>
+          <option>Delivered</option>
+          <option>Enrolled</option>
+          <option>Disputed</option>
+        </select>
+        <select class="filter-select">
+          <option>All sectors</option>
+          <option>Digital / Marketing</option>
+          <option>Cyber / IT</option>
+          <option>Health / Care</option>
+          <option>Construction</option>
+        </select>
+        <select class="filter-select">
+          <option>All funding types</option>
+          <option>Fully funded</option>
+          <option>Self-funded</option>
+          <option>Loan-funded</option>
+        </select>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Lead pipeline — 305 leads captured</div>
+          <div class="panel-action">Export CSV</div>
+        </div>
+        <div class="panel-body">
+          <table>
+            <thead>
+              <tr>
+                <th>Learner</th>
+                <th>Sector interest</th>
+                <th>Funding</th>
+                <th>Region</th>
+                <th>Captured</th>
+                <th>Status</th>
+                <th>Matched to</th>
+                <th>Days open</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="lead-name">Sarah Mitchell</div><div class="lead-meta">sarah.m@gmail.com</div></td>
+                <td>Digital Marketing</td>
+                <td><span class="badge badge-blue">Fully funded</span></td>
+                <td>Manchester</td>
+                <td>2 Apr 2026</td>
+                <td><span class="badge badge-amber">Matched</span></td>
+                <td>FutureSkills North</td>
+                <td><span class="days-chip">4 days</span></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">James Okafor</div><div class="lead-meta">jokafor@hotmail.com</div></td>
+                <td>Cyber / IT</td>
+                <td><span class="badge badge-blue">Fully funded</span></td>
+                <td>Birmingham</td>
+                <td>1 Apr 2026</td>
+                <td><span class="badge badge-amber">Matched</span></td>
+                <td>CyberReady Training</td>
+                <td><span class="days-chip">5 days</span></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">Priya Sharma</div><div class="lead-meta">priya.sharma@yahoo.co.uk</div></td>
+                <td>Health / Care</td>
+                <td><span class="badge badge-copper">Self-funded</span></td>
+                <td>Leeds</td>
+                <td>31 Mar 2026</td>
+                <td><span class="badge badge-grey">Unmatched</span></td>
+                <td>No provider yet</td>
+                <td><span class="days-chip">6 days</span></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">Tom Brennan</div><div class="lead-meta">tbrennan@outlook.com</div></td>
+                <td>Construction</td>
+                <td><span class="badge badge-blue">Fully funded</span></td>
+                <td>Bristol</td>
+                <td>28 Mar 2026</td>
+                <td><span class="badge badge-grey">Unmatched</span></td>
+                <td>No provider yet</td>
+                <td><span class="days-chip">9 days</span></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">Claire Woods</div><div class="lead-meta">claire.w@gmail.com</div></td>
+                <td>Digital Marketing</td>
+                <td><span class="badge badge-green">Loan-funded</span></td>
+                <td>London</td>
+                <td>25 Mar 2026</td>
+                <td><span class="badge badge-grey">Unmatched</span></td>
+                <td>No provider yet</td>
+                <td><span class="days-chip urgent">12 days</span></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">Marcus Hall</div><div class="lead-meta">marcush@gmail.com</div></td>
+                <td>Cyber / IT</td>
+                <td><span class="badge badge-blue">Fully funded</span></td>
+                <td>Sheffield</td>
+                <td>22 Mar 2026</td>
+                <td><span class="badge badge-grey">Unmatched</span></td>
+                <td>No provider yet</td>
+                <td><span class="days-chip urgent">15 days</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="padding:14px 20px;font-size:12px;color:var(--text-dim);border-top:1px solid rgba(255,255,255,0.04)">Showing 6 of 305 leads. 12 matched, 293 awaiting a provider to deliver to.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== MATCHING ==================== -->
+    <div class="page" id="page-matching">
+      <div class="panel" style="margin-bottom:20px">
+        <div class="panel-head">
+          <div class="panel-title">Lead matching — assign learners to providers</div>
+          <div class="panel-action">Auto-match all</div>
+        </div>
+        <div class="panel-body" style="padding:20px">
+          <div style="font-size:13px;color:var(--text-dim);margin-bottom:20px">Matching is based on: sector interest, funding type, and learner region vs provider coverage. Review suggested matches before confirming.</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Learner</th>
+                <th>Sector</th>
+                <th>Funding</th>
+                <th>Region</th>
+                <th>Suggested provider</th>
+                <th>Match confidence</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="lead-name">Priya Sharma</div><div class="lead-meta">Health / Care — Leeds</div></td>
+                <td>Health / Care</td>
+                <td><span class="badge badge-copper">Self-funded</span></td>
+                <td>Leeds</td>
+                <td style="color:var(--text-dim)">No match — no health provider</td>
+                <td><span class="badge badge-red">No match</span></td>
+                <td><button class="btn btn-ghost" style="font-size:11px">Hold</button></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">Tom Brennan</div><div class="lead-meta">Construction — Bristol</div></td>
+                <td>Construction</td>
+                <td><span class="badge badge-blue">Fully funded</span></td>
+                <td>Bristol</td>
+                <td style="color:var(--text-dim)">No match — no construction provider</td>
+                <td><span class="badge badge-red">No match</span></td>
+                <td><button class="btn btn-ghost" style="font-size:11px">Hold</button></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">Claire Woods</div><div class="lead-meta">Digital Marketing — London</div></td>
+                <td>Digital Marketing</td>
+                <td><span class="badge badge-green">Loan-funded</span></td>
+                <td>London</td>
+                <td>FutureSkills North (covers London)</td>
+                <td><span class="badge badge-amber">Possible</span></td>
+                <td><div style="display:flex;gap:6px"><button class="btn btn-primary" style="font-size:11px">Confirm</button><button class="btn btn-ghost" style="font-size:11px">Skip</button></div></td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">Marcus Hall</div><div class="lead-meta">Cyber / IT — Sheffield</div></td>
+                <td>Cyber / IT</td>
+                <td><span class="badge badge-blue">Fully funded</span></td>
+                <td>Sheffield</td>
+                <td>CyberReady Training (national)</td>
+                <td><span class="badge badge-green">Strong</span></td>
+                <td><div style="display:flex;gap:6px"><button class="btn btn-primary" style="font-size:11px">Confirm</button><button class="btn btn-ghost" style="font-size:11px">Skip</button></div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== PROVIDERS ==================== -->
+    <div class="page" id="page-providers">
+      <div class="filter-row">
+        <input class="filter-input" type="text" placeholder="Search providers...">
+        <select class="filter-select">
+          <option>All statuses</option>
+          <option>Prospect</option>
+          <option>In funnel</option>
+          <option>Active</option>
+          <option>Paused</option>
+        </select>
+        <button class="btn btn-primary" style="margin-left:auto">+ Add provider</button>
+      </div>
+
+      <div class="provider-grid">
+        <div class="provider-card">
+          <div class="provider-card-head">
+            <div>
+              <div class="provider-name">FutureSkills North</div>
+              <div class="provider-contact">Sarah Holt — s.holt@futureskills.co.uk</div>
+            </div>
+            <span class="badge badge-amber">In funnel</span>
+          </div>
+          <div class="provider-stats">
+            <div><div class="provider-stat-val">0</div><div class="provider-stat-label">Enrolments</div></div>
+            <div><div class="provider-stat-val">2</div><div class="provider-stat-label">Leads sent</div></div>
+            <div><div class="provider-stat-val">£0</div><div class="provider-stat-label">Billed</div></div>
+          </div>
+          <div class="provider-tags">
+            <span class="ktag">Digital Marketing</span>
+            <span class="ktag">Fully funded</span>
+            <span class="ktag">Manchester</span>
+            <span class="ktag">London</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Completed steps 1 and 2. Activate form not yet live — cannot complete step 3.</div>
+          <div class="provider-actions">
+            <button class="btn btn-ghost" style="font-size:11px">View profile</button>
+            <button class="btn btn-ghost" style="font-size:11px">Send lead</button>
+          </div>
+        </div>
+
+        <div class="provider-card">
+          <div class="provider-card-head">
+            <div>
+              <div class="provider-name">CyberReady Training</div>
+              <div class="provider-contact">David Marsh — d.marsh@cyberready.co.uk</div>
+            </div>
+            <span class="badge badge-amber">In funnel</span>
+          </div>
+          <div class="provider-stats">
+            <div><div class="provider-stat-val">0</div><div class="provider-stat-label">Enrolments</div></div>
+            <div><div class="provider-stat-val">0</div><div class="provider-stat-label">Leads sent</div></div>
+            <div><div class="provider-stat-val">£0</div><div class="provider-stat-label">Billed</div></div>
+          </div>
+          <div class="provider-tags">
+            <span class="ktag">Cyber / IT</span>
+            <span class="ktag">Fully funded</span>
+            <span class="ktag">National</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Step 1 complete. Progressing to setup. Good fit for funded cyber leads nationally.</div>
+          <div class="provider-actions">
+            <button class="btn btn-ghost" style="font-size:11px">View profile</button>
+            <button class="btn btn-ghost" style="font-size:11px">Send nudge</button>
+          </div>
+        </div>
+
+        <div class="provider-card">
+          <div class="provider-card-head">
+            <div>
+              <div class="provider-name">Aspire Digital Academy</div>
+              <div class="provider-contact">Rachel Thorn — r.thorn@aspiredigital.co.uk</div>
+            </div>
+            <span class="badge badge-blue">Prospect</span>
+          </div>
+          <div class="provider-stats">
+            <div><div class="provider-stat-val">—</div><div class="provider-stat-label">Enrolments</div></div>
+            <div><div class="provider-stat-val">—</div><div class="provider-stat-label">Leads sent</div></div>
+            <div><div class="provider-stat-val">—</div><div class="provider-stat-label">Billed</div></div>
+          </div>
+          <div class="provider-tags">
+            <span class="ktag">Digital Marketing</span>
+            <span class="ktag">Skills Bootcamp</span>
+            <span class="ktag">Yorkshire</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Contacted via LinkedIn. No response yet. Follow up due.</div>
+          <div class="provider-actions">
+            <button class="btn btn-ghost" style="font-size:11px">View profile</button>
+            <button class="btn btn-primary" style="font-size:11px">Follow up</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== ENROLMENTS ==================== -->
+    <div class="page" id="page-enrolments">
+      <div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">
+        <div class="stat-card">
+          <div class="stat-label">Open leads</div>
+          <div class="stat-num">2</div>
+          <div class="stat-sub">Sent, awaiting status update</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Approaching presumed enrolled</div>
+          <div class="stat-num">0</div>
+          <div class="stat-sub">Auto-updates to presumed at 14 days</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Confirmed enrolments</div>
+          <div class="stat-num">0</div>
+          <div class="stat-sub">Provider confirmed</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">Invoiced</div>
+          <div class="stat-num">£0</div>
+          <div class="stat-sub">Awaiting payment</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Enrolment tracker</div>
+          <div class="panel-action">Export</div>
+        </div>
+        <div class="panel-body">
+          <table>
+            <thead>
+              <tr>
+                <th>Learner</th>
+                <th>Provider</th>
+                <th>Lead sent</th>
+                <th>Days since</th>
+                <th>Status</th>
+                <th>Dispute window</th>
+                <th>Invoice</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="lead-name">Sarah Mitchell</div><div class="lead-meta">Digital Marketing</div></td>
+                <td>FutureSkills North</td>
+                <td>2 Apr 2026</td>
+                <td><span class="days-chip">4 days</span></td>
+                <td><span class="badge badge-blue">Open</span></td>
+                <td style="color:var(--text-dim)">10 days remaining</td>
+                <td style="color:var(--text-dim)">—</td>
+              </tr>
+              <tr>
+                <td><div class="lead-name">James Okafor</div><div class="lead-meta">Cyber / IT</div></td>
+                <td>CyberReady Training</td>
+                <td>1 Apr 2026</td>
+                <td><span class="days-chip">5 days</span></td>
+                <td><span class="badge badge-blue">Open</span></td>
+                <td style="color:var(--text-dim)">9 days remaining</td>
+                <td style="color:var(--text-dim)">—</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="padding:14px 20px;font-size:12px;color:var(--text-dim);border-top:1px solid rgba(255,255,255,0.04)">No enrolments confirmed yet. Leads auto-update to "Presumed enrolled" at 14 days. Provider then has 7 days to dispute before invoice is raised.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== BILLING ==================== -->
+    <div class="page" id="page-billing">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total invoiced</div>
+          <div class="stat-num">£0</div>
+          <div class="stat-sub">Across all providers</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Collected</div>
+          <div class="stat-num">£0</div>
+          <div class="stat-sub">Via GoCardless</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Outstanding</div>
+          <div class="stat-num">£0</div>
+          <div class="stat-sub">Awaiting payment</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">Pilot enrolments used</div>
+          <div class="stat-num">0 / 3</div>
+          <div class="stat-sub">Free per provider</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Invoice ledger</div>
+          <div class="panel-action">+ Raise invoice</div>
+        </div>
+        <div class="panel-body">
+          <div class="empty">
+            <div class="empty-icon">📄</div>
+            <p>No invoices yet. Once a learner enrols and the dispute window closes, an invoice is raised automatically.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:20px">
+        <div class="panel-head">
+          <div class="panel-title">Pricing reference</div>
+        </div>
+        <div class="panel-body" style="padding:20px">
+          <table>
+            <thead>
+              <tr><th>Funding type</th><th>Rate</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Fully funded (pilot)</td>
+                <td><span class="billing-amount">£150/enrolment</span></td>
+                <td style="color:var(--text-dim)">After first 3 free enrolments. Locked permanently for pilot providers.</td>
+              </tr>
+              <tr>
+                <td>Self-funded / loan-funded (pilot)</td>
+                <td><span class="billing-amount">15% of course fee</span></td>
+                <td style="color:var(--text-dim)">Min £75, max £150. Locked permanently for pilot providers.</td>
+              </tr>
+              <tr>
+                <td>Pilot — first 3 enrolments</td>
+                <td><span class="billing-amount earned">Free</span></td>
+                <td style="color:var(--text-dim)">Per provider. No invoice raised until enrolment 4.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== COMPLIANCE ==================== -->
+    <div class="page" id="page-compliance">
+      <div class="alert">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <div><strong>Compliance gap:</strong> ROPA has not been written. Learner data is already being collected. This must be completed before ads restart.</div>
+      </div>
+
+      <div class="compliance-grid">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Legal documents</div></div>
+          <div class="panel-body">
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">ICO registration</div><div class="compliance-sub">Reg. No. ZC095665 — renews 18 Feb 2027</div></div>
+              <div class="compliance-status"><span class="badge badge-green">Current</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">SwitchLeads Privacy Policy</div><div class="compliance-sub">Live in Notion — in force</div></div>
+              <div class="compliance-status"><span class="badge badge-green">Current</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">SwitchLeads Cookie Policy</div><div class="compliance-sub">Written 5 April 2026</div></div>
+              <div class="compliance-status"><span class="badge badge-green">Current</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">Provider Agreement</div><div class="compliance-sub">Complete — ready to embed in activate form</div></div>
+              <div class="compliance-status"><span class="badge badge-green">Complete</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon bad"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>
+              <div><div class="compliance-label">ROPA</div><div class="compliance-sub">Required under UK GDPR — not yet written</div></div>
+              <div class="compliance-status"><span class="badge badge-red">Missing</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon warn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+              <div><div class="compliance-label">Data protection complaints process</div><div class="compliance-sub">Required by June 2026 (DUA Act)</div></div>
+              <div class="compliance-status"><span class="badge badge-amber">Due Jun 2026</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Key dates</div></div>
+          <div class="panel-body">
+            <div class="compliance-item">
+              <div class="compliance-icon warn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+              <div><div class="compliance-label">legal@switchable.careers renewal</div><div class="compliance-sub">Expires 5 June 2026 — renew at 123-reg now</div></div>
+              <div class="compliance-status"><span class="badge badge-amber">61 days</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">ICO renewal</div><div class="compliance-sub">18 February 2027</div></div>
+              <div class="compliance-status"><span class="badge badge-grey">318 days</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">switchleads.co.uk renewal</div><div class="compliance-sub">8 March 2027 — 123-reg</div></div>
+              <div class="compliance-status"><span class="badge badge-grey">336 days</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">Companies House confirmation</div><div class="compliance-sub">9 March 2027</div></div>
+              <div class="compliance-status"><span class="badge badge-grey">337 days</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">switchable.careers renewal</div><div class="compliance-sub">19 December 2026 — 123-reg</div></div>
+              <div class="compliance-status"><span class="badge badge-grey">257 days</span></div>
+            </div>
+            <div class="compliance-item">
+              <div class="compliance-icon ok"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <div><div class="compliance-label">Annual accounts</div><div class="compliance-sub">24 November 2027</div></div>
+              <div class="compliance-status"><span class="badge badge-grey">597 days</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+  function showPage(id, el) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.getElementById('page-' + id).classList.add('active');
+    if (el) el.classList.add('active');
+    const titles = {
+      overview: 'Overview',
+      leads: 'Lead Pipeline',
+      matching: 'Lead Matching',
+      providers: 'Providers',
+      enrolments: 'Enrolments',
+      billing: 'Billing',
+      compliance: 'Compliance'
+    };
+    document.getElementById('page-title').textContent = titles[id] || id;
+  }
+</script>
+</body>
+</html>
