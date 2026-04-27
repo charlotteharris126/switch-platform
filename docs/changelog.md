@@ -4,6 +4,46 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-26 — Social schema launch (migration 0029) — Session G.1
+
+**Type:** Schema migration. Multi-brand organic social automation — 7 tables, 6 views, RLS, Vault setup. Foundation for Session G.2 (OAuth + `/social/settings`) and Session G.3 (publish Edge Function + drafts UI).
+
+**Migration 0029 — `0029_social_schema.sql`:**
+
+1. **Extensions:** `pgsodium` (Supabase Vault primitives) and `pgcrypto` (defensive — `gen_random_uuid()`).
+2. **Schema:** `social` namespace, with `GRANT USAGE ... TO authenticated`.
+3. **Defensive:** `REVOKE ALL ON vault.decrypted_secrets FROM authenticated, anon` — Edge Functions read tokens through a SECURITY DEFINER helper added in G.3 (mirrors the `public.get_shared_secret()` pattern from migration 0019).
+4. **Tables (7):** `drafts`, `engagement_targets`, `engagement_queue`, `post_analytics`, `engagement_log`, `oauth_tokens`, `push_subscriptions`.
+5. **Views (6):** `vw_pending_drafts`, `vw_post_performance`, `vw_engagement_queue_active`, `vw_targets_due_review`, `vw_rejection_patterns`, `vw_channel_status`. All set `WITH (security_invoker = true)` so they inherit underlying-table RLS rather than running as the view owner.
+6. **RLS:** Every table has RLS enabled. `FOR ALL` policies via `admin.is_admin()` (the existing helper from migration 0014). `push_subscriptions` adds row-scope: admin can only see/manage their own subscriptions.
+7. **Append-only tables:** `post_analytics` and `engagement_log` ship with SELECT/INSERT/UPDATE grants only — DELETE deliberately not granted (audit preservation). UPDATE remains for typo correction.
+8. **`post_analytics.draft_id` ON DELETE RESTRICT:** deleting a draft does not silently destroy its analytics history.
+9. **`engagement_queue.expires_at` NOT NULL DEFAULT (now() + 48h):** active-queue view filter no longer silently drops NULLs.
+10. **OAuth token storage:** `social.oauth_tokens` holds metadata + `access_token_secret_id` / `refresh_token_secret_id` UUIDs referencing `vault.secrets`. Ciphertext lives in Vault; admin UI never surfaces plaintext. Per `(brand, channel)` is the unique posting surface key.
+11. **Idempotent:** `IF NOT EXISTS` on tables, `OR REPLACE` on views, `DROP POLICY IF EXISTS` before each policy. Deploy retry safe.
+12. **Real DOWN block:** drops every object — schema is brand new, fully reversible.
+
+**Why:** Multi-brand organic social automation per `platform/docs/admin-dashboard-scoping.md` § Session G. Designed multi-brand (SwitchLeads + Switchable) and multi-channel (LinkedIn personal/company, Meta facebook/instagram, TikTok) from day one.
+
+**Review process:** `/ultrareview` not available in the local Claude Code build. Used three in-session multi-agent reviews instead — SQL correctness, security/RLS, spec compliance. Reviewers found two critical issues (missing `security_invoker` on views, missing GRANT SELECT on views) and several non-critical items. All addressed before applying. Future migrations should use `/ultrareview` once it's available; in the meantime the multi-agent in-session review is the substitute. See ClickUp ticket (to be created) on getting `/ultrareview` working.
+
+**Repo restructure prerequisite (same session):** `platform/` is now a single git repo (was just `platform/app/`). Migrations 0001-0029, Edge Functions, governance docs all tracked. `netlify.toml` at repo root with `base = "app"` keeps the dashboard deploying from its subfolder. This was a precondition for `/ultrareview` to ever work on migrations.
+
+**Impact assessment per `.claude/rules/data-infrastructure.md` §8:**
+
+1. **What changes:** new `social` namespace + 7 tables + 6 views + RLS + Vault adoption. No changes to existing schemas.
+2. **Reads:** none today. `/social/*` admin dashboard pages (Session G.2/G.3) will read these tables. Sasha's monitoring queries don't reference `social.*`; she'll see the new schema transparently when she next runs Monday checks.
+3. **Writes:** none today. OAuth callback (G.2) writes `oauth_tokens` + `vault.secrets`. Cron Edge Functions (G.3) write `drafts`, `engagement_queue`, `post_analytics`. Admin UI writes `engagement_log`, draft approvals, dispute flags.
+4. **Schema bump:** none. `social.drafts.schema_version` introduces a new internally-managed schema versioned at `'1.0'`; not a payload-side bump.
+5. **Data migration:** none — schema is brand new, no existing rows.
+6. **New role / RLS:** new RLS policies on all 7 tables via `admin.is_admin()`. No new role.
+7. **Rollback:** DOWN block drops every object cleanly. Vault entries created post-G.2 would need separate cleanup.
+8. **Sign-off:** owner approved 2026-04-26 in platform Session 10.
+
+**Repo state at apply time:** commit `969a662` on `main`, GitHub repo `charlotteharris126/switch-platform`, all migration files now tracked.
+
+---
+
 ## 2026-04-26 — Enrolment status taxonomy refactor (migration 0028)
 
 **Type:** Schema migration. Replaces the `crm.enrolments.status` enum with a redesigned set, adds three new columns, and rewrites the two SECURITY DEFINER functions that operate on the table. Data migration in the same file (in-place rewrite of existing rows).
