@@ -25,12 +25,17 @@ const ALLOWED_CHANNELS = new Set([
 
 // Personal-profile scopes:
 //   - openid + profile + email: OpenID Connect identity (member URN via /v2/userinfo)
-//   - w_member_social:  WRITE — autonomous publishing to the profile
-//   - r_member_social:  READ  — pulling reactions / comments / shares for analytics
-// Both w_ and r_ are auto-granted by LinkedIn's "Share on LinkedIn" product.
-// Company-page scopes (r_organization_social, w_organization_social) require
-// Marketing Developer Platform approval and are added once that lands.
-const PERSONAL_SCOPES = "openid profile email w_member_social r_member_social";
+//   - w_member_social: WRITE — autonomous publishing. Auto-granted via the
+//     "Share on LinkedIn" product on the developer app.
+// READ scope (r_member_social) is gated behind Marketing Developer Platform
+// approval and is NOT auto-granted on the Share on LinkedIn tier — confirmed
+// 2026-04-27 when LinkedIn returned `unauthorized_scope_error` on a reconnect
+// attempt. Until MDP approval lands, post analytics aren't readable via the
+// public API; the analytics page shows post count + "metrics unavailable"
+// rather than zeros that look like silent failure.
+// Company-page scopes (r_organization_social, w_organization_social) also
+// require MDP approval and are added once that lands.
+const PERSONAL_SCOPES = "openid profile email w_member_social";
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);

@@ -29,15 +29,6 @@ interface PerformanceRow {
   latest_engagement: number | null;
 }
 
-interface AnalyticsRow {
-  draft_id: string;
-  captured_at: string;
-  reactions: number | null;
-  comments: number | null;
-  shares: number | null;
-  follower_count: number | null;
-}
-
 export default async function SocialAnalyticsPage({
   searchParams,
 }: {
@@ -61,28 +52,12 @@ export default async function SocialAnalyticsPage({
 
   const { data: perfData, error: perfError } = await perfQuery;
 
-  // Latest follower-count snapshot. social.post_analytics carries it on every
-  // capture; pull the most recent row for each (brand, channel) via a separate
-  // query.
-  const { data: latestSnapshot } = await supabase
-    .schema("social")
-    .from("post_analytics")
-    .select("draft_id, captured_at, reactions, comments, shares, follower_count")
-    .order("captured_at", { ascending: false })
-    .limit(1);
-
   if (perfError) {
     return <div className="text-[#b3412e]">Error: {perfError.message}</div>;
   }
 
   const performance = (perfData ?? []) as PerformanceRow[];
-  const followerSnapshot = (latestSnapshot ?? [])[0] as AnalyticsRow | undefined;
-
-  // Aggregate stats across visible posts
   const publishedCount = performance.length;
-  const totalEngagement = performance.reduce((sum, p) => sum + (p.latest_engagement ?? 0), 0);
-  const totalImpressions = performance.reduce((sum, p) => sum + (p.latest_impressions ?? 0), 0);
-  const avgEngagement = publishedCount > 0 ? Math.round(totalEngagement / publishedCount) : 0;
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -91,7 +66,7 @@ export default async function SocialAnalyticsPage({
         title="Analytics"
         subtitle={
           <span>
-            Per-post performance from the daily LinkedIn analytics sync. Reactions, comments, shares pulled via the LinkedIn API. Impressions on personal posts aren&apos;t reliably exposed by LinkedIn&apos;s public API — those activate later via company-page scope.
+            Per-post engagement metrics will populate once Marketing Developer Platform approval lands (LinkedIn gates the read scope). Until then, this page shows post counts only. Approval is in flight.
           </span>
         }
       />
@@ -99,6 +74,15 @@ export default async function SocialAnalyticsPage({
       <SocialTabs active="analytics" />
 
       <BrandFilter active={brandFilter} basePath="/social/analytics" />
+
+      <Card className="border-[#cd8b76]/60 bg-[#fbf9f5]">
+        <CardContent className="pt-4 text-xs text-[#11242e]">
+          <p className="font-bold uppercase tracking-wide text-[10px] text-[#cd8b76] mb-1">Engagement metrics — awaiting approval</p>
+          <p>
+            LinkedIn gates the read scope (<span className="font-mono">r_member_social</span>) behind Marketing Developer Platform approval. Submission is queued; typical wait 2-8 weeks. Once granted, you reconnect on Settings, the analytics-sync cron re-enables, and reactions/comments populate per published post.
+          </p>
+        </CardContent>
+      </Card>
 
       {publishedCount === 0 ? (
         <Card>
@@ -108,18 +92,16 @@ export default async function SocialAnalyticsPage({
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <StatTile label="Published" value={publishedCount} />
-            <StatTile label="Total engagement" value={totalEngagement} emphasis="good" />
-            <StatTile label="Avg per post" value={avgEngagement} />
-            <StatTile label="Followers" value={followerSnapshot?.follower_count ?? "—"} />
+            <StatTile label="Engagement" value="awaiting approval" />
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Per-post performance</CardTitle>
+              <CardTitle className="text-sm">Posts published</CardTitle>
               <p className="text-xs text-[#5a6a72] mt-1">
-                Latest snapshot from the daily sync. Click a post to see its draft + edit history.
+                Click a post to see its draft + edit history. Engagement column populates once read scope is granted.
               </p>
             </CardHeader>
             <CardContent className="p-0">
@@ -149,8 +131,8 @@ export default async function SocialAnalyticsPage({
                       <TableCell className="text-xs text-[#11242e] whitespace-pre-wrap">
                         {truncate(p.content, 180)}
                       </TableCell>
-                      <TableCell className="text-xs text-right font-bold text-[#143643]">
-                        {p.latest_engagement ?? 0}
+                      <TableCell className="text-xs text-right text-[#5a6a72]">
+                        —
                       </TableCell>
                     </TableRow>
                   ))}
@@ -161,14 +143,6 @@ export default async function SocialAnalyticsPage({
         </>
       )}
 
-      <Card className="border-dashed">
-        <CardContent className="pt-4 text-xs text-[#5a6a72]">
-          <p className="font-bold uppercase tracking-wide text-[10px] text-[#143643] mb-1">Coming soon</p>
-          <p>
-            Pillar / hook breakdown, week-over-week trend, ICP engager log integration. For now, raw per-post numbers above are the foundation.
-          </p>
-        </CardContent>
-      </Card>
     </div>
   );
 }
