@@ -75,7 +75,6 @@ export default async function AdminHomePage({
     presumedRes,
     disputedRes,
     errorsRes,
-    formSubmissionsRes,
   ] = await Promise.all([
     // ── Lifetime ───────────────────────────────────────────────────────────
     // Qualified unique leads (lifetime, not DQ'd, not children, not archived)
@@ -86,8 +85,16 @@ export default async function AdminHomePage({
       .eq("is_dq", false)
       .is("parent_submission_id", null)
       .is("archived_at", null),
-    // Total routed (lifetime, every routing row)
-    supabase.schema("leads").from("routing_log").select("id", { count: "exact", head: true }),
+    // Routed unique people: distinct emails across all routed live submissions
+    // (parents + children, excluding archived). One person submitting twice
+    // counts once. The raw routing_log COUNT(*) inflates this number; "unique
+    // people" is the business KPI.
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("email")
+      .not("primary_routed_to", "is", null)
+      .is("archived_at", null),
     // Total enrolments (confirmed + presumed) — counts toward conversion + billing
     supabase
       .schema("crm")
@@ -178,19 +185,21 @@ export default async function AdminHomePage({
       .from("dead_letter")
       .select("id", { count: "exact", head: true })
       .is("replayed_at", null),
-    // Total form submissions (lifetime, including children)
-    supabase
-      .schema("leads")
-      .from("submissions")
-      .select("id", { count: "exact", head: true })
-      .is("archived_at", null),
   ]);
 
   const billingRows = (billingStateRes.data ?? []) as ProviderBillingRow[];
 
-  const totalRouted = totalRoutedRes.count ?? 0;
+  const routedEmails = (totalRoutedRes.data ?? []) as Array<{ email: string | null }>;
+  const totalRouted = new Set(
+    routedEmails
+      .map((r) => r.email?.toLowerCase().trim() ?? "")
+      .filter((e) => e.length > 0)
+  ).size;
   const totalEnrolments = totalEnrolmentsRes.count ?? 0;
-  const overallConversionPct = totalRouted > 0 ? Math.round((totalEnrolments / totalRouted) * 1000) / 10 : null;
+  // Two conversion rates: confirmed-only and including presumed.
+  const confirmedEnrolled = billingRows.reduce((s, r) => s + (r.confirmed_enrolled ?? 0), 0);
+  const conversionConfirmedPct = totalRouted > 0 ? Math.round((confirmedEnrolled / totalRouted) * 1000) / 10 : null;
+  const conversionPotentialPct = totalRouted > 0 ? Math.round((totalEnrolments / totalRouted) * 1000) / 10 : null;
 
   // Pilot stats: free remaining + billable across providers
   const totalFreeRemaining = billingRows.reduce((sum, r) => sum + (r.free_enrolments_remaining ?? 0), 0);
@@ -224,7 +233,7 @@ export default async function AdminHomePage({
 
       {/* ─── Headline numbers (lifetime, big) ─────────────────────────────── */}
       <section>
-        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Business health (lifetime)</p>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Business health (lifetime, unique people)</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Headline
             label="Qualified leads"
@@ -236,20 +245,24 @@ export default async function AdminHomePage({
           <Headline
             label="Routed"
             value={totalRouted}
-            note="Sent to a provider (lifetime)"
+            note="Unique people sent to a provider"
             href="/leads?routed=yes"
           />
           <Headline
             label="Enrolments"
             value={totalEnrolments}
-            note={`${totalEnrolmentsRes.count ?? 0} confirmed + presumed`}
+            note={`${confirmedEnrolled} confirmed + ${totalEnrolments - confirmedEnrolled} presumed`}
             href="/providers"
             theme="good"
           />
           <Headline
             label="Conversion"
-            value={overallConversionPct === null ? "—" : `${overallConversionPct}%`}
-            note="Enrolments ÷ routed"
+            value={conversionPotentialPct === null ? "—" : `${conversionPotentialPct}%`}
+            note={
+              conversionConfirmedPct === null
+                ? "Enrolments ÷ routed"
+                : `Confirmed only: ${conversionConfirmedPct}%`
+            }
           />
         </div>
       </section>
@@ -355,10 +368,6 @@ export default async function AdminHomePage({
         </div>
       </section>
 
-      {/* Form submissions footnote — useful for cross-checking with Netlify */}
-      <p className="text-[10px] text-[#5a6a72]">
-        Total form submissions lifetime: {(formSubmissionsRes.count ?? 0).toLocaleString()} (every form fill including re-applications + waitlist enrichments; archived test rows excluded).
-      </p>
     </div>
   );
 }

@@ -2,17 +2,9 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { usePathname, useRouter } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
 import { signOutAction } from "@/app/(auth)/verify-mfa/actions";
 
 // Sidebar nav is split into sections.
@@ -132,49 +124,88 @@ export function AdminShell({
         {/* Topbar */}
         <header className="h-16 bg-white border-b border-[#dad4cb] px-8 flex items-center justify-between">
           <HealthBar />
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button variant="ghost" className="h-10 px-3 gap-2 rounded-full">
-                  <Avatar className="h-8 w-8">
-                    <AvatarFallback className="text-xs bg-[#143643] text-[#f4f1ed] font-semibold">
-                      {initials}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="text-sm text-[#11242e] font-medium hidden md:inline">{user.email}</span>
-                </Button>
-              }
-            />
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="font-normal">
-                <span className="block text-[10px] uppercase tracking-wide text-[#5a6a72]">Signed in as</span>
-                <span className="block text-xs font-bold text-[#11242e] truncate">{user.email}</span>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                render={
-                  <Link href="/account" className="block w-full">
-                    Account settings
-                  </Link>
-                }
-              />
-              <DropdownMenuSeparator />
-              <form action={signOutAction}>
-                <DropdownMenuItem
-                  render={
-                    <button type="submit" className="w-full text-left cursor-pointer">
-                      Sign out
-                    </button>
-                  }
-                />
-              </form>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <UserMenu email={user.email} initials={initials} />
         </header>
 
         {/* Content */}
         <main className="flex-1 p-8">{children}</main>
       </div>
+    </div>
+  );
+}
+
+// Self-contained user menu. Built with plain primitives instead of the
+// shadcn DropdownMenu render-prop pattern because the previous version
+// had click-handling issues (clicking the avatar opened the menu but
+// inner items didn't always fire, Base UI render-prop interaction with
+// nested forms / Link components). Plain button + click-outside handler
+// is more predictable.
+function UserMenu({ email, initials }: { email?: string; initials: string }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="h-10 px-3 inline-flex items-center gap-2 rounded-full hover:bg-[#f4f1ed] transition-colors"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Avatar className="h-8 w-8">
+          <AvatarFallback className="text-xs bg-[#143643] text-[#f4f1ed] font-semibold">
+            {initials}
+          </AvatarFallback>
+        </Avatar>
+        <span className="text-sm text-[#11242e] font-medium hidden md:inline max-w-[180px] truncate">{email ?? ""}</span>
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 mt-1 w-60 z-50 bg-white border border-[#dad4cb] rounded-xl shadow-[0_4px_12px_rgba(17,36,46,0.15)] py-2">
+          <div className="px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold">Signed in as</p>
+            <p className="text-xs font-bold text-[#11242e] truncate">{email ?? "—"}</p>
+          </div>
+          <div className="border-t border-[#dad4cb] my-1" />
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              router.push("/account");
+            }}
+            className="w-full text-left px-3 py-2 text-sm text-[#11242e] hover:bg-[#f4f1ed] cursor-pointer"
+          >
+            Account settings
+          </button>
+          <div className="border-t border-[#dad4cb] my-1" />
+          <form action={signOutAction}>
+            <button
+              type="submit"
+              className="w-full text-left px-3 py-2 text-sm text-[#11242e] hover:bg-[#f4f1ed] cursor-pointer"
+            >
+              Sign out
+            </button>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

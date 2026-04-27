@@ -4,6 +4,54 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-27: DQ leak fix in lead router (ticket 869d2rxap)
+
+**Type:** Edge Function fix + downstream-data backfill.
+
+**What changed:**
+
+1. **Form** (`switchable/site`): added a `dq_reason` hidden input to the `switchable-self-funded` form on `/find-your-course/`. `showHolding(reason)` now populates it; `restartForm()` and the submit handler clear it whenever the user is no longer in the DQ flow. Belt-and-braces against back-navigation edge cases.
+2. **Edge Function `_shared/ingest.ts`**: added `applyDqOverride()` to `normaliseAndOverride()` so any client-flagged DQ row has its `provider_ids` forced to `[]`. Mirrors `applyOwnerTestOverrides`. The routing branch already short-circuits on `is_dq=true`; this just makes the row state honest. Both `netlify-lead-router` and `netlify-leads-reconcile` redeployed.
+3. **Form-matrix simulator** (`/tools/form-matrix/`): updated FYC outcome blocks to reflect the corrected behaviour. The DQ holding panel + "keep me on the list" path captures the lead but flags it `is_dq=true` with no provider routing.
+
+**Why:** before this fix, a self-funded learner who was DQ'd by the qualifier (qualification = `professional-body` or budget = `under-200` / `no-invest`) and then clicked "keep me on the list" landed in `leads.submissions` with `is_dq=false` and a real `primary_routed_to` value. They were routed to a provider as if qualified. Real example: Anita Bucpapaj (id 184) sent to Courses Direct on 2026-04-27 18:41 UTC. The form already redirected DQ submissions to `/waitlist/` instead of the thank-you page, but the form payload itself never carried the DQ marker, so the Edge Function couldn't tell.
+
+**Backfill (pending owner action):**
+
+```sql
+UPDATE leads.submissions
+   SET is_dq = true,
+       dq_reason = 'qual',
+       primary_routed_to = NULL,
+       routed_at = NULL,
+       provider_ids = '{}'::text[]
+ WHERE id = 184;
+```
+
+Routing log entry #97 left in place as audit trail of the historical (now-corrected) misroute. Charlotte to email Marty separately so he doesn't waste effort on the lead.
+
+**Impact:** every consumer of `leads.submissions` now correctly sees Anita as DQ once the backfill SQL runs. Reconciliation card on `/admin/errors` will show a 1-row drift between routing-log count and unique-people count until that routing_log row ages out of the active set; that's the deliberate "we corrected a misroute" trace.
+
+**Schema_version:** unchanged. `dq_reason` is an existing optional field on the lead payload schema (already used by funded waitlist forms). Self-funded form starting to send it is additive per `.claude/rules/schema-versioning.md`.
+
+**Signed off:** Owner (session 14, ticket 869d2rxap).
+
+---
+
+## 2026-04-27: Admin dashboard correctness fixes (Session 14 batch 2)
+
+**Type:** UI/data fixes only. No schema or migration changes.
+
+1. **`/admin` overview:** "Routed" KPI switched from `COUNT(*)` of routed parent rows (was 89) to `COUNT(DISTINCT lower(trim(email)))` of all live routed rows including children (now 88). Matches the owner's per-sheet count. Same change feeds both conversion rates (potential incl. presumed; confirmed only).
+2. **`/admin/leads`:** enrolment-status badge for `enrolled` now `bg-emerald-600 text-white` (deep green) instead of pale `emerald-100`, so it's visually distinct from the routed badge.
+3. **`/admin/providers`:** new "Total enrolled" column (confirmed + presumed combined). Conversion split into two columns, "Potential %" (incl. presumed) and "Confirmed %" (enrolled only). Replaces the previous single conversion column.
+4. **`/admin/errors`:** major rewrite. Top-of-page DB reconciliation card surfaces routing_log_rows vs unique-people-routed and breaks down the gap (archived test rows + linked re-applications + rapid-fire same-email duplicates). Each unresolved error row now shows the linked lead's name, email, current state in plain English (pulls from `raw_payload.submission_id` for `reconcile_backfill` rows). Source-group headlines plain English, "What this is / What to do" per source, plus an explanatory card explaining what "Mark resolved" actually does.
+5. **`/admin/account` topbar dropdown:** replaced the shadcn DropdownMenu (Base UI render-prop pattern) with a self-contained `UserMenu` component using vanilla button + click-outside `useEffect`. The render-prop indirection with nested `<form>` + `<Link>` was breaking inner click events.
+
+**Signed off:** Owner (session 14).
+
+---
+
 ## 2026-04-26 — Social schema launch (migration 0029) — Session G.1
 
 **Type:** Schema migration. Multi-brand organic social automation — 7 tables, 6 views, RLS, Vault setup. Foundation for Session G.2 (OAuth + `/social/settings`) and Session G.3 (publish Edge Function + drafts UI).

@@ -81,8 +81,9 @@ export default async function ProvidersPage() {
             <TableRow>
               <TableHead>Provider</TableHead>
               <TableHead className="text-right">Routed</TableHead>
-              <TableHead className="text-right">Enrolled</TableHead>
-              <TableHead className="text-right">Conversion</TableHead>
+              <TableHead className="text-right" title="Confirmed + presumed (no provider update in 14 days = presumed enrolled).">Total enrolled</TableHead>
+              <TableHead className="text-right" title="Total enrolled (incl. presumed) ÷ Routed. The ceiling if every presumed converts.">Potential %</TableHead>
+              <TableHead className="text-right" title="Confirmed enrolments only ÷ Routed. The hard floor.">Confirmed %</TableHead>
               <TableHead className="text-right">Free left</TableHead>
               <TableHead className="text-right">Billable</TableHead>
               <TableHead>Status</TableHead>
@@ -92,14 +93,17 @@ export default async function ProvidersPage() {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-[#5a6a72] py-10">
+                <TableCell colSpan={9} className="text-center text-[#5a6a72] py-10">
                   No providers yet.
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((p) => {
                 const b = billingByProvider.get(p.provider_id);
-                const enrolledTotal = (b?.confirmed_enrolled ?? 0) + (b?.presumed_enrolled ?? 0);
+                const totalEnrolled = (b?.confirmed_enrolled ?? 0) + (b?.presumed_enrolled ?? 0);
+                const totalRouted = b?.total_routed ?? 0;
+                const potentialPct = totalRouted > 0 ? Math.round((totalEnrolled / totalRouted) * 1000) / 10 : null;
+                const confirmedPct = totalRouted > 0 ? Math.round(((b?.confirmed_enrolled ?? 0) / totalRouted) * 1000) / 10 : null;
                 return (
                   <TableRow key={p.provider_id} className={p.archived_at ? "opacity-60" : ""}>
                     <TableCell>
@@ -116,18 +120,16 @@ export default async function ProvidersPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-xs text-right font-bold">
-                      {b?.total_routed ?? 0}
+                      {totalRouted}
                     </TableCell>
-                    <TableCell className="text-xs text-right">
-                      <span className="font-bold text-emerald-700">{b?.confirmed_enrolled ?? 0}</span>
-                      {(b?.presumed_enrolled ?? 0) > 0 ? (
-                        <span className="text-[#5a6a72]"> + {b?.presumed_enrolled} presumed</span>
-                      ) : null}
+                    <TableCell className="text-xs text-right font-bold text-emerald-700">
+                      {totalEnrolled}
                     </TableCell>
                     <TableCell className="text-xs text-right font-bold text-[#143643]">
-                      {b?.conversion_rate_pct === null || b?.conversion_rate_pct === undefined
-                        ? "—"
-                        : `${b.conversion_rate_pct}%`}
+                      {potentialPct === null ? "—" : `${potentialPct}%`}
+                    </TableCell>
+                    <TableCell className="text-xs text-right text-[#5a6a72]">
+                      {confirmedPct === null ? "—" : `${confirmedPct}%`}
                     </TableCell>
                     <TableCell className="text-xs text-right">
                       <span className={b && b.free_enrolments_remaining === 0 ? "font-bold text-[#cd8b76]" : ""}>

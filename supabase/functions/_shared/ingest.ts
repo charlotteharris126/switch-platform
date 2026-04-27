@@ -154,7 +154,25 @@ export function normaliseAndOverride(
   body: Record<string, JsonValue>,
   rawPayload: JsonValue,
 ): CanonicalSubmission {
-  return applyOwnerTestOverrides(normalise(formName, body, rawPayload));
+  return applyDqOverride(applyOwnerTestOverrides(normalise(formName, body, rawPayload)));
+}
+
+/**
+ * Defence-in-depth for client-flagged DQ submissions.
+ *
+ * When the form sends a `dq_reason` hidden field (e.g. self-funded DQ panel
+ * "keep me on the list" path), the per-form normaliser still populates
+ * provider_ids from its hardcoded fallback (e.g. ['courses-direct']). The
+ * Edge Function's routing branch already short-circuits on is_dq=true, so
+ * routing doesn't fire, but the row in the DB carries provider_ids that
+ * make the lead look like it was a candidate for that provider. Misleading.
+ *
+ * Force provider_ids = [] whenever the row is flagged is_dq=true. Mirrors
+ * applyOwnerTestOverrides which already does this for owner-test emails.
+ */
+function applyDqOverride(row: CanonicalSubmission): CanonicalSubmission {
+  if (!row.is_dq || row.provider_ids.length === 0) return row;
+  return { ...row, provider_ids: [] };
 }
 
 /**

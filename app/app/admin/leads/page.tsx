@@ -306,10 +306,13 @@ export default async function LeadsPage({
 
 function enrolmentBadgeClass(status: string): string {
   switch (status) {
-    case "enrolled":          return "bg-emerald-100 text-emerald-800 hover:bg-emerald-100";
+    // Enrolled = a real win. Bold deep green so it stands out from the routed
+    // pale-green and from anything else on the page.
+    case "enrolled":          return "bg-emerald-600 text-white hover:bg-emerald-600";
     case "presumed_enrolled": return "bg-[#143643] text-white hover:bg-[#143643]";
     case "cannot_reach":      return "bg-[#cd8b76]/20 text-[#143643] hover:bg-[#cd8b76]/20";
     case "lost":              return "bg-[#dad4cb] text-[#143643] hover:bg-[#dad4cb]";
+    // Open = routed, awaiting outcome. Pale green to read as 'in progress'.
     case "open":              return "bg-emerald-100 text-emerald-800 hover:bg-emerald-100";
     default:                  return "bg-[#f4f1ed] text-[#5a6a72] hover:bg-[#f4f1ed]";
   }
