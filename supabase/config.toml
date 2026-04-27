@@ -424,3 +424,6 @@ verify_jwt = false
 
 [functions.routing-confirm]
 verify_jwt = false
+
+[functions.social-publish]
+verify_jwt = false

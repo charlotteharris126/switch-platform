@@ -20,7 +20,7 @@ const NAV_ITEMS = [
   { href: "/actions", label: "Actions" },
   { href: "/leads", label: "Leads" },
   { href: "/providers", label: "Providers" },
-  { href: "/social/settings", label: "Social" },
+  { href: "/social/drafts", label: "Social" },
   { href: "/errors", label: "Errors" },
 ];
 
