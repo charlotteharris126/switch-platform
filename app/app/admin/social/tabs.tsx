@@ -1,12 +1,13 @@
 import Link from "next/link";
 
 interface Props {
-  active: "drafts" | "settings";
+  active: "drafts" | "analytics" | "settings";
 }
 
 const TABS: Array<{ key: Props["active"]; label: string; href: string }> = [
-  { key: "drafts",   label: "Drafts",   href: "/social/drafts" },
-  { key: "settings", label: "Settings", href: "/social/settings" },
+  { key: "drafts",    label: "Drafts",    href: "/social/drafts" },
+  { key: "analytics", label: "Analytics", href: "/social/analytics" },
+  { key: "settings",  label: "Settings",  href: "/social/settings" },
 ];
 
 export function SocialTabs({ active }: Props) {

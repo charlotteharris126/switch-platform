@@ -23,11 +23,14 @@ const ALLOWED_CHANNELS = new Set([
   "linkedin_company",
 ]);
 
-// Personal-profile scopes — auto-granted by LinkedIn's "Share on LinkedIn"
-// product. Sufficient for autonomous publishing to Charlotte's own profile.
+// Personal-profile scopes:
+//   - openid + profile + email: OpenID Connect identity (member URN via /v2/userinfo)
+//   - w_member_social:  WRITE — autonomous publishing to the profile
+//   - r_member_social:  READ  — pulling reactions / comments / shares for analytics
+// Both w_ and r_ are auto-granted by LinkedIn's "Share on LinkedIn" product.
 // Company-page scopes (r_organization_social, w_organization_social) require
 // Marketing Developer Platform approval and are added once that lands.
-const PERSONAL_SCOPES = "openid profile email w_member_social";
+const PERSONAL_SCOPES = "openid profile email w_member_social r_member_social";
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);

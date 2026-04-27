@@ -13,6 +13,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { formatDateTime, truncate } from "@/lib/format";
 import { SocialTabs } from "../tabs";
+import { BrandFilter, normaliseBrand } from "../brand-filter";
 
 // Drafts review surface. Read-only for now (G.3 first ship). Edit / approve /
 // reject / retry actions ship in the next iteration. The 11 batch-loaded
@@ -34,6 +35,10 @@ interface DraftRow {
   created_at: string;
 }
 
+interface SearchParams {
+  brand?: string;
+}
+
 const STATUS_GROUPS: Array<{ key: string; label: string; description: string }> = [
   { key: "pending",            label: "Pending review", description: "Awaiting your approve / edit / reject decision." },
   { key: "approved",           label: "Approved",       description: "Queued for publishing. Cron picks them up at their scheduled time." },
@@ -42,14 +47,26 @@ const STATUS_GROUPS: Array<{ key: string; label: string; description: string }> 
   { key: "rejected",           label: "Rejected",       description: "Won't publish. Kept for record + rejection-pattern analysis." },
 ];
 
-export default async function SocialDraftsPage() {
+export default async function SocialDraftsPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const sp = await searchParams;
+  const brandFilter = normaliseBrand(sp.brand);
   const supabase = await createClient();
 
-  const { data, error } = await supabase
+  let query = supabase
     .schema("social")
     .from("drafts")
     .select("id, brand, channel, status, content, scheduled_for, pillar, hook_type, external_post_id, published_at, publish_error, created_at")
     .order("scheduled_for", { ascending: true, nullsFirst: false });
+
+  if (brandFilter !== "all") {
+    query = query.eq("brand", brandFilter);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     return (
@@ -85,6 +102,8 @@ export default async function SocialDraftsPage() {
       />
 
       <SocialTabs active="drafts" />
+
+      <BrandFilter active={brandFilter} basePath="/social/drafts" />
 
       {STATUS_GROUPS.map(({ key, label, description }) => {
         const rows = grouped[key] ?? [];
