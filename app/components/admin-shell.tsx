@@ -15,13 +15,30 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { signOutAction } from "@/app/(auth)/verify-mfa/actions";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Overview" },
-  { href: "/actions", label: "Actions" },
-  { href: "/leads", label: "Leads" },
-  { href: "/providers", label: "Providers" },
-  { href: "/social/drafts", label: "Social" },
-  { href: "/errors", label: "Errors" },
+// Sidebar nav is split into sections.
+//   "Operations" — the lead/provider lifecycle surfaces. Day-to-day work lives here.
+//   "Tools"      — operational tooling that supports the business but isn't the
+//                  core lifecycle. Social was the first; bulk operations,
+//                  reports, engagement queue, etc. land here as they ship.
+const NAV_SECTIONS: Array<{
+  label?: string;
+  items: Array<{ href: string; label: string }>;
+}> = [
+  {
+    items: [
+      { href: "/", label: "Overview" },
+      { href: "/actions", label: "Actions" },
+      { href: "/leads", label: "Leads" },
+      { href: "/providers", label: "Providers" },
+      { href: "/errors", label: "Errors" },
+    ],
+  },
+  {
+    label: "Tools",
+    items: [
+      { href: "/social/drafts", label: "Social" },
+    ],
+  },
 ];
 
 export function AdminShell({
@@ -36,6 +53,9 @@ export function AdminShell({
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
+    // Social tab sub-routes (/social/drafts, /social/settings) all activate the
+    // single sidebar Social link.
+    if (href === "/social/drafts") return pathname.startsWith("/social");
     return pathname === href || pathname.startsWith(href + "/");
   }
 
@@ -65,32 +85,41 @@ export function AdminShell({
         </div>
 
         <nav className="flex-1 py-4">
-          <ul className="space-y-0.5 px-3">
-            {NAV_ITEMS.map((item) => {
-              const active = isActive(item.href);
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    className={[
-                      "group flex items-center px-4 py-2.5 text-sm rounded-full transition-colors",
-                      active
-                        ? "bg-[#cd8b76]/15 text-[#f4f1ed] border border-[#cd8b76]/30"
-                        : "text-[rgba(244,241,237,0.65)] hover:bg-white/5 hover:text-[#f4f1ed] border border-transparent",
-                    ].join(" ")}
-                  >
-                    <span
-                      className={[
-                        "inline-block w-1.5 h-1.5 rounded-full mr-3 transition-colors",
-                        active ? "bg-[#cd8b76]" : "bg-white/20 group-hover:bg-white/40",
-                      ].join(" ")}
-                    />
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+          {NAV_SECTIONS.map((section, sectionIdx) => (
+            <div key={section.label ?? `section-${sectionIdx}`} className={sectionIdx > 0 ? "mt-6" : ""}>
+              {section.label && (
+                <p className="px-7 mb-2 text-[10px] font-bold uppercase tracking-[2px] text-white/40">
+                  {section.label}
+                </p>
+              )}
+              <ul className="space-y-0.5 px-3">
+                {section.items.map((item) => {
+                  const active = isActive(item.href);
+                  return (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        className={[
+                          "group flex items-center px-4 py-2.5 text-sm rounded-full transition-colors",
+                          active
+                            ? "bg-[#cd8b76]/15 text-[#f4f1ed] border border-[#cd8b76]/30"
+                            : "text-[rgba(244,241,237,0.65)] hover:bg-white/5 hover:text-[#f4f1ed] border border-transparent",
+                        ].join(" ")}
+                      >
+                        <span
+                          className={[
+                            "inline-block w-1.5 h-1.5 rounded-full mr-3 transition-colors",
+                            active ? "bg-[#cd8b76]" : "bg-white/20 group-hover:bg-white/40",
+                          ].join(" ")}
+                        />
+                        {item.label}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
         </nav>
 
         <div className="p-4 border-t border-white/10 text-[10px] uppercase tracking-[2px] text-white/30 font-bold">

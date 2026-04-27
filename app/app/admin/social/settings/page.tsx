@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
 import { formatDateTime } from "@/lib/format";
+import { SocialTabs } from "../tabs";
 
 // Channel connection management. Lists every (brand, channel) combination
 // with current OAuth health. Connect / Reconnect button per row links to
@@ -85,6 +86,8 @@ export default async function SocialSettingsPage({
           </span>
         }
       />
+
+      <SocialTabs active="settings" />
 
       {sp.status === "connected" && (
         <Card className="border-emerald-300 bg-emerald-50">

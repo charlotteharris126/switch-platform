@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { PageHeader } from "@/components/page-header";
 import { formatDateTime, truncate } from "@/lib/format";
+import { SocialTabs } from "../tabs";
 
 // Drafts review surface. Read-only for now (G.3 first ship). Edit / approve /
 // reject / retry actions ship in the next iteration. The 11 batch-loaded
@@ -83,6 +84,8 @@ export default async function SocialDraftsPage() {
         }
       />
 
+      <SocialTabs active="drafts" />
+
       {STATUS_GROUPS.map(({ key, label, description }) => {
         const rows = grouped[key] ?? [];
         if (rows.length === 0) return null;
@@ -110,8 +113,10 @@ export default async function SocialDraftsPage() {
                 <TableBody>
                   {rows.map((d) => (
                     <TableRow key={d.id} className="hover:bg-[#f4f1ed]/60">
-                      <TableCell className="text-xs whitespace-nowrap text-[#11242e]">
-                        {d.scheduled_for ? formatDateTime(d.scheduled_for) : "—"}
+                      <TableCell className="text-xs whitespace-nowrap">
+                        <Link href={`/social/drafts/${d.id}`} className="text-[#cd8b76] hover:text-[#b3412e] font-semibold">
+                          {d.scheduled_for ? formatDateTime(d.scheduled_for) : "—"}
+                        </Link>
                       </TableCell>
                       <TableCell className="text-xs text-[#5a6a72]">
                         <span className="font-bold uppercase tracking-wide text-[#143643]">{d.brand}</span>
@@ -139,17 +144,6 @@ export default async function SocialDraftsPage() {
           </Card>
         );
       })}
-
-      <Card className="border-dashed">
-        <CardContent className="pt-4 text-xs text-[#5a6a72]">
-          <p className="font-bold uppercase tracking-wide text-[10px] text-[#143643] mb-1">Coming next</p>
-          <p>Click-into-detail with edit / reject / retry actions. For now, ask Claude in-session if you want a draft adjusted before its scheduled time, or reject a row by chat.</p>
-        </CardContent>
-      </Card>
-
-      <p className="text-[10px] text-[#5a6a72]">
-        <Link href="/social/settings" className="text-[#cd8b76] hover:text-[#b3412e]">← Channel settings</Link>
-      </p>
     </div>
   );
 }
