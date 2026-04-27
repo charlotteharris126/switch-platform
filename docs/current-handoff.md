@@ -1,96 +1,110 @@
-# Platform — Current Handoff — 2026-04-27 — Session 12 closed (Session G.2 + G.3 shipped — first social post live + 11 queued autonomously)
+# Platform — Current Handoff — 2026-04-27 — Session 13 closed (drafts management UI + nav restructure + brand filter + analytics page + analytics-sync Edge Function)
 
-**Session type:** Continuation of Session 11. After Session G.1 (schema) wrapped and the handoff was written, owner said "g.3" — actually meaning let's keep going. We did G.2 (OAuth flow + settings page) AND G.3 (publish Edge Function + cron + drafts UI) all in one push. End of session: Post 1 of the 12-post batch is LIVE on Charlotte's LinkedIn personal profile, posted autonomously via the cron-driven Edge Function. Posts 2-12 queued with shifted schedule; cron will publish them on date.
+**Session type:** Continuation of Session 12. After G.2 + G.3 shipped and the handoff was written, owner asked to keep going — restructure the dashboard nav (Tools section), build draft edit/cancel actions (the deferred half of G.3), and add brand filtering + analytics (Session G.4). All shipped and deployed in this run.
 
-**Session opened:** 2026-04-27 morning (continuation of Session 11)
-**Session closed:** 2026-04-27 afternoon
+**Session opened:** 2026-04-27 afternoon (continuation of Session 12)
+**Session closed:** 2026-04-27 evening
 
 ---
 
 ## What we worked on
 
-### 1. Session G.2 — OAuth + /social/settings (deployed)
+### 1. Sidebar nav restructured into Operations + Tools (deployed)
 
-- **Migration 0030** — `social.upsert_oauth_token()` SECURITY DEFINER write helper. Atomic: encrypts token via `vault.create_secret()`, upserts metadata row, writes audit row in one transaction. Multi-agent review caught: same-second name collision (fixed via `gen_random_uuid()` suffix), `public` in search_path (removed), caller-supplied `authorised_by` (now uses `auth.uid()` server-side).
-- **Two Next.js API routes** added:
-  - `/api/auth/linkedin/connect` — generates CSRF state, signs cookie via HMAC, redirects to LinkedIn authorise URL with `openid profile email w_member_social` scopes
-  - `/api/auth/linkedin/callback` — verifies CSRF, exchanges code for token, fetches `/v2/userinfo` for member URN, calls `upsert_oauth_token` RPC, redirects to settings page
-- **`/admin/social/settings` page** — lists three (brand, channel) cards: SwitchLeads/LinkedIn-personal (available), SwitchLeads/LinkedIn-company (Marketing Developer Platform pending), Switchable/LinkedIn-personal (cross-brand future). Connect button per available card. Reads `social.vw_channel_status` for health badges.
-- **Owner set 4 env vars on Netlify**: `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, `LINKEDIN_REDIRECT_URI`, `OAUTH_STATE_SECRET` (generated server-side, secrets-flagged in Netlify UI).
-- **Bug found and fixed: proxy.ts admin-prefix rewrite was breaking the OAuth callback URL.** The proxy rewrites `/foo` → `/admin/foo` based on subdomain so user-facing URLs stay clean. But LinkedIn's registered redirect URI is the bare `/api/auth/linkedin/callback` (no `/admin/` prefix), so the rewrite sent the callback to a non-existent route. Added `/api/auth/{linkedin,meta}/{connect,callback}` to `SHARED_AUTH_PATHS` so they bypass the rewrite.
-- **Bug found and fixed: Netlify path filter was suppressing real deploys.** The root `netlify.toml` had `ignore = "git diff --quiet HEAD^ HEAD ./app/"` to skip builds when only docs/migrations changed. It accidentally skipped a real `app/`-only deploy too. Removed the filter — every push triggers a build. Re-add once a working test pattern is found.
-- **Supabase Data API exposed-schemas list:** owner had to add `social` to the exposed list manually (Supabase Project Settings → Data API). Without it, `supabase.schema("social").rpc(...)` returns `Invalid schema: social`. **Memory rule saved:** `feedback_supabase_expose_new_schema.md` so this doesn't catch us next migration.
-- **End of G.2:** owner ran the OAuth dance for `(switchleads, linkedin_personal)`. Token encrypted in Vault, `social.oauth_tokens` row written, channel-health badge green.
+- `NAV_SECTIONS` shape replaces flat `NAV_ITEMS`. Two sections:
+  - Top (no header): Overview · Actions · Leads · Providers · Errors
+  - Lower **TOOLS** header: Social
+- As we add more business-management tools (bulk operations, reports, engagement queue, draft generator, etc.) they go under Tools.
+- Active-state logic updated so any `/social/*` sub-route highlights the single Social link.
 
-### 2. Session G.3 — Publish Edge Function + cron + drafts UI (deployed)
+### 2. Drafts management UI (deployed)
+Closes the deferred half of Session G.3.
 
-- **Migration 0031** — `social.get_oauth_access_token(brand, channel)` SECURITY DEFINER read helper. Allowlist-restricted, granted to service_role only. Audit row per call. Edge Functions read tokens through this helper, never via direct vault access.
-- **Migration 0032** — pg_cron schedule `social-publish-15min` running every 15 minutes. Idempotent (unschedule-then-schedule guard). Reads `AUDIT_SHARED_SECRET` from Vault per the 0019 pattern.
-- **Edge Function `social-publish`** deployed to Supabase. Reads approved drafts where `scheduled_for <= now()`, posts to LinkedIn `/rest/posts` with `LINKEDIN_VERSION=202604`, marks rows `published` / `failed` / `deferred`.
-- **Concurrency safety:** `pg_try_advisory_lock` at function entry prevents parallel invocations; CAS UPDATE (`WHERE status='approved'`) prevents double-publish even if the lock fails.
-- **Error handling:** 401 marks token expired + defers; 5xx/429 defer for next tick; 4xx fail with publish_error; missing `x-restli-id` treated as failure (not silent empty post-id); content > 3000 chars rejected upfront.
-- **LinkedIn-Version churn:** spec said `202401`, multi-agent reviewer suggested `202504`, both rejected by LinkedIn as deprecated/non-existent. `202604` confirmed working live. Bump cadence: revisit in ~9 months.
-- **`/admin/social/drafts` page** — read-only list grouped by status (Pending / Approved / Published / Failed / Rejected). Sidebar nav points here. Edit / approve / reject / retry actions deferred to next session.
-- **Multi-agent review on G.3 work** caught: cron not idempotent, race condition (double-post risk), missing x-restli-id fallback, missing token null-guard, missing content length check. All addressed before deploy.
-- **End-to-end verified live:** Post 1 ("Hidden demand opener") inserted as approved with scheduled_for=now(), publish triggered manually via the cron-equivalent SQL call, function published it to LinkedIn, returned `urn:li:share:7454521458158014464`. Draft row updated to `status='published'` with the post URN.
+- `/admin/social/drafts/[id]` detail page — full content view, audit metadata, edit history.
+- Edit form: content textarea (3000-char counter, `LinkedIn-Version 202604` cap enforced both client-side and server-side), `scheduled_for` datetime-local picker.
+- Server Actions: `editDraft`, `cancelDraft`. Edit history captured to `social.drafts.edit_history` JSONB.
+- Editing a `failed` draft auto-resets it to `approved` so the next cron tick retries with the new content. `publish_error` cleared on save.
+- Cancel marks the draft `rejected` with `rejection_reason_category='other'` + a sentinel free-text reason.
+- Status-conditional rendering: editable for `pending`/`approved`/`failed`; read-only for `published`/`rejected`.
 
-### 3. 11 batch posts loaded with shifted schedule
+ClickUp ticket `869d2mw3z` ("Build edit/approve/reject/retry actions on /social/drafts") — partially shipped. Edit + cancel done. Approve-from-pending + explicit retry button still pending (next session, when Thea's draft generator starts producing pending drafts).
 
-Owner approved schedule shift: each remaining post takes the slot of the previous-numbered post in the original schedule (Post 1 went out a day early, so Post 2 takes Post 1's Tue 28 Apr 9am slot, Post 3 takes Post 2's Wed 29 Apr 9am slot, etc.). Tue/Wed/Thu cadence preserved. Series ends Wed 20 May (was Thu 21 May).
+### 3. Drafts/Analytics/Settings tab strip + Brand filter pill
 
-All 11 inserted as `status='approved'` (already reviewed during drafting). Cron will publish them at their scheduled times. Next post (Post 2) lands tomorrow Tuesday 28 April ~9am UK.
+- New `SocialTabs` component (Drafts | Analytics | Settings) at the top of every `/social/*` page.
+- New `BrandFilter` component with pill buttons (All / SwitchLeads / Switchable). URL query param `?brand=switchleads` makes filtered views shareable.
+- `/social/drafts` and `/social/analytics` honour the brand filter. `/social/settings` stays brand-agnostic — connection-settings list every (brand, channel) together (owner clarified that's the right shape).
+- `normaliseBrand()` helper validates the query param against the enum.
 
-### 4. ClickUp tickets carrying forward
+### 4. OAuth scope update (deployed; owner action needed)
 
-- `869d2cp0m` — Investigate why `/ultrareview` is unavailable (Backlog, `platform`)
-- `869d28p6v` — Otter.ai transcript pipeline (Backlog, `platform`)
-- `869d281ar` — Provider call-from numbers (Backlog, `platform` + `switchable-email`)
-- `869d281bp` — Learner preferred call time (Backlog, `switchable-site` + `platform`)
-- `869d2830g` — Standardise cross-project comms across agent folders (Backlog, `strategy`)
+- `/api/auth/linkedin/connect` route now requests `openid profile email w_member_social r_member_social` (was missing `r_member_social`).
+- `r_member_social` is needed for the analytics-sync function to read like/comment counts.
+- **Owner needs to click "Reconnect" on `/social/settings`** for the SwitchLeads/LinkedIn-personal card. The existing token was issued without `r_member_social`; reconnecting refreshes it with the new scope. ~10 seconds.
+- Until reconnected, the analytics-sync cron will hit 401/403, set `auth_reconnect_required: true` in its response, and skip writing analytics rows.
 
-### 5. Memory rules saved
+### 5. Edge Function `social-analytics-sync` + Migration 0033 (deployed + applied)
 
-- `feedback_supabase_expose_new_schema.md` — recurring failure prevention for new schemas hitting `Invalid schema` errors
+- Daily 04:00 UTC cron schedule (`social-analytics-sync-daily`). Idempotent unschedule-then-schedule.
+- For every published draft <30 days old: `GET /rest/socialActions/{urn-encoded}/likes?count=0` and `/comments?count=0` in parallel; reads `paging.total` from each. Writes a fresh time-series snapshot to `social.post_analytics`.
+- Concurrency-safe via `pg_try_advisory_lock(8472640)` (distinct from `social-publish`'s `8472639`).
+- Per-call `AbortSignal.timeout(8000ms)` so one slow LinkedIn call doesn't block the batch.
+- 401/403 detected on first post → `auth_reconnect_required` flag set in response + early loop abort. Avoids burning quota when scope is wrong.
+- Multi-agent review caught: wrong endpoint shape on first draft (singular `/rest/socialActions/{urn}` returns one action, not aggregates — switched to `/likes` + `/comments` sub-resources reading `paging.total`); missing auth/scope handling; missing per-call timeout. All addressed before deploy.
+
+### 6. `/admin/social/analytics` page (deployed)
+
+- Reads `social.vw_post_performance` (per-post latest snapshot from migration 0029) + most recent `social.post_analytics` row for follower-count snapshot.
+- Brand-filtered.
+- Stat tiles: Published / Total engagement / Avg per post / Followers (NULL for personal LinkedIn — connections, not followers).
+- Per-post table with click-through to `/social/drafts/[id]`.
+- Empty state when no published posts (will be the case for non-SwitchLeads brand filters today).
+
+### 7. Status of the 12-post batch
+
+- Post 1: published live to LinkedIn 2026-04-27 (from Session 12).
+- Posts 2-12: `approved` in `social.drafts`, scheduled for Tue 28 Apr 9am UK through Wed 20 May 9am UK. Cron `social-publish-15min` will publish them at their scheduled times.
 
 ---
 
 ## Current state
 
-Social tool is fully wired and operational. First post live on LinkedIn. 11 more queued. Cron runs every 15 minutes. Owner has a read-only `/social/drafts` view to monitor the pipeline. The platform side of Session G is functionally complete; only edit/approve/reject/retry actions in the drafts UI remain (next session, smaller scope).
+Social tool now has the full ops surface: per-(brand, channel) connection management, draft list, draft detail with edit/cancel, analytics, brand filter. Publishing cron runs every 15 min. Analytics cron runs daily 04:00 UTC. Owner needs to click Reconnect once to refresh the OAuth scope before analytics will populate.
 
 ---
 
 ## Next steps
 
-1. **Verify Post 2 publishes Tuesday 28 Apr ~9am UK.** Check LinkedIn around 9-9:15am. If it's there: ✅ end-to-end autonomous publishing proven across a fresh cron tick. If it's not: check `/social/drafts` for the failed status and message.
-2. **Build edit / approve / reject / retry actions on `/social/drafts`.** Page is read-only currently. Add server actions + buttons. ~1-2 hours, fresh session. Lets owner adjust drafts before they fire, and recover failed posts.
-3. **Apply for LinkedIn Marketing Developer Platform.** Now that `/social/settings` is live, the reviewer can verify the integration. Submission doc at `switchleads/social/docs/linkedin-developer-app-submission.md`. 2-8 week wait. Unlocks company-page autonomous publishing.
-4. **Submit Switchable's company LinkedIn page (and Switchable brand activation in `/social`)** when Charlotte starts running organic Switchable social — separate later session.
-5. **Once `/social/drafts` actions ship, retire the SQL-INSERT pattern** for loading drafts. The next batch comes through the proper review surface.
-6. **Monitor cron health** via Sasha's Monday checks — `vw_cron_runs` should show `social-publish-15min` running cleanly.
+1. **Owner: Reconnect on `/social/settings`.** Refreshes the OAuth token to include `r_member_social`. ~10 seconds. Without this, the analytics cron tomorrow morning returns `auth_reconnect_required: true` instead of pulling metrics.
+2. **Verify Post 2 publishes Tuesday 28 Apr ~9am UK.** Check `/social/drafts` — Post 2 should show `published` with a URN.
+3. **Verify analytics sync runs Tuesday 04:00 UTC + Post 1 metrics appear.** Check `/social/analytics` — Post 1 should show reactions/comments. If `auth_reconnect_required: true`, the Reconnect step was missed.
+4. **Build social-draft-generate Edge Function (Session G.5)** — autonomous Mon + Thu cron that calls Claude API with brand voice + content pillars + past-performance signals to generate the next batch of draft posts. Currently drafts go in via SQL; this closes the loop. Half-day to a day; will need a `pending`-status batch loaded so we can also build the approve/edit-from-pending UI on `/social/drafts`. Also adds `social.engagement_queue` ingest path (forward LinkedIn notification emails to a webhook → Claude drafts a comment angle → push notification to phone).
+5. **Build the missing `/social/drafts` actions** (approve-from-pending with reason category, explicit retry button for failed). Smaller scope. Combine with G.5 once pending drafts exist.
+6. **EMS Tuesday catch-up call (28 April 13:00).** Nell's pending-items reminder should surface tomorrow morning with three asks: capture call-from numbers, discuss preferred-call-time, sheet-update reminder.
 
 ---
 
 ## Decisions / open questions
 
 ### Decisions made this session
-- **OAuth `authorised_by` read from `auth.uid()` server-side**, not caller-supplied parameter. Defence-in-depth.
-- **Vault secret names use UUIDs**, not timestamps. Race-free under same-second re-authorisation.
-- **`social.get_oauth_access_token()` granted to service_role only**, not authenticated. Admin UI never reads raw tokens.
-- **Edge Function uses `pg_try_advisory_lock` for concurrency safety** rather than per-row `FOR UPDATE` (cleaner for our scale).
-- **LinkedIn-Version `202604` confirmed live 2026-04-27.** Bump cadence: ~9 months. Watch for deprecation notices.
-- **Schedule shift: each remaining post takes the previous-numbered slot.** Preserves Tue/Wed/Thu cadence; series ends a day earlier than originally drafted.
-- **Drafts UI ships read-only first**, edit/approve/reject/retry deferred to next session.
+- **Sidebar nav structure:** Operations (top) + Tools (lower section). All future business-management tools land under Tools.
+- **`/social/drafts` is the default Social landing.** Sidebar Social link points there.
+- **Settings stays brand-agnostic.** Connection cards list every (brand, channel) together. Owner clarified that's the right shape.
+- **Brand filter via URL query param.** `?brand=switchleads | ?brand=switchable | (omitted for all)`. Shareable.
+- **Edit-resets-failed-to-approved.** When the owner edits a `failed` draft, status flips to `approved` so the next cron tick retries. Cleaner than a separate Retry button for now.
+- **Analytics endpoint shape:** `/rest/socialActions/{urn}/likes?count=0` + `/comments?count=0`, read `paging.total`. The singular `/rest/socialActions/{urn}` was wrong (returns one action, not aggregates).
+- **Personal-profile follower count is NULL** (LinkedIn personal has connections, not followers; API doesn't expose follower count for personal profiles). Activates later via company-page scope.
+- **Personal-profile impressions are NULL** for the same reason. Public API doesn't expose. Sales Navigator / company page would unlock.
 
 ### Open questions
-- **Will Post 2 (and beyond) publish cleanly via cron tomorrow morning?** Should — but worth checking 9-9:15am Tuesday.
-- **What's the right edit-experience for the drafts page?** Inline edit vs modal vs separate detail page. Punted to next session's design.
-- **Marketing Developer Platform timing** — when to submit. Suggest after a few cron-driven publishes prove the integration to LinkedIn reviewers.
+- **Will the Tuesday 04:00 UTC analytics sync work cleanly after Reconnect?** First real test of the analytics path.
+- **Same-day idempotency on `social.post_analytics`?** Currently the function writes a new row every run. If anyone manually triggers the function on the same day, they get two snapshots. Acceptable for time-series; could dedupe later via partial unique index on `(draft_id, date_trunc('day', captured_at))` if it becomes noisy.
+- **When to build `social-draft-generate`?** Owner's batch ends Wed 20 May. Earliest meaningful trigger: ~Mon 18 May for Mira's review of last batch's performance + draft batch 2.
 
 ---
 
 ## Next session
 
 - **Currently in:** `platform/` — admin dashboard + data layer + Edge Functions
-- **Next recommended:** `platform/` — verify Post 2 fired correctly tomorrow morning, then build the `/social/drafts` actions (edit / approve / reject / retry). Smaller scope than G.1/G.2/G.3, contained. After that, move on to the Bulk Operations build queue item or the Tuesday EMS catch-up call prep.
-- **Tackle first:** open `/social/drafts` and confirm Post 2 status. If `published`: build the action buttons. If `failed` or stuck on `approved` past its scheduled time: diagnose first.
+- **Next recommended:** `platform/` — confirm Tuesday morning's autonomous publish + analytics sync land cleanly (~9am Post 2; ~04:00 UTC analytics). Then either build Session G.5 (autonomous drafting) or work on a different build queue item depending on owner priority.
+- **Tackle first:** open `/social/drafts` Tuesday morning. Confirm Post 2 = `published` with URN. Then `/social/analytics` after 04:00 UTC for Post 1 metrics. If both clean: Session G publishing path is fully proven end-to-end including analytics.
