@@ -571,9 +571,13 @@ Migration 0029 (Session G.1). Build sequencing, UI page list, OAuth flow detail,
 
 **Channel values:** `'linkedin_personal'` (a person's LinkedIn account) | `'linkedin_company'` (a brand's LinkedIn company page) | `'meta_facebook'` (a brand's Facebook page) | `'meta_instagram'` (a brand's Instagram business account) | `'tiktok'` (a brand's TikTok account). The `(brand, channel)` pair identifies a unique posting surface.
 
-**Token encryption.** OAuth `access_token` and `refresh_token` columns are encrypted at rest via Supabase Vault (pgsodium-backed). The migration enables `pgsodium` and uses the `vault.create_secret()` / `vault.decrypted_secrets` view pattern. Edge Functions read decrypted via the view; admin UI never surfaces raw tokens. Per `.claude/rules/data-infrastructure.md` §5.
+**Token encryption.** OAuth `access_token` and `refresh_token` ciphertext live in `vault.secrets` (Supabase Vault, pgsodium-backed). Migration 0029 enables `pgsodium` (and `pgcrypto` for `gen_random_uuid()`); the OAuth callback route in Session G.2 calls `vault.create_secret()` to store ciphertext and stores only the returned UUID on `social.oauth_tokens.access_token_secret_id` / `refresh_token_secret_id`. Edge Functions decrypt via a SECURITY DEFINER helper added in Session G.3 (mirroring the `public.get_shared_secret()` pattern from migration 0019) — that helper enforces an allowlist over which secret rows can be read. Migration 0029 also defensively `REVOKE`s `vault.decrypted_secrets` access from `authenticated` and `anon`. Admin UI never surfaces raw tokens. Per `.claude/rules/data-infrastructure.md` §5.
 
-**RLS posture.** Admin role only at this stage. Every table has RLS enabled with deny-all-by-default; explicit policies grant SELECT + write to authenticated admin users via `admin.is_admin()` (the same helper from migration 0014). Phase 4 may extend specific tables for provider-facing access; not in scope for migration 0029.
+**RLS posture.** Admin role only at this stage. Every table has RLS enabled with deny-all-by-default; explicit `FOR ALL` policies grant access to authenticated admin users via `admin.is_admin()` (the same helper from migration 0014). Views set `WITH (security_invoker = true)` so they inherit the underlying tables' RLS rather than running as the view owner (Postgres default would bypass RLS — that would have leaked OAuth metadata via `vw_channel_status`). Schema-level `GRANT USAGE ON SCHEMA social TO authenticated` plus per-table SELECT/INSERT/UPDATE grants are required; without them Postgres rejects queries before RLS runs. Append-only tables (`post_analytics`, `engagement_log`) ship without DELETE in their grants — the RLS policy is permissive across all actions but the absence of the privilege enforces append-only at the database layer. Phase 4 may extend specific tables for provider-facing access; not in scope for migration 0029.
+
+**Append-only tables.** `post_analytics` (time-series performance snapshots) and `engagement_log` (ICP-tagging history) are audit-relevant. They have SELECT/INSERT/UPDATE granted but not DELETE. UPDATE is allowed for typo correction; deletion would require a future migration that explicitly grants DELETE to a maintenance role.
+
+**`post_analytics.draft_id` ON DELETE RESTRICT.** Deleting a published draft does NOT silently destroy its analytics history. A draft can only be removed after analytics rows are explicitly cleaned up — that explicit step is the audit trail.
 
 ### `social.drafts`
 
@@ -655,10 +659,11 @@ CREATE TABLE social.engagement_queue (
   status               TEXT NOT NULL DEFAULT 'pending',                   -- 'pending' | 'commented' | 'dismissed' | 'expired'
   commented_at         TIMESTAMPTZ,
   notification_sent_at TIMESTAMPTZ,                                       -- when we push-notified the admin's phone
-  expires_at           TIMESTAMPTZ,                                       -- auto-mark expired after 48h
+  expires_at           TIMESTAMPTZ NOT NULL DEFAULT (now() + INTERVAL '48 hours'),  -- auto-expire 48h after detection
   CHECK (status IN ('pending', 'commented', 'dismissed', 'expired'))
 );
 CREATE INDEX ON social.engagement_queue (status, detected_at);
+CREATE INDEX ON social.engagement_queue (target_id);
 ```
 
 ### `social.post_analytics`
@@ -668,7 +673,7 @@ Time-series performance per published post. `social-analytics-sync` runs daily a
 ```sql
 CREATE TABLE social.post_analytics (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  draft_id        UUID NOT NULL REFERENCES social.drafts(id) ON DELETE CASCADE,
+  draft_id        UUID NOT NULL REFERENCES social.drafts(id) ON DELETE RESTRICT,
   captured_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   impressions     INT,
   reactions       INT,
@@ -747,13 +752,17 @@ CREATE TABLE social.push_subscriptions (
 
 ### Views
 
+All views set `WITH (security_invoker = true)` so they inherit the underlying tables' RLS rather than running as the view owner. Without this flag, Postgres views default to running as the owner and would bypass RLS — that is a leak path, especially for `vw_channel_status` which surfaces OAuth metadata.
+
 ```sql
-CREATE VIEW social.vw_pending_drafts AS
+CREATE VIEW social.vw_pending_drafts
+  WITH (security_invoker = true) AS
   SELECT * FROM social.drafts
    WHERE status = 'pending'
    ORDER BY brand, scheduled_for NULLS LAST;
 
-CREATE VIEW social.vw_post_performance AS
+CREATE VIEW social.vw_post_performance
+  WITH (security_invoker = true) AS
   SELECT d.id, d.brand, d.channel, d.pillar, d.content, d.published_at,
          MAX(pa.impressions)                          AS latest_impressions,
          MAX(pa.reactions + pa.comments + pa.shares)  AS latest_engagement
@@ -762,7 +771,8 @@ CREATE VIEW social.vw_post_performance AS
    WHERE d.status = 'published'
    GROUP BY d.id;
 
-CREATE VIEW social.vw_engagement_queue_active AS
+CREATE VIEW social.vw_engagement_queue_active
+  WITH (security_invoker = true) AS
   SELECT q.id, q.post_url, q.post_preview, q.drafted_comment, q.detected_at,
          t.brand, t.name AS target_name, t.company AS target_company, t.profile_url AS target_profile_url
     FROM social.engagement_queue q
@@ -770,11 +780,13 @@ CREATE VIEW social.vw_engagement_queue_active AS
    WHERE q.status = 'pending' AND q.expires_at > now()
    ORDER BY q.detected_at DESC;
 
-CREATE VIEW social.vw_targets_due_review AS
+CREATE VIEW social.vw_targets_due_review
+  WITH (security_invoker = true) AS
   SELECT * FROM social.engagement_targets
    WHERE status = 'active' AND last_reviewed_at < now() - INTERVAL '90 days';
 
-CREATE VIEW social.vw_rejection_patterns AS
+CREATE VIEW social.vw_rejection_patterns
+  WITH (security_invoker = true) AS
   SELECT brand, rejection_reason_category, COUNT(*) AS reject_count,
          DATE_TRUNC('week', updated_at) AS week
     FROM social.drafts
@@ -782,7 +794,8 @@ CREATE VIEW social.vw_rejection_patterns AS
    GROUP BY brand, rejection_reason_category, week
    ORDER BY week DESC, reject_count DESC;
 
-CREATE VIEW social.vw_channel_status AS
+CREATE VIEW social.vw_channel_status
+  WITH (security_invoker = true) AS
   SELECT brand, channel, provider, external_account_id, expires_at,
          CASE
            WHEN expires_at IS NULL                            THEN 'no_expiry'
