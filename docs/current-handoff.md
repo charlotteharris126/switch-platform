@@ -1,113 +1,96 @@
-# Platform — Current Handoff — 2026-04-27 — Session 11 closed (repo monorepo restructure + Session G.1 social schema applied)
+# Platform — Current Handoff — 2026-04-27 — Session 12 closed (Session G.2 + G.3 shipped — first social post live + 11 queued autonomously)
 
-**Session type:** Continuation of Session 10's work. After the initial Session 10 wrap was written, owner pivoted to launch Session G (organic social tool). To enable proper review of the migration, the repo was restructured into a monorepo first. Session G.1 (schema only) then shipped end-to-end: written, reviewed in-session via three review agents, revised, applied to production, logged.
+**Session type:** Continuation of Session 11. After Session G.1 (schema) wrapped and the handoff was written, owner said "g.3" — actually meaning let's keep going. We did G.2 (OAuth flow + settings page) AND G.3 (publish Edge Function + cron + drafts UI) all in one push. End of session: Post 1 of the 12-post batch is LIVE on Charlotte's LinkedIn personal profile, posted autonomously via the cron-driven Edge Function. Posts 2-12 queued with shifted schedule; cron will publish them on date.
 
-**Session opened:** 2026-04-26 evening (immediately after Session 10 wrap)
-**Session closed:** 2026-04-27 early morning
-
-**Note on session boundaries:** This work continued straight on from Session 10's "wrap that didn't wrap". Calendar date crossed midnight UK time during the session. The earlier `current-handoff.md` for Session 10 stays accurate for the work it covered (realtime fix, status taxonomy refactor, catch-up page); this handoff covers everything done after.
+**Session opened:** 2026-04-27 morning (continuation of Session 11)
+**Session closed:** 2026-04-27 afternoon
 
 ---
 
 ## What we worked on
 
-### 1. Monorepo restructure (deployed)
-Repo at `github.com/charlotteharris126/switch-platform` was previously the dashboard app only — `platform/app/.git`. Migrations, Edge Functions, governance docs lived in iCloud only. That was the reason `/ultrareview` couldn't review migrations: the files weren't in any git repo, just iCloud.
+### 1. Session G.2 — OAuth + /social/settings (deployed)
 
-Restructured `platform/` itself to be the git repo:
-- `.git` moved up from `platform/app/` to `platform/`
-- Existing app history preserved via git rename detection (every file shown as `path → app/path`)
-- Migrations 0001-0029 now tracked
-- Edge Functions tracked
-- All `docs/*.md` tracked (data-architecture, changelog, scoping, secrets-rotation, infrastructure-manifest, current-handoff, vision)
-- `apps-scripts/` tracked (provider sheet appender variants)
-- Root `netlify.toml` added with `base = "app"` so the dashboard still deploys from `app/` subfolder
-- Root `.gitignore` for `.DS_Store` / `.env` / `vault.icloud` artefacts and `supabase/.temp/` CLI state
-- Backup of pre-restructure `.git` at `/tmp/switch-platform-git-backup-20260427-083801` (local, not iCloud)
+- **Migration 0030** — `social.upsert_oauth_token()` SECURITY DEFINER write helper. Atomic: encrypts token via `vault.create_secret()`, upserts metadata row, writes audit row in one transaction. Multi-agent review caught: same-second name collision (fixed via `gen_random_uuid()` suffix), `public` in search_path (removed), caller-supplied `authorised_by` (now uses `auth.uid()` server-side).
+- **Two Next.js API routes** added:
+  - `/api/auth/linkedin/connect` — generates CSRF state, signs cookie via HMAC, redirects to LinkedIn authorise URL with `openid profile email w_member_social` scopes
+  - `/api/auth/linkedin/callback` — verifies CSRF, exchanges code for token, fetches `/v2/userinfo` for member URN, calls `upsert_oauth_token` RPC, redirects to settings page
+- **`/admin/social/settings` page** — lists three (brand, channel) cards: SwitchLeads/LinkedIn-personal (available), SwitchLeads/LinkedIn-company (Marketing Developer Platform pending), Switchable/LinkedIn-personal (cross-brand future). Connect button per available card. Reads `social.vw_channel_status` for health badges.
+- **Owner set 4 env vars on Netlify**: `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, `LINKEDIN_REDIRECT_URI`, `OAUTH_STATE_SECRET` (generated server-side, secrets-flagged in Netlify UI).
+- **Bug found and fixed: proxy.ts admin-prefix rewrite was breaking the OAuth callback URL.** The proxy rewrites `/foo` → `/admin/foo` based on subdomain so user-facing URLs stay clean. But LinkedIn's registered redirect URI is the bare `/api/auth/linkedin/callback` (no `/admin/` prefix), so the rewrite sent the callback to a non-existent route. Added `/api/auth/{linkedin,meta}/{connect,callback}` to `SHARED_AUTH_PATHS` so they bypass the rewrite.
+- **Bug found and fixed: Netlify path filter was suppressing real deploys.** The root `netlify.toml` had `ignore = "git diff --quiet HEAD^ HEAD ./app/"` to skip builds when only docs/migrations changed. It accidentally skipped a real `app/`-only deploy too. Removed the filter — every push triggers a build. Re-add once a working test pattern is found.
+- **Supabase Data API exposed-schemas list:** owner had to add `social` to the exposed list manually (Supabase Project Settings → Data API). Without it, `supabase.schema("social").rpc(...)` returns `Invalid schema: social`. **Memory rule saved:** `feedback_supabase_expose_new_schema.md` so this doesn't catch us next migration.
+- **End of G.2:** owner ran the OAuth dance for `(switchleads, linkedin_personal)`. Token encrypted in Vault, `social.oauth_tokens` row written, channel-health badge green.
 
-Pushed as commit `ef73c7f`. Netlify auto-rebuilt cleanly from the new layout.
+### 2. Session G.3 — Publish Edge Function + cron + drafts UI (deployed)
 
-**Why it matters:** every future migration, Edge Function change, and governance doc edit is now in git → reviewable, version-controlled, recoverable. `/ultrareview` would work on any of them. Same applies to `/security-review` and ad-hoc PR review.
+- **Migration 0031** — `social.get_oauth_access_token(brand, channel)` SECURITY DEFINER read helper. Allowlist-restricted, granted to service_role only. Audit row per call. Edge Functions read tokens through this helper, never via direct vault access.
+- **Migration 0032** — pg_cron schedule `social-publish-15min` running every 15 minutes. Idempotent (unschedule-then-schedule guard). Reads `AUDIT_SHARED_SECRET` from Vault per the 0019 pattern.
+- **Edge Function `social-publish`** deployed to Supabase. Reads approved drafts where `scheduled_for <= now()`, posts to LinkedIn `/rest/posts` with `LINKEDIN_VERSION=202604`, marks rows `published` / `failed` / `deferred`.
+- **Concurrency safety:** `pg_try_advisory_lock` at function entry prevents parallel invocations; CAS UPDATE (`WHERE status='approved'`) prevents double-publish even if the lock fails.
+- **Error handling:** 401 marks token expired + defers; 5xx/429 defer for next tick; 4xx fail with publish_error; missing `x-restli-id` treated as failure (not silent empty post-id); content > 3000 chars rejected upfront.
+- **LinkedIn-Version churn:** spec said `202401`, multi-agent reviewer suggested `202504`, both rejected by LinkedIn as deprecated/non-existent. `202604` confirmed working live. Bump cadence: revisit in ~9 months.
+- **`/admin/social/drafts` page** — read-only list grouped by status (Pending / Approved / Published / Failed / Rejected). Sidebar nav points here. Edit / approve / reject / retry actions deferred to next session.
+- **Multi-agent review on G.3 work** caught: cron not idempotent, race condition (double-post risk), missing x-restli-id fallback, missing token null-guard, missing content length check. All addressed before deploy.
+- **End-to-end verified live:** Post 1 ("Hidden demand opener") inserted as approved with scheduled_for=now(), publish triggered manually via the cron-equivalent SQL call, function published it to LinkedIn, returned `urn:li:share:7454521458158014464`. Draft row updated to `status='published'` with the post URN.
 
-Per `.claude/rules/CLAUDE.md` infrastructure rule, this was assessed for downstream impact: both devices (iCloud-synced, no per-device action), iCloud sync (git inside iCloud already a working pattern via `platform/app/.git`), other agents (none affected — Sasha reads via MCP), other refs (path-based references unchanged), Notion (no impact), new-business template (worth updating eventually so new businesses inherit the pattern — flagged as a future tweak in the cross-project comms ticket scope, not a blocker).
+### 3. 11 batch posts loaded with shifted schedule
 
-### 2. Migration 0029 — `social.*` schema (Session G.1, applied)
-Multi-brand organic social automation foundation. 7 tables, 6 views, RLS, Vault setup. First migration of Session G.
+Owner approved schedule shift: each remaining post takes the slot of the previous-numbered post in the original schedule (Post 1 went out a day early, so Post 2 takes Post 1's Tue 28 Apr 9am slot, Post 3 takes Post 2's Wed 29 Apr 9am slot, etc.). Tue/Wed/Thu cadence preserved. Series ends Wed 20 May (was Thu 21 May).
 
-**Tables:** `drafts`, `engagement_targets`, `engagement_queue`, `post_analytics`, `engagement_log`, `oauth_tokens`, `push_subscriptions`. Multi-brand (`switchleads` | `switchable`) and multi-channel (`linkedin_personal` | `linkedin_company` | `meta_facebook` | `meta_instagram` | `tiktok`) from day one. `(brand, channel)` is the unique posting surface key.
+All 11 inserted as `status='approved'` (already reviewed during drafting). Cron will publish them at their scheduled times. Next post (Post 2) lands tomorrow Tuesday 28 April ~9am UK.
 
-**Views:** `vw_pending_drafts`, `vw_post_performance`, `vw_engagement_queue_active`, `vw_targets_due_review`, `vw_rejection_patterns`, `vw_channel_status`. All set `WITH (security_invoker = true)` so they inherit underlying-table RLS.
+### 4. ClickUp tickets carrying forward
 
-**Vault:** `pgsodium` enabled. OAuth tokens stored as UUID references into `vault.secrets` rather than direct ciphertext columns (cleaner per Supabase Vault docs). Defensive `REVOKE ALL ON vault.decrypted_secrets FROM authenticated, anon`. SECURITY DEFINER helper for Edge Functions to read tokens via allowlist comes in Session G.3 (mirrors `public.get_shared_secret()` from migration 0019).
+- `869d2cp0m` — Investigate why `/ultrareview` is unavailable (Backlog, `platform`)
+- `869d28p6v` — Otter.ai transcript pipeline (Backlog, `platform`)
+- `869d281ar` — Provider call-from numbers (Backlog, `platform` + `switchable-email`)
+- `869d281bp` — Learner preferred call time (Backlog, `switchable-site` + `platform`)
+- `869d2830g` — Standardise cross-project comms across agent folders (Backlog, `strategy`)
 
-**RLS:** Admin only at this stage. `FOR ALL` policies via `admin.is_admin()`. `push_subscriptions` adds row-scope (admin can only see/manage their own).
+### 5. Memory rules saved
 
-**Append-only enforcement:** `post_analytics` and `engagement_log` ship with SELECT/INSERT/UPDATE grants only — DELETE deliberately not granted. UPDATE allowed for typo correction. `post_analytics.draft_id` is `ON DELETE RESTRICT` so deleting a draft doesn't silently destroy analytics history.
-
-**Idempotency:** `IF NOT EXISTS` / `OR REPLACE` / `DROP POLICY IF EXISTS` on every object. Real executable DOWN block (drops every object) — schema is brand new, fully reversible.
-
-**Applied to production:** `supabase db push --linked` ran cleanly. Summary: 7 tables, 6 views, 7 RLS policies. No data migration needed (brand new schema, no existing rows).
-
-### 3. Multi-agent review of migration 0029 (in lieu of /ultrareview)
-
-`/ultrareview` is not available in the local Claude Code build (tried after VS Code restart — still "command not found"). Substituted with three in-session review agents running in parallel:
-
-- **SQL correctness + Postgres edge cases**
-- **RLS + security + Vault**
-- **Schema-vs-spec compliance**
-
-Found two CRITICAL issues:
-1. Views were missing `WITH (security_invoker = true)` — Postgres views default to running as the view owner (postgres = god mode), bypassing RLS on underlying tables. `vw_channel_status` would have leaked OAuth metadata to any authenticated role.
-2. Views were missing `GRANT SELECT ... TO authenticated` — dashboard would have hit "permission denied for view" on first load.
-
-Plus several non-critical items (DELETE grants tightened on append-only tables, `post_analytics.draft_id` switched to RESTRICT, `engagement_queue.expires_at` made NOT NULL with auto-default, missing `target_id` index added, idempotency guards added, real DOWN block).
-
-All addressed in a revision before applying. One clean migration shipped, no follow-up 0030 needed. Owner approved revision and applied.
-
-### 4. data-architecture.md updated in lockstep
-Added the full `social` schema section — canonical source for migration 0029. Removed the stale `audit` Phase 2+ row in the deferred-schemas table (audit has been live since migration 0013). Updated to reflect the secret_id pattern, security_invoker on views, ON DELETE RESTRICT, append-only grant pattern, defensive vault revoke.
-
-### 5. Changelog logged
-`platform/docs/changelog.md` has the full entry for migration 0029 with all eight impact-assessment fields, repo state at apply time, and explanation of why the multi-agent review was used in place of /ultrareview.
-
-### 6. ClickUp tickets created earlier in Session 10 still active
-Three Backlog tickets logged earlier (`869d281ar` provider call-from numbers, `869d281bp` learner preferred call time, `869d2830g` standardise cross-project comms across all agent folders) plus `869d28p6v` Otter.ai transcript pipeline. Adding one more in this handoff: a ticket on getting `/ultrareview` working on Charlotte's Claude Code build.
+- `feedback_supabase_expose_new_schema.md` — recurring failure prevention for new schemas hitting `Invalid schema` errors
 
 ---
 
 ## Current state
 
-`social` schema is live on production. No user-facing change yet — schema is foundation only. Session G.2 (OAuth callback route + `/social/settings`) is the next step. No deadline pressure on the first 12 posts; owner is fine waiting until the platform is ready.
+Social tool is fully wired and operational. First post live on LinkedIn. 11 more queued. Cron runs every 15 minutes. Owner has a read-only `/social/drafts` view to monitor the pipeline. The platform side of Session G is functionally complete; only edit/approve/reject/retry actions in the drafts UI remain (next session, smaller scope).
 
 ---
 
 ## Next steps
 
-1. **Session G.2 — OAuth callback route + minimal `/social/settings` page.** ~2 hours. Adds `/api/auth/linkedin/connect` and `/api/auth/linkedin/callback` routes on the admin app. Adds the basic `/social/settings` UI with a "Connect LinkedIn personal" button. Stores token via `vault.create_secret()` and saves the secret_id on `social.oauth_tokens`. End of G.2: Charlotte does the OAuth dance once, token is stored encrypted, channel-health badge goes green.
-2. **Session G.3 — `social-publish` Edge Function + cron + minimal `/social/drafts` UI + load 12 posts.** ~3 hours. Reads approved drafts on a 15-min cron, calls LinkedIn API via the SECURITY DEFINER token-read helper, posts to Charlotte's personal profile. End of G.3: first 12 posts publish autonomously starting on Charlotte's chosen `scheduled_for` timestamps.
-3. **Watch Netlify deploy from the monorepo restructure.** Should be green after the push (`ef73c7f`); confirm via the live site if not already done.
-4. **Tuesday 28 Apr 13:00 EMS call (Andy Fay).** Nell prep note already surfaced in `switchleads/clients/docs/pending-items.md`. Open the catch-up page during the call, raise the three pending asks (call-from numbers, preferred-call-time, sheet hygiene reminder).
+1. **Verify Post 2 publishes Tuesday 28 Apr ~9am UK.** Check LinkedIn around 9-9:15am. If it's there: ✅ end-to-end autonomous publishing proven across a fresh cron tick. If it's not: check `/social/drafts` for the failed status and message.
+2. **Build edit / approve / reject / retry actions on `/social/drafts`.** Page is read-only currently. Add server actions + buttons. ~1-2 hours, fresh session. Lets owner adjust drafts before they fire, and recover failed posts.
+3. **Apply for LinkedIn Marketing Developer Platform.** Now that `/social/settings` is live, the reviewer can verify the integration. Submission doc at `switchleads/social/docs/linkedin-developer-app-submission.md`. 2-8 week wait. Unlocks company-page autonomous publishing.
+4. **Submit Switchable's company LinkedIn page (and Switchable brand activation in `/social`)** when Charlotte starts running organic Switchable social — separate later session.
+5. **Once `/social/drafts` actions ship, retire the SQL-INSERT pattern** for loading drafts. The next batch comes through the proper review surface.
+6. **Monitor cron health** via Sasha's Monday checks — `vw_cron_runs` should show `social-publish-15min` running cleanly.
 
 ---
 
 ## Decisions / open questions
 
 ### Decisions made this session
-- **Monorepo at `platform/` level chosen over two-repo split or fresh-history reset.** Reasons: tightly coupled (migration changes often paired with app changes), `/ultrareview` works on whole branch, single review surface, no DNS work. Existing app history preserved via git rename detection.
-- **Vault token storage uses UUID-handle pattern** (`access_token_secret_id` referencing `vault.secrets`) over wrapped column. Cleaner per Supabase Vault docs, semantically equivalent, easier to reason about.
-- **Multi-agent in-session review** is the substitute for /ultrareview until /ultrareview becomes available in Charlotte's Claude Code build. Found and fixed two critical issues this session, so the substitute is working.
-- **Append-only tables** (`post_analytics`, `engagement_log`) enforce no-DELETE at the privilege layer — RLS allows it but no GRANT means database refuses. Belt-and-braces around audit-relevant data.
-- **Session G is multi-session, ultrareview-equivalent gated, no patchwork.** G.1 done. G.2 + G.3 to follow.
+- **OAuth `authorised_by` read from `auth.uid()` server-side**, not caller-supplied parameter. Defence-in-depth.
+- **Vault secret names use UUIDs**, not timestamps. Race-free under same-second re-authorisation.
+- **`social.get_oauth_access_token()` granted to service_role only**, not authenticated. Admin UI never reads raw tokens.
+- **Edge Function uses `pg_try_advisory_lock` for concurrency safety** rather than per-row `FOR UPDATE` (cleaner for our scale).
+- **LinkedIn-Version `202604` confirmed live 2026-04-27.** Bump cadence: ~9 months. Watch for deprecation notices.
+- **Schedule shift: each remaining post takes the previous-numbered slot.** Preserves Tue/Wed/Thu cadence; series ends a day earlier than originally drafted.
+- **Drafts UI ships read-only first**, edit/approve/reject/retry deferred to next session.
 
 ### Open questions
-- **Why /ultrareview isn't recognised in Charlotte's Claude Code.** Could be version, billing setup, or naming. Will be ticketed.
-- **First 12 posts schedule** — Charlotte sets `scheduled_for` timestamps once Session G.3 ships. No pressure.
-- **Marketing Developer Platform approval for company-page posting** — submission planned once `/social/settings` is live (Session G.2). 2-8 week wait.
+- **Will Post 2 (and beyond) publish cleanly via cron tomorrow morning?** Should — but worth checking 9-9:15am Tuesday.
+- **What's the right edit-experience for the drafts page?** Inline edit vs modal vs separate detail page. Punted to next session's design.
+- **Marketing Developer Platform timing** — when to submit. Suggest after a few cron-driven publishes prove the integration to LinkedIn reviewers.
 
 ---
 
 ## Next session
 
 - **Currently in:** `platform/` — admin dashboard + data layer + Edge Functions
-- **Next recommended:** `platform/` — Session G.2 (OAuth callback + `/social/settings`). The schema foundation is in; OAuth is the next logical step. Each session in the G.1/G.2/G.3 sequence should ship cleanly to keep momentum.
-- **Tackle first:** add `/api/auth/linkedin/connect` and `/api/auth/linkedin/callback` routes to the Next.js app under `platform/app/app/api/auth/linkedin/`. Build the minimal `/social/settings` page with a "Connect LinkedIn personal" button. Wire the OAuth dance: redirect to LinkedIn, receive code, exchange for token, call `vault.create_secret()`, write `social.oauth_tokens` row with the returned secret_id. Test end-to-end with Charlotte's personal LinkedIn account. Reference: `platform/docs/admin-dashboard-scoping.md` § Session G "OAuth integration" + "Implementation specifics" for endpoints + scopes.
+- **Next recommended:** `platform/` — verify Post 2 fired correctly tomorrow morning, then build the `/social/drafts` actions (edit / approve / reject / retry). Smaller scope than G.1/G.2/G.3, contained. After that, move on to the Bulk Operations build queue item or the Tuesday EMS catch-up call prep.
+- **Tackle first:** open `/social/drafts` and confirm Post 2 status. If `published`: build the action buttons. If `failed` or stuck on `approved` past its scheduled time: diagnose first.
