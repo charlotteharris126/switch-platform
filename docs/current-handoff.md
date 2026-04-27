@@ -1,4 +1,16 @@
-# Platform — Current Handoff — 2026-04-27 — Session 13 closed (drafts management UI + nav restructure + brand filter + analytics page + analytics-sync Edge Function)
+# Platform — Current Handoff — 2026-04-27 — Session 13 closed (drafts management UI + nav restructure + brand filter + analytics page + analytics-sync Edge Function) + silent-DQ-routing fix coded but UNCOMMITTED
+
+**Cross-session inbound from switchable/ads + switchable/site (2026-04-27 evening):**
+
+Silent-DQ-routing defect handed in via ticket 869d2rxap. Real example: Anita id 184. Self-funded form correctly DQ'd her (qualification=professional-body) and showed the holding panel, but when she clicked "keep me on the list" the contact submission landed with is_dq=false and routed to Courses Direct as qualified. Same bug applies to budget=under-200 / no-invest DQ paths.
+
+**Fix is coded both sides but UNCOMMITTED in working trees:**
+- **switchable-site repo:** `find-your-course/index.html` adds a `dq_reason` hidden input that `showHolding(reason)` sets, `restartForm()` and the qualified-submit path both clear it. `tools/form-matrix/index.html` simulator updated. Three-file clean commit ready.
+- **THIS platform repo:** `supabase/functions/_shared/ingest.ts` updated to read `dq_reason` from payload (line 163, 335, 406). MIXED with several unrelated working-tree changes from session 13 wrap-up (admin pages, components, weekly-notes, docs/changelog). The silent-DQ commit needs careful staging — `git add supabase/functions/_shared/ingest.ts` only, not `git add -A`.
+
+Once both sides shipped: backfill `leads.submissions` row id 184 to `is_dq=true, dq_reason='qual', primary_routed_to=null`, owner emails Marty so he doesn't chase a DQ'd lead.
+
+---
 
 **Session type:** Continuation of Session 12. After G.2 + G.3 shipped and the handoff was written, owner asked to keep going — restructure the dashboard nav (Tools section), build draft edit/cancel actions (the deferred half of G.3), and add brand filtering + analytics (Session G.4). All shipped and deployed in this run.
 
@@ -108,3 +120,55 @@ Social tool now has the full ops surface: per-(brand, channel) connection manage
 - **Currently in:** `platform/` — admin dashboard + data layer + Edge Functions
 - **Next recommended:** `platform/` — confirm Tuesday morning's autonomous publish + analytics sync land cleanly (~9am Post 2; ~04:00 UTC analytics). Then either build Session G.5 (autonomous drafting) or work on a different build queue item depending on owner priority.
 - **Tackle first:** open `/social/drafts` Tuesday morning. Confirm Post 2 = `published` with URN. Then `/social/analytics` after 04:00 UTC for Post 1 metrics. If both clean: Session G publishing path is fully proven end-to-end including analytics.
+
+---
+
+## Cross-project flag from Thea (2026-04-27 evening)
+
+Owner pushed back on the "you'll have to paste LinkedIn analytics in by hand each Monday" workflow scoped in `switchleads/social/docs/platform-status-2026-04-27.md` § What's manual / 2 (Engagement input). Research found the underlying assumption is wrong. Four things to action when next in `platform/`.
+
+### 1. Personal-profile impressions / reach / engagement ARE API-available
+
+Current shipped path (`/rest/socialActions/{urn}/likes` + `/comments` reading `paging.total` with `r_member_social`) returns reaction + comment counts only. Useful, but it leaves us paste-dependent forever for impressions, reach, follower-gained, profile-views.
+
+LinkedIn shipped a public **Member Post Analytics API** in mid-2025 covering all of this for personal profiles:
+- Endpoint: `GET /rest/memberCreatorPostAnalytics?q=entity&entity={ugcPostUrn}` (per-post) or `?q=me` (aggregated)
+- Metrics: `IMPRESSION`, `MEMBERS_REACHED`, `RESHARE`, `REACTION`, `COMMENT`, `POST_SAVE`, `POST_SEND`, `LINK_CLICKS`, `FOLLOWER_GAINED_FROM_CONTENT`, `PROFILE_VIEW_FROM_CONTENT`
+- Required scope: **`r_member_postAnalytics`** (different from `r_member_social`)
+- Sits inside the **Community Management API** product (NOT Marketing Developer Platform)
+- Authoritative docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/members/post-statistics
+
+Direct contradicts the Session 13 `Decisions made this session` line "Personal-profile impressions are NULL... Public API doesn't expose. Sales Navigator / company page would unlock." That decision was based on an outdated read of LinkedIn's API surface — the public API does expose this now, just behind a different scope and product gate.
+
+### 2. Recommended action when next in `platform/`
+
+a. **Verify the Community Management API submission scope list.** The app already in review (per Sasha's snapshot, "in progress on Charlotte's other LinkedIn Developer App") must include `r_member_postAnalytics` in the requested scopes. If it's not on the list, add it before approval lands or we get stuck approved-but-without-the-scope.
+
+b. **When approval lands:** swap `social-analytics-sync-daily` from the `socialActions/{urn}/likes` + `/comments` pair to `memberCreatorPostAnalytics?q=entity` per-post. Existing `social.post_analytics` time-series schema accommodates the new metrics — extend the row shape, no migration of historical likes/comments rows needed (they remain valid time-series data).
+
+c. **Retire the manual `/social/analytics` paste path entirely.** Page becomes read-only display of auto-synced data. The "5 mins/week paste" task in `platform-status-2026-04-27.md` disappears from Charlotte's routine forever.
+
+### 3. Pull Session G.5 (autonomous drafting) and engagement-queue ingest forward
+
+Owner asked how to automate drafting + comment management. Both are scoped (G.5 + the engagement-ingest path described in Thea's CLAUDE.md autonomous stage). Neither needs to wait until ~mid-May.
+
+**G.5 — autonomous drafting (`social-draft-generate` Edge Function):**
+- Doesn't depend on the LinkedIn analytics fix above. First batches can run with no performance signal; later batches get smarter as `social.post_analytics` fills.
+- Inputs: `.claude/rules/charlotte-voice.md`, content pillars from `switchleads/social/CLAUDE.md`, recent business-activity context (open question — see below), past-performance signal from `social.post_analytics` (when populated), ICP engagement log.
+- Outputs: 5-8 rows in `social.drafts` with `status='pending'`. Charlotte approves/edits/rejects in the existing `/social/drafts` UI.
+- **Open design question for Sasha to surface to Mira:** how does the cron get "what's happening in the business this week" context? Three options: (a) read structured rows directly (recent leads, sign-ups, enrolments, dispute resolutions), (b) read Mira's `strategy/weekly-review.md` from outside the database, (c) both — DB for facts + a short free-text "this week's vibe" field Mira fills when she writes the weekly review. Owner instinct on (c). Worth a 5-min decision before building.
+
+**Engagement-queue ingest (`social-engagement-ingest` Edge Function + push-notification chain):**
+- Path: Charlotte clicks bell on each engagement target's profile (one-time, ~30 sec each, ~20-30 names) → Gmail filter forwards `notifications-noreply@linkedin.com` emails to the Edge Function → function parses post URL + content → calls Claude API to draft a 2-4 sentence comment angle in Charlotte's voice → writes row to `social.engagement_queue` → push notification to phone → Charlotte taps notification → opens LinkedIn post in app + clipboard pre-loaded with the draft → paste, glance, edit, post.
+- Doesn't depend on Community Management API approval at all. Doesn't depend on the analytics swap at all. Independent build.
+- One-time owner setup when ready: bell-clicks + Gmail filter rule (Sasha provides exact filter string + forwarding webhook URL) + push-notification permission grant on phone.
+
+### 4. `readonly_analytics` role grant on `social` schema
+
+Separate, smaller fix. Currently the `readonly_analytics` Postgres role lacks USAGE on the `social` schema, so Thea/Mira can't query post performance / drafts / engagement-queue via Postgres MCP. Verified empirically this session — `current_user='readonly_analytics'`, `pg_namespace` shows `social` exists, `information_schema.tables` returns empty for `schema='social'`. Same pattern as `leads` and `crm` are granted today.
+
+Migration: `GRANT USAGE ON SCHEMA social TO readonly_analytics;` + `GRANT SELECT ON ALL TABLES IN SCHEMA social TO readonly_analytics;` + `ALTER DEFAULT PRIVILEGES IN SCHEMA social GRANT SELECT ON TABLES TO readonly_analytics;` (default-privileges line so future tables auto-grant).
+
+### Source attribution
+
+Findings verified via WebFetch of Microsoft Learn LinkedIn API docs (the authoritative source — Microsoft hosts LinkedIn's developer documentation), cross-referenced against three independent secondary sources (PPC Land, Phyllo guide, Zernio guide). All four sources agree on endpoint, scope name, metrics, and product gate. The previous "impressions are NULL" decision and the platform-status snapshot's API claim both predate the public API release window and reflect pre-2025 LinkedIn restrictions.
