@@ -30,13 +30,13 @@ const NAV_SECTIONS: Array<{
       { href: "/actions", label: "Actions" },
       { href: "/leads", label: "Leads" },
       { href: "/providers", label: "Providers" },
-      { href: "/errors", label: "Errors" },
     ],
   },
   {
     label: "Tools",
     items: [
       { href: "/social/drafts", label: "Social" },
+      { href: "/errors", label: "Errors" },
     ],
   },
 ];
@@ -141,12 +141,23 @@ export function AdminShell({
                       {initials}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="text-sm text-[#11242e] font-medium">{user.email}</span>
+                  <span className="text-sm text-[#11242e] font-medium hidden md:inline">{user.email}</span>
                 </Button>
               }
             />
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>Signed in</DropdownMenuLabel>
+              <DropdownMenuLabel className="font-normal">
+                <span className="block text-[10px] uppercase tracking-wide text-[#5a6a72]">Signed in as</span>
+                <span className="block text-xs font-bold text-[#11242e] truncate">{user.email}</span>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                render={
+                  <Link href="/account" className="block w-full">
+                    Account settings
+                  </Link>
+                }
+              />
               <DropdownMenuSeparator />
               <form action={signOutAction}>
                 <DropdownMenuItem

@@ -112,13 +112,27 @@ export default async function LeadsPage({
 
   const { data, count, error } = await q;
 
-  // Load filter dropdown options in parallel with the main query.
-  const [categoriesRes, routesRes, coursesRes, providersRes] = await Promise.all([
+  // Load filter dropdown options + enrolment statuses for the rows on this page in parallel.
+  const submissionIdsOnPage = (data ?? []).map((r: { id: number }) => r.id);
+  const [categoriesRes, routesRes, coursesRes, providersRes, enrolmentsRes] = await Promise.all([
     supabase.schema("leads").from("submissions").select("funding_category").not("funding_category", "is", null),
     supabase.schema("leads").from("submissions").select("funding_route").not("funding_route", "is", null),
     supabase.schema("leads").from("submissions").select("course_id").not("course_id", "is", null),
     supabase.schema("crm").from("providers").select("provider_id,company_name").order("company_name"),
+    submissionIdsOnPage.length > 0
+      ? supabase
+          .schema("crm")
+          .from("enrolments")
+          .select("submission_id, status, lost_reason, disputed_at")
+          .in("submission_id", submissionIdsOnPage)
+      : Promise.resolve({ data: [], error: null }),
   ]);
+
+  // Map submission_id → latest enrolment row for fast lookup in the table render.
+  const enrolmentBySubId = new Map<number, { status: string; lost_reason: string | null; disputed_at: string | null }>();
+  for (const e of (enrolmentsRes.data ?? []) as Array<{ submission_id: number; status: string; lost_reason: string | null; disputed_at: string | null }>) {
+    enrolmentBySubId.set(e.submission_id, { status: e.status, lost_reason: e.lost_reason, disputed_at: e.disputed_at });
+  }
 
   const fundingCategories = Array.from(
     new Set((categoriesRes.data ?? []).map((r: { funding_category: string | null }) => r.funding_category).filter(Boolean))
@@ -217,9 +231,29 @@ export default async function LeadsPage({
                           DQ{r.dq_reason ? `: ${truncate(r.dq_reason, 18)}` : ""}
                         </Badge>
                       ) : r.primary_routed_to ? (
-                        <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
-                          Routed
-                        </Badge>
+                        // Routed leads: show the latest enrolment status if there is one.
+                        // Falls back to "Routed" when no enrolment row exists yet (rare —
+                        // route-lead.ts inserts an open row at routing time).
+                        (() => {
+                          const enrol = enrolmentBySubId.get(r.id);
+                          if (!enrol) {
+                            return (
+                              <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                                Routed
+                              </Badge>
+                            );
+                          }
+                          const cls = enrolmentBadgeClass(enrol.status);
+                          const label = enrol.status === "open" ? "Routed" : enrol.status.replace(/_/g, " ");
+                          return (
+                            <>
+                              <Badge className={`text-xs ${cls}`}>{label}</Badge>
+                              {enrol.disputed_at ? (
+                                <Badge className="text-xs bg-[#cd8b76] text-white hover:bg-[#cd8b76]">DISPUTED</Badge>
+                              ) : null}
+                            </>
+                          );
+                        })()
                       ) : (
                         <Badge variant="secondary" className="text-xs">
                           Unrouted
@@ -268,6 +302,17 @@ export default async function LeadsPage({
       )}
     </div>
   );
+}
+
+function enrolmentBadgeClass(status: string): string {
+  switch (status) {
+    case "enrolled":          return "bg-emerald-100 text-emerald-800 hover:bg-emerald-100";
+    case "presumed_enrolled": return "bg-[#143643] text-white hover:bg-[#143643]";
+    case "cannot_reach":      return "bg-[#cd8b76]/20 text-[#143643] hover:bg-[#cd8b76]/20";
+    case "lost":              return "bg-[#dad4cb] text-[#143643] hover:bg-[#dad4cb]";
+    case "open":              return "bg-emerald-100 text-emerald-800 hover:bg-emerald-100";
+    default:                  return "bg-[#f4f1ed] text-[#5a6a72] hover:bg-[#f4f1ed]";
+  }
 }
 
 function buildPageHref(sp: SearchParams, page: number): string {

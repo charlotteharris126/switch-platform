@@ -35,16 +35,29 @@ export default async function ProviderCatchUpPage({
   const providerId = decodeURIComponent(raw);
   const supabase = await createClient();
 
-  const { data: provider, error: provErr } = await supabase
-    .schema("crm")
-    .from("providers")
-    .select("provider_id, company_name, contact_name, contact_email, free_enrolments_remaining, pilot_status, active")
-    .eq("provider_id", providerId)
-    .maybeSingle();
+  const [{ data: provider, error: provErr }, { data: billingState }] = await Promise.all([
+    supabase
+      .schema("crm")
+      .from("providers")
+      .select("provider_id, company_name, contact_name, contact_email, pilot_status, active")
+      .eq("provider_id", providerId)
+      .maybeSingle(),
+    supabase
+      .schema("crm")
+      .from("vw_provider_billing_state")
+      .select("free_enrolments_remaining, free_enrolments_used, billable_count")
+      .eq("provider_id", providerId)
+      .maybeSingle(),
+  ]);
   if (provErr) {
     return <div className="text-[#b3412e]">Error loading provider: {provErr.message}</div>;
   }
   if (!provider) notFound();
+
+  // Use live derived value rather than the static crm.providers column.
+  const freeRemaining = billingState?.free_enrolments_remaining ?? null;
+  const freeUsed = billingState?.free_enrolments_used ?? 0;
+  const billableCount = billingState?.billable_count ?? 0;
 
   const sevenDaysAgo  = new Date(Date.now() - SEVEN_DAYS_MS).toISOString();
   const thirtyDaysAgo = new Date(Date.now() - THIRTY_DAYS_MS).toISOString();
@@ -285,15 +298,20 @@ export default async function ProviderCatchUpPage({
       text: `${reAppsForThisProvider.length} re-${reAppsForThisProvider.length === 1 ? "application" : "applications"} from people previously routed to this provider in the last 30 days. Worth checking if any are worth re-engaging.`,
     });
   }
-  if ((provider.free_enrolments_remaining ?? 0) === 1) {
+  if (freeRemaining === 1) {
     talkingPoints.push({
       kind: "info",
       text: `On the last free enrolment. Next confirmed enrolment triggers billing — make sure GoCardless mandate is in place.`,
     });
-  } else if ((provider.free_enrolments_remaining ?? 0) === 0) {
+  } else if (freeRemaining === 0 && billableCount === 0) {
     talkingPoints.push({
       kind: "info",
-      text: `Free enrolments used up. All confirmed enrolments from now on are billable.`,
+      text: `Free enrolments used up. Next confirmed enrolment is billable.`,
+    });
+  } else if (billableCount > 0) {
+    talkingPoints.push({
+      kind: "info",
+      text: `${billableCount} billable enrolment${billableCount === 1 ? "" : "s"} so far (past the 3 free).`,
     });
   }
   if (lastUpdateAgoDays !== null && lastUpdateAgoDays >= 7) {
@@ -406,15 +424,15 @@ export default async function ProviderCatchUpPage({
           </CardHeader>
           <CardContent>
             <p className="text-4xl font-extrabold tracking-tight">
-              <span className={(provider.free_enrolments_remaining ?? 0) === 0 ? "text-[#cd8b76]" : "text-[#11242e]"}>
-                {provider.free_enrolments_remaining ?? "—"}
+              <span className={freeRemaining === 0 ? "text-[#cd8b76]" : "text-[#11242e]"}>
+                {freeRemaining ?? "—"}
               </span>
               <span className="text-xl font-bold text-[#5a6a72]"> / 3</span>
             </p>
             <p className="text-[10px] text-[#5a6a72] mt-2">
-              {(provider.free_enrolments_remaining ?? 0) === 0
-                ? "All free enrolments used. Next confirmed enrolment is billable."
-                : `${3 - (provider.free_enrolments_remaining ?? 0)} of 3 used during pilot.`}
+              {freeRemaining === 0
+                ? `All free enrolments used. ${billableCount > 0 ? `${billableCount} billable so far.` : "Next confirmed enrolment is billable."}`
+                : `${freeUsed} of 3 used during pilot.`}
             </p>
           </CardContent>
         </Card>

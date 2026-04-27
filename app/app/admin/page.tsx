@@ -26,6 +26,18 @@ function normalisePeriod(value: string | undefined): Period {
   return "week";
 }
 
+interface ProviderBillingRow {
+  provider_id: string;
+  active: boolean;
+  total_routed: number;
+  confirmed_enrolled: number;
+  presumed_enrolled: number;
+  billable_or_pending_count: number;
+  free_enrolments_remaining: number;
+  billable_count: number;
+  conversion_rate_pct: number | null;
+}
+
 export default async function AdminHomePage({
   searchParams,
 }: {
@@ -37,44 +49,81 @@ export default async function AdminHomePage({
 
   const supabase = await createClient();
 
-  // Build period-scoped queries. Lead-based tiles filter on submitted_at,
-  // enrolment-based tiles filter on status_updated_at, providers + errors
-  // are point-in-time (always current).
-
-  // Helper to apply the period filter conditionally.
+  // Period filter helper
   const subPeriod = <T extends { gte: (col: string, val: string) => T }>(q: T): T =>
     cutoff ? q.gte("submitted_at", cutoff) : q;
   const enrolPeriod = <T extends { gte: (col: string, val: string) => T }>(q: T): T =>
     cutoff ? q.gte("status_updated_at", cutoff) : q;
 
   const [
-    unroutedRes,
-    routedActiveRes,
-    waitlistRes,
-    presumedRes,
-    enrolledRes,
+    // Lifetime business-health numbers
+    qualifiedUniqueRes,
+    totalRoutedRes,
+    totalEnrolmentsRes,
+    activeProvidersRes,
+    // Per-provider billing state (derives free / billable from real enrolments)
+    billingStateRes,
+    // Period-aware lifecycle
+    weekQualifiedRes,
+    weekEnrolmentsRes,
+    openRes,
     cannotReachRes,
     lostRes,
+    waitlistUniqueRes,
+    // Always-visible attention surfaces
+    unroutedRes,
+    presumedRes,
     disputedRes,
     errorsRes,
-    providersRes,
-    // Macro totals — single big-picture numbers. Period-aware via submitted_at.
-    qualifiedUniqueRes,
-    waitlistUniqueRes,
     formSubmissionsRes,
   ] = await Promise.all([
-    // Unrouted (qualified, awaiting decision)
+    // ── Lifetime ───────────────────────────────────────────────────────────
+    // Qualified unique leads (lifetime, not DQ'd, not children, not archived)
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("is_dq", false)
+      .is("parent_submission_id", null)
+      .is("archived_at", null),
+    // Total routed (lifetime, every routing row)
+    supabase.schema("leads").from("routing_log").select("id", { count: "exact", head: true }),
+    // Total enrolments (confirmed + presumed) — counts toward conversion + billing
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["enrolled", "presumed_enrolled"]),
+    // Active providers
+    supabase
+      .schema("crm")
+      .from("providers")
+      .select("provider_id", { count: "exact", head: true })
+      .eq("active", true),
+    // Per-provider billing state via the derived view
+    supabase
+      .schema("crm")
+      .from("vw_provider_billing_state")
+      .select("provider_id, active, total_routed, confirmed_enrolled, presumed_enrolled, billable_or_pending_count, free_enrolments_remaining, billable_count, conversion_rate_pct")
+      .eq("active", true),
+
+    // ── Period-aware ───────────────────────────────────────────────────────
     subPeriod(
       supabase
         .schema("leads")
         .from("submissions")
         .select("id", { count: "exact", head: true })
         .eq("is_dq", false)
-        .is("primary_routed_to", null)
+        .is("parent_submission_id", null)
         .is("archived_at", null),
     ),
-    // Routed (active) — routed leads still in the open state. After migration
-    // 0028 the only early state is 'open'; 'contacted' was folded in.
+    enrolPeriod(
+      supabase
+        .schema("crm")
+        .from("enrolments")
+        .select("id", { count: "exact", head: true })
+        .in("status", ["enrolled", "presumed_enrolled"]),
+    ),
     enrolPeriod(
       supabase
         .schema("crm")
@@ -82,9 +131,20 @@ export default async function AdminHomePage({
         .select("id", { count: "exact", head: true })
         .eq("status", "open"),
     ),
-    // Waitlist (DQ leads, not archived, unique people only — child re-applications
-    // and waitlist-enrichment children are linked to parents via parent_submission_id
-    // and excluded from the count to avoid double-counting).
+    enrolPeriod(
+      supabase
+        .schema("crm")
+        .from("enrolments")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "cannot_reach"),
+    ),
+    enrolPeriod(
+      supabase
+        .schema("crm")
+        .from("enrolments")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "lost"),
+    ),
     subPeriod(
       supabase
         .schema("leads")
@@ -94,81 +154,31 @@ export default async function AdminHomePage({
         .is("archived_at", null)
         .is("parent_submission_id", null),
     ),
-    // Presumed enrolled (auto-flipped at 14d, awaiting confirmation/dispute)
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "presumed_enrolled"),
-    ),
-    // Confirmed enrolled (billable)
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "enrolled"),
-    ),
-    // Cannot reach — provider tried, no answer. Operational signal: numbers,
-    // preferred call time, automated nudges.
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "cannot_reach"),
-    ),
-    // Lost — provider made contact, learner won't enrol. Sales signal:
-    // qualification, course-fit, funding clarity. Reason captured per-row.
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "lost"),
-    ),
-    // Disputed — flag on presumed_enrolled rows. Independent of status; counts
-    // any row with disputed_at set, even if resolution moved status onward.
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .not("disputed_at", "is", null),
-    ),
-    // Unresolved errors (point-in-time)
-    supabase
-      .schema("leads")
-      .from("dead_letter")
-      .select("id", { count: "exact", head: true })
-      .is("replayed_at", null),
-    // Active providers (point-in-time)
-    supabase.schema("crm").from("providers").select("provider_id", { count: "exact", head: true }).eq("active", true),
 
-    // Macro totals — these are LIFETIME numbers. They don't change when the
-    // period selector switches. Only the lifecycle tiles below respect the
-    // period filter. Each macro is "unique people"
-    // (parent_submission_id IS NULL) and excludes archived test/cleanup rows.
-
-    // Total qualified unique leads — lifetime, unique people, not DQ'd.
+    // ── Attention surfaces (point-in-time, ignore period) ──────────────────
     supabase
       .schema("leads")
       .from("submissions")
       .select("id", { count: "exact", head: true })
       .eq("is_dq", false)
-      .is("parent_submission_id", null)
+      .is("primary_routed_to", null)
       .is("archived_at", null),
-    // Total unique waitlist leads — lifetime, unique people, DQ'd.
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "presumed_enrolled"),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .not("disputed_at", "is", null),
     supabase
       .schema("leads")
-      .from("submissions")
+      .from("dead_letter")
       .select("id", { count: "exact", head: true })
-      .eq("is_dq", true)
-      .is("parent_submission_id", null)
-      .is("archived_at", null),
-    // Total form submissions — lifetime, every form fill (including children),
-    // excluding archived test rows.
+      .is("replayed_at", null),
+    // Total form submissions (lifetime, including children)
     supabase
       .schema("leads")
       .from("submissions")
@@ -176,67 +186,25 @@ export default async function AdminHomePage({
       .is("archived_at", null),
   ]);
 
-  const tiles: Array<{ label: string; value: number; href: string; emphasis?: "primary" | "warn" | "good" }> = [
-    {
-      label: "Unrouted",
-      value: unroutedRes.count ?? 0,
-      href: "/leads?routed=no&dq=no",
-      emphasis: "primary",
-    },
-    {
-      label: "Routed (active)",
-      value: routedActiveRes.count ?? 0,
-      href: "/leads?routed=yes",
-    },
-    {
-      label: "Waitlist",
-      value: waitlistRes.count ?? 0,
-      href: "/leads?dq=yes",
-    },
-    {
-      label: "Presumed enrolled",
-      value: presumedRes.count ?? 0,
-      href: "/actions",
-      emphasis: presumedRes.count && presumedRes.count > 0 ? "warn" : undefined,
-    },
-    {
-      label: "Confirmed enrolled",
-      value: enrolledRes.count ?? 0,
-      href: "/leads?routed=yes",
-      emphasis: "good",
-    },
-    {
-      label: "Cannot reach",
-      value: cannotReachRes.count ?? 0,
-      href: "/leads?routed=yes",
-      emphasis: cannotReachRes.count && cannotReachRes.count > 0 ? "warn" : undefined,
-    },
-    {
-      label: "Lost",
-      value: lostRes.count ?? 0,
-      href: "/leads?routed=yes",
-    },
-    {
-      label: "Disputed",
-      value: disputedRes.count ?? 0,
-      href: "/leads?routed=yes",
-      emphasis: disputedRes.count && disputedRes.count > 0 ? "warn" : undefined,
-    },
-    {
-      label: "Unresolved errors",
-      value: errorsRes.count ?? 0,
-      href: "/errors",
-      emphasis: errorsRes.count && errorsRes.count > 0 ? "warn" : undefined,
-    },
-    {
-      label: "Active providers",
-      value: providersRes.count ?? 0,
-      href: "/providers",
-    },
-  ];
+  const billingRows = (billingStateRes.data ?? []) as ProviderBillingRow[];
+
+  const totalRouted = totalRoutedRes.count ?? 0;
+  const totalEnrolments = totalEnrolmentsRes.count ?? 0;
+  const overallConversionPct = totalRouted > 0 ? Math.round((totalEnrolments / totalRouted) * 1000) / 10 : null;
+
+  // Pilot stats: free remaining + billable across providers
+  const totalFreeRemaining = billingRows.reduce((sum, r) => sum + (r.free_enrolments_remaining ?? 0), 0);
+  const totalBillable = billingRows.reduce((sum, r) => sum + (r.billable_count ?? 0), 0);
+
+  // Things that need attention
+  const unrouted = unroutedRes.count ?? 0;
+  const presumed = presumedRes.count ?? 0;
+  const disputed = disputedRes.count ?? 0;
+  const errors = errorsRes.count ?? 0;
+  const totalAttention = unrouted + presumed + disputed + errors;
 
   return (
-    <div className="max-w-6xl">
+    <div className="max-w-6xl space-y-8">
       <RealtimeRefresh
         tables={[
           { schema: "leads", table: "submissions" },
@@ -249,113 +217,231 @@ export default async function AdminHomePage({
         title="Where the business is"
         subtitle={
           <span>
-            Lifetime totals at the top (period-independent). Lifecycle breakdown below applies the period selector.
+            Top tiles are lifetime totals. The lifecycle breakdown below applies the period selector.
           </span>
         }
       />
 
-      {/* Period selector */}
-      <div className="flex flex-wrap gap-2 mb-6">
-        {(["week", "month", "all"] as Period[]).map((p) => {
-          const active = period === p;
-          const href = p === "week" ? "/" : `/?period=${p}`;
-          return (
-            <Link
-              key={p}
-              href={href}
-              className={
-                active
-                  ? "px-4 h-9 inline-flex items-center text-[11px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#cd8b76] text-white border border-[#cd8b76]"
-                  : "px-4 h-9 inline-flex items-center text-[11px] font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60"
-              }
-            >
-              {PERIOD_LABEL[p]}
-            </Link>
-          );
-        })}
-      </div>
+      {/* ─── Headline numbers (lifetime, big) ─────────────────────────────── */}
+      <section>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Business health (lifetime)</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Headline
+            label="Qualified leads"
+            value={qualifiedUniqueRes.count ?? 0}
+            note="Unique people, not DQ'd"
+            href="/leads?dq=no"
+            theme="dark"
+          />
+          <Headline
+            label="Routed"
+            value={totalRouted}
+            note="Sent to a provider (lifetime)"
+            href="/leads?routed=yes"
+          />
+          <Headline
+            label="Enrolments"
+            value={totalEnrolments}
+            note={`${totalEnrolmentsRes.count ?? 0} confirmed + presumed`}
+            href="/providers"
+            theme="good"
+          />
+          <Headline
+            label="Conversion"
+            value={overallConversionPct === null ? "—" : `${overallConversionPct}%`}
+            note="Enrolments ÷ routed"
+          />
+        </div>
+      </section>
 
-      {/* Macro totals — lifetime, period-independent. Big-picture numbers above
-          the lifecycle breakdown. */}
-      <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">
-        Lifetime totals
+      {/* ─── Pilot billing state ──────────────────────────────────────────── */}
+      <section>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Pilot billing</p>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <SmallTile
+            label="Active providers"
+            value={activeProvidersRes.count ?? 0}
+            href="/providers"
+          />
+          <SmallTile
+            label="Pilot free remaining"
+            value={totalFreeRemaining}
+            note={`Across ${billingRows.length} provider${billingRows.length === 1 ? "" : "s"}`}
+            href="/providers"
+          />
+          <SmallTile
+            label="Billable enrolments"
+            value={totalBillable}
+            note="Past 3-free per provider"
+            href="/providers"
+            emphasis={totalBillable > 0 ? "good" : undefined}
+          />
+        </div>
+      </section>
+
+      {/* ─── Things that need attention ───────────────────────────────────── */}
+      <section>
+        <div className="flex items-baseline justify-between mb-3">
+          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Needs your attention</p>
+          {totalAttention === 0 ? (
+            <span className="text-xs text-emerald-700 font-bold">Inbox zero</span>
+          ) : (
+            <span className="text-xs text-[#5a6a72]">{totalAttention} items</span>
+          )}
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <SmallTile
+            label="Unrouted"
+            value={unrouted}
+            note="Qualified, awaiting routing"
+            href="/leads?routed=no&dq=no"
+            emphasis={unrouted > 0 ? "primary" : undefined}
+          />
+          <SmallTile
+            label="Presumed enrolled"
+            value={presumed}
+            note="Awaiting confirmation"
+            href="/actions"
+            emphasis={presumed > 0 ? "warn" : undefined}
+          />
+          <SmallTile
+            label="Disputed"
+            value={disputed}
+            note="Provider rebutted"
+            href="/leads?routed=yes"
+            emphasis={disputed > 0 ? "warn" : undefined}
+          />
+          <SmallTile
+            label="Unresolved errors"
+            value={errors}
+            note="Webhook / sheet failures"
+            href="/errors"
+            emphasis={errors > 0 ? "warn" : undefined}
+          />
+        </div>
+      </section>
+
+      {/* ─── Period-aware lifecycle breakdown ─────────────────────────────── */}
+      <section>
+        <div className="flex items-baseline justify-between mb-3">
+          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Lifecycle breakdown</p>
+          <div className="flex flex-wrap gap-2">
+            {(["week", "month", "all"] as Period[]).map((p) => {
+              const active = period === p;
+              const href = p === "week" ? "/" : `/?period=${p}`;
+              return (
+                <Link
+                  key={p}
+                  href={href}
+                  className={
+                    active
+                      ? "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#cd8b76] text-white border border-[#cd8b76]"
+                      : "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60"
+                  }
+                >
+                  {PERIOD_LABEL[p]}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
+          <SmallTile label="Qualified" value={weekQualifiedRes.count ?? 0} href="/leads?dq=no" />
+          <SmallTile label="Enrolments" value={weekEnrolmentsRes.count ?? 0} emphasis="good" href="/providers" />
+          <SmallTile label="Awaiting outcome" value={openRes.count ?? 0} note="Status: open" href="/actions" />
+          <SmallTile label="Cannot reach" value={cannotReachRes.count ?? 0} emphasis={(cannotReachRes.count ?? 0) > 0 ? "warn" : undefined} />
+          <SmallTile label="Lost" value={lostRes.count ?? 0} />
+          <SmallTile label="Waitlist (DQ)" value={waitlistUniqueRes.count ?? 0} href="/leads?dq=yes" />
+        </div>
+      </section>
+
+      {/* Form submissions footnote — useful for cross-checking with Netlify */}
+      <p className="text-[10px] text-[#5a6a72]">
+        Total form submissions lifetime: {(formSubmissionsRes.count ?? 0).toLocaleString()} (every form fill including re-applications + waitlist enrichments; archived test rows excluded).
       </p>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div className="bg-[#143643] text-white rounded-xl p-6 shadow-[0_4px_12px_rgba(17,36,46,0.15)]">
-          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#cd8b76]">
-            Total qualified unique leads
-          </p>
-          <p className="text-4xl font-extrabold mt-2 tracking-tight">
-            {(qualifiedUniqueRes.count ?? 0).toLocaleString()}
-          </p>
-          <p className="text-[10px] text-white/60 mt-2">
-            Unique people who passed DQ. Children + waitlist excluded.
-          </p>
-        </div>
-        <div className="bg-white border-2 border-[#143643] rounded-xl p-6 shadow-[0_4px_12px_rgba(17,36,46,0.08)]">
-          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">
-            Total unique waitlist leads
-          </p>
-          <p className="text-4xl font-extrabold mt-2 tracking-tight text-[#11242e]">
-            {(waitlistUniqueRes.count ?? 0).toLocaleString()}
-          </p>
-          <p className="text-[10px] text-[#5a6a72] mt-2">
-            Unique people DQ'd onto waitlist.
-          </p>
-        </div>
-        <div className="bg-white border border-[#dad4cb] rounded-xl p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">
-            Total form submissions
-          </p>
-          <p className="text-4xl font-extrabold mt-2 tracking-tight text-[#11242e]">
-            {(formSubmissionsRes.count ?? 0).toLocaleString()}
-          </p>
-          <p className="text-[10px] text-[#5a6a72] mt-2">
-            Every form fill (incl. re-applications + enrichments). Archived test rows excluded.
-          </p>
-        </div>
-      </div>
-
-      <h2 className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3 mt-8">
-        Lifecycle breakdown
-      </h2>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4 mb-8">
-        {tiles.map((t) => (
-          <Link
-            key={t.label}
-            href={t.href}
-            className={tileClass(t.emphasis)}
-          >
-            <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">
-              {t.label}
-            </p>
-            <p className={valueClass(t.emphasis)}>
-              {t.value.toLocaleString()}
-            </p>
-          </Link>
-        ))}
-      </div>
     </div>
   );
 }
 
-function tileClass(emphasis?: "primary" | "warn" | "good"): string {
-  const base = "block bg-white rounded-xl p-5 transition-all";
-  if (emphasis === "warn") {
-    return `${base} border-2 border-[#cd8b76] hover:shadow-[0_4px_12px_rgba(205,139,118,0.25)]`;
-  }
-  if (emphasis === "good") {
-    return `${base} border border-emerald-200 hover:border-emerald-400 hover:shadow-[0_4px_12px_rgba(17,36,46,0.08)]`;
-  }
-  if (emphasis === "primary") {
-    return `${base} border border-[#143643] hover:border-[#11242e] hover:shadow-[0_4px_12px_rgba(17,36,46,0.08)]`;
-  }
-  return `${base} border border-[#dad4cb] hover:border-[#cd8b76]/60 hover:shadow-[0_4px_12px_rgba(17,36,46,0.08)]`;
+/** Big headline tile — used for top-level lifetime numbers. */
+function Headline({
+  label,
+  value,
+  note,
+  href,
+  theme,
+}: {
+  label: string;
+  value: number | string;
+  note?: string;
+  href?: string;
+  theme?: "dark" | "good";
+}) {
+  const cls =
+    theme === "dark"
+      ? "bg-[#143643] text-white"
+      : theme === "good"
+        ? "bg-white border-2 border-emerald-200"
+        : "bg-white border border-[#dad4cb]";
+  const labelCls = theme === "dark" ? "text-[#cd8b76]" : "text-[#5a6a72]";
+  const noteCls = theme === "dark" ? "text-white/60" : "text-[#5a6a72]";
+  const valueCls =
+    theme === "dark" ? "text-white" :
+    theme === "good" ? "text-emerald-700" :
+    "text-[#11242e]";
+  const inner = (
+    <>
+      <p className={`text-[10px] font-bold uppercase tracking-[2px] ${labelCls}`}>{label}</p>
+      <p className={`text-4xl font-extrabold mt-2 tracking-tight ${valueCls}`}>
+        {typeof value === "number" ? value.toLocaleString() : value}
+      </p>
+      {note ? <p className={`text-[10px] mt-2 ${noteCls}`}>{note}</p> : null}
+    </>
+  );
+  const wrapper = `${cls} rounded-xl p-6 shadow-[0_4px_12px_rgba(17,36,46,0.08)] block transition-all`;
+  return href ? (
+    <Link href={href} className={wrapper + " hover:shadow-[0_4px_12px_rgba(17,36,46,0.18)]"}>{inner}</Link>
+  ) : (
+    <div className={wrapper}>{inner}</div>
+  );
 }
 
-function valueClass(emphasis?: "primary" | "warn" | "good"): string {
-  const base = "text-3xl font-extrabold mt-2 tracking-tight";
-  if (emphasis === "warn") return `${base} text-[#cd8b76]`;
-  if (emphasis === "good") return `${base} text-emerald-700`;
-  return `${base} text-[#11242e]`;
+/** Smaller tile — used for second-tier info and lifecycle breakdown. */
+function SmallTile({
+  label,
+  value,
+  note,
+  href,
+  emphasis,
+}: {
+  label: string;
+  value: number | string;
+  note?: string;
+  href?: string;
+  emphasis?: "primary" | "warn" | "good";
+}) {
+  const base = "block bg-white rounded-xl p-4 transition-all";
+  const border =
+    emphasis === "warn" ? "border-2 border-[#cd8b76] hover:shadow-[0_4px_12px_rgba(205,139,118,0.25)]" :
+    emphasis === "good" ? "border border-emerald-200 hover:border-emerald-400 hover:shadow-[0_4px_12px_rgba(17,36,46,0.08)]" :
+    emphasis === "primary" ? "border border-[#143643] hover:border-[#11242e] hover:shadow-[0_4px_12px_rgba(17,36,46,0.08)]" :
+    "border border-[#dad4cb] hover:border-[#cd8b76]/60 hover:shadow-[0_4px_12px_rgba(17,36,46,0.08)]";
+  const valueColor =
+    emphasis === "warn" ? "text-[#cd8b76]" :
+    emphasis === "good" ? "text-emerald-700" :
+    "text-[#11242e]";
+  const inner = (
+    <>
+      <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">{label}</p>
+      <p className={`text-3xl font-extrabold mt-2 tracking-tight ${valueColor}`}>
+        {typeof value === "number" ? value.toLocaleString() : value}
+      </p>
+      {note ? <p className="text-[10px] text-[#5a6a72] mt-1">{note}</p> : null}
+    </>
+  );
+  return href ? (
+    <Link href={href} className={`${base} ${border}`}>{inner}</Link>
+  ) : (
+    <div className={`${base} ${border}`}>{inner}</div>
+  );
 }
