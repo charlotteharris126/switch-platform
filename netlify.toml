@@ -5,13 +5,12 @@
 # the build config, so app/netlify.toml provides the per-build settings (build
 # command, plugins, headers).
 #
-# Path filter: only trigger a build when something inside ./app changed. Doc
-# updates, migration files, Edge Functions changes, agent notes do not need to
-# burn a Netlify build.
-#
-# This file exists because the repo became a monorepo on 2026-04-26 covering
-# app/ + supabase/ + docs/ — see platform/docs/changelog.md.
+# Build-on-every-push for now. The previous `ignore` directive
+# (`git diff --quiet HEAD^ HEAD ./app/`) was meant to skip builds when only
+# docs/migrations changed, but it incorrectly suppressed a real app/-only
+# deploy on 2026-04-27 — root cause not yet diagnosed. Re-add a working
+# filter once we have a reliable test pattern. Build minutes are cheap
+# enough during pilot to not gate on this.
 
 [build]
-  base    = "app"
-  ignore  = "git diff --quiet HEAD^ HEAD ./app/"
+  base = "app"
