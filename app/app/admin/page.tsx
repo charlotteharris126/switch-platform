@@ -3,241 +3,172 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 
-type Period = "week" | "month" | "all";
-
-interface SearchParams {
-  period?: string;
-}
-
-const PERIOD_LABEL: Record<Period, string> = {
-  week: "Last 7 days",
-  month: "Last 30 days",
-  all: "All time",
-};
-
-function periodCutoff(period: Period): string | null {
-  if (period === "all") return null;
-  const days = period === "week" ? 7 : 30;
-  return new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
-}
-
-function normalisePeriod(value: string | undefined): Period {
-  if (value === "week" || value === "month" || value === "all") return value;
-  return "week";
-}
-
 interface ProviderBillingRow {
   provider_id: string;
+  company_name: string;
   active: boolean;
   total_routed: number;
   confirmed_enrolled: number;
   presumed_enrolled: number;
-  billable_or_pending_count: number;
   free_enrolments_remaining: number;
   billable_count: number;
   conversion_rate_pct: number | null;
 }
 
-export default async function AdminHomePage({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
-  const sp = await searchParams;
-  const period = normalisePeriod(sp.period);
-  const cutoff = periodCutoff(period);
+interface ProviderRow {
+  provider_id: string;
+  company_name: string;
+  per_enrolment_fee: number | null;
+  pricing_model: string | null;
+}
 
+const NOW = () => new Date();
+const DAYS_AGO = (n: number) => new Date(Date.now() - n * 24 * 3600 * 1000).toISOString();
+
+function distinctEmails(rows: Array<{ email: string | null }> | null | undefined): number {
+  return new Set(
+    (rows ?? [])
+      .map((r) => r.email?.toLowerCase().trim() ?? "")
+      .filter((e) => e.length > 0),
+  ).size;
+}
+
+function delta(thisWeek: number, lastWeek: number): { sign: "up" | "down" | "flat"; abs: number; label: string } {
+  if (thisWeek === lastWeek) return { sign: "flat", abs: 0, label: "no change" };
+  const diff = thisWeek - lastWeek;
+  return {
+    sign: diff > 0 ? "up" : "down",
+    abs: Math.abs(diff),
+    label: lastWeek === 0 ? `from 0` : `${diff > 0 ? "+" : ""}${diff} vs last week`,
+  };
+}
+
+function gbp(n: number | null): string {
+  if (n === null) return "—";
+  return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }).format(n);
+}
+
+export default async function AdminHomePage() {
   const supabase = await createClient();
 
-  // Period filter helper
-  const subPeriod = <T extends { gte: (col: string, val: string) => T }>(q: T): T =>
-    cutoff ? q.gte("submitted_at", cutoff) : q;
-  const enrolPeriod = <T extends { gte: (col: string, val: string) => T }>(q: T): T =>
-    cutoff ? q.gte("status_updated_at", cutoff) : q;
+  const week1Start = DAYS_AGO(7);
+  const week2Start = DAYS_AGO(14);
 
   const [
-    // Lifetime business-health numbers
-    qualifiedUniqueRes,
-    totalRoutedRes,
-    totalEnrolmentsRes,
-    activeProvidersRes,
-    // Per-provider billing state (derives free / billable from real enrolments)
-    billingStateRes,
-    // Period-aware lifecycle
-    weekQualifiedRes,
-    weekEnrolmentsRes,
-    routedInPeriodRes,
-    terminalEnrolmentsRes,
-    cannotReachRes,
-    lostRes,
-    waitlistUniqueRes,
-    // Always-visible attention surfaces
+    // Pace
+    leadsThisWeekRes,
+    leadsLastWeekRes,
+    routedThisWeekRes,
+    routedLastWeekRes,
+    enrolThisWeekRes,
+    enrolLastWeekRes,
+    // Money & providers
+    billingRes,
+    providersRes,
+    metaSpendThisWeekRes,
+    metaSpendLastWeekRes,
+    // Attention
     unroutedRes,
     presumedRes,
     disputedRes,
     errorsRes,
+    // Used to surface "first billable date"
+    presumedListRes,
   ] = await Promise.all([
-    // ── Lifetime ───────────────────────────────────────────────────────────
-    // Qualified unique people (distinct emails across non-DQ, non-archived
-    // submissions). Same dedupe rule as the Routed KPI so the two reconcile.
-    supabase
-      .schema("leads")
-      .from("submissions")
-      .select("email")
-      .eq("is_dq", false)
-      .is("archived_at", null),
-    // Routed unique people: distinct emails across all routed live submissions
-    // (parents + children, excluding archived). One person submitting twice
-    // counts once. The raw routing_log COUNT(*) inflates this number; "unique
-    // people" is the business KPI.
-    supabase
-      .schema("leads")
-      .from("submissions")
-      .select("email")
-      .not("primary_routed_to", "is", null)
-      .is("archived_at", null),
-    // Total enrolments (confirmed + presumed) — counts toward conversion + billing
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("id", { count: "exact", head: true })
-      .in("status", ["enrolled", "presumed_enrolled"]),
-    // Active providers
-    supabase
-      .schema("crm")
-      .from("providers")
-      .select("provider_id", { count: "exact", head: true })
-      .eq("active", true),
-    // Per-provider billing state via the derived view
-    supabase
-      .schema("crm")
-      .from("vw_provider_billing_state")
-      .select("provider_id, active, total_routed, confirmed_enrolled, presumed_enrolled, billable_or_pending_count, free_enrolments_remaining, billable_count, conversion_rate_pct")
-      .eq("active", true),
-
-    // ── Period-aware ───────────────────────────────────────────────────────
-    subPeriod(
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("email")
-        .eq("is_dq", false)
-        .is("archived_at", null),
-    ),
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .in("status", ["enrolled", "presumed_enrolled"]),
-    ),
-    // Awaiting outcome: routed leads (live) with no terminal enrolment status.
-    // Most routed leads have NO crm.enrolments row at all (they sit "implicitly
-    // open" until the provider sets a status). Filtering on status='open'
-    // misses every implicit-open row. Instead: fetch routed-in-period IDs +
-    // every terminal-status submission_id, subtract in JS.
-    (() => {
-      const q = supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id")
-        .not("primary_routed_to", "is", null)
-        .is("archived_at", null);
-      return cutoff ? q.gte("routed_at", cutoff) : q;
-    })(),
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("submission_id")
-      .in("status", ["enrolled", "presumed_enrolled", "lost", "cannot_reach"]),
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "cannot_reach"),
-    ),
-    enrolPeriod(
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "lost"),
-    ),
-    subPeriod(
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id", { count: "exact", head: true })
-        .eq("is_dq", true)
-        .is("archived_at", null)
-        .is("parent_submission_id", null),
-    ),
-
-    // ── Attention surfaces (point-in-time, ignore period) ──────────────────
-    supabase
-      .schema("leads")
-      .from("submissions")
-      .select("id", { count: "exact", head: true })
-      .eq("is_dq", false)
-      .is("primary_routed_to", null)
-      .is("archived_at", null),
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "presumed_enrolled"),
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("id", { count: "exact", head: true })
-      .not("disputed_at", "is", null),
-    supabase
-      .schema("leads")
-      .from("dead_letter")
-      .select("id", { count: "exact", head: true })
-      .is("replayed_at", null),
+    // Leads in: distinct emails of non-DQ submissions in window
+    supabase.schema("leads").from("submissions").select("email")
+      .eq("is_dq", false).is("archived_at", null).gte("submitted_at", week1Start),
+    supabase.schema("leads").from("submissions").select("email")
+      .eq("is_dq", false).is("archived_at", null).gte("submitted_at", week2Start).lt("submitted_at", week1Start),
+    // Sent to providers: distinct emails of routed-in-window
+    supabase.schema("leads").from("submissions").select("email")
+      .not("primary_routed_to", "is", null).is("archived_at", null).gte("routed_at", week1Start),
+    supabase.schema("leads").from("submissions").select("email")
+      .not("primary_routed_to", "is", null).is("archived_at", null).gte("routed_at", week2Start).lt("routed_at", week1Start),
+    // Enrolments confirmed (not presumed) in window
+    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true })
+      .eq("status", "enrolled").gte("status_updated_at", week1Start),
+    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true })
+      .eq("status", "enrolled").gte("status_updated_at", week2Start).lt("status_updated_at", week1Start),
+    // Provider billing state
+    supabase.schema("crm").from("vw_provider_billing_state")
+      .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, billable_count, conversion_rate_pct")
+      .order("total_routed", { ascending: false }),
+    supabase.schema("crm").from("providers")
+      .select("provider_id, company_name, per_enrolment_fee, pricing_model"),
+    // Meta ad spend (placeholder until ingestion lands)
+    supabase.schema("ads_switchable").from("meta_daily").select("spend").gte("date", week1Start.slice(0, 10)),
+    supabase.schema("ads_switchable").from("meta_daily").select("spend").gte("date", week2Start.slice(0, 10)).lt("date", week1Start.slice(0, 10)),
+    // Attention
+    supabase.schema("leads").from("submissions").select("id", { count: "exact", head: true })
+      .eq("is_dq", false).is("primary_routed_to", null).is("archived_at", null),
+    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled"),
+    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).not("disputed_at", "is", null),
+    supabase.schema("leads").from("dead_letter").select("id", { count: "exact", head: true }).is("replayed_at", null),
+    // Presumed enrolment dates: surface earliest auto-flip-to-billable date.
+    // Per .claude/rules/business.md: presumed flips after 14d (status_updated_at + 14)
+    // and 7-day dispute window means actually-billable on +21 days.
+    supabase.schema("crm").from("enrolments").select("id, status_updated_at, provider_id")
+      .eq("status", "presumed_enrolled").order("status_updated_at", { ascending: true }).limit(1),
   ]);
 
-  const billingRows = (billingStateRes.data ?? []) as ProviderBillingRow[];
+  const leadsThis = distinctEmails(leadsThisWeekRes.data as Array<{ email: string | null }>);
+  const leadsLast = distinctEmails(leadsLastWeekRes.data as Array<{ email: string | null }>);
+  const routedThis = distinctEmails(routedThisWeekRes.data as Array<{ email: string | null }>);
+  const routedLast = distinctEmails(routedLastWeekRes.data as Array<{ email: string | null }>);
+  const enrolThis = enrolThisWeekRes.count ?? 0;
+  const enrolLast = enrolLastWeekRes.count ?? 0;
 
-  const distinctEmailCount = (rows: Array<{ email: string | null }> | null | undefined): number =>
-    new Set(
-      (rows ?? [])
-        .map((r) => r.email?.toLowerCase().trim() ?? "")
-        .filter((e) => e.length > 0)
-    ).size;
+  const billingRows = (billingRes.data ?? []) as ProviderBillingRow[];
+  const providers = (providersRes.data ?? []) as ProviderRow[];
+  const providerMeta = new Map(providers.map((p) => [p.provider_id, p]));
 
-  const totalRouted = distinctEmailCount(totalRoutedRes.data as Array<{ email: string | null }>);
-  const qualifiedUnique = distinctEmailCount(qualifiedUniqueRes.data as Array<{ email: string | null }>);
-  const weekQualifiedUnique = distinctEmailCount(weekQualifiedRes.data as Array<{ email: string | null }>);
-  const totalEnrolments = totalEnrolmentsRes.count ?? 0;
-  // Two conversion rates: confirmed-only and including presumed.
-  const confirmedEnrolled = billingRows.reduce((s, r) => s + (r.confirmed_enrolled ?? 0), 0);
-  const conversionConfirmedPct = totalRouted > 0 ? Math.round((confirmedEnrolled / totalRouted) * 1000) / 10 : null;
-  const conversionPotentialPct = totalRouted > 0 ? Math.round((totalEnrolments / totalRouted) * 1000) / 10 : null;
+  // Revenue earned: sum of billable_count × per_enrolment_fee per provider.
+  // Pilot rule (business.md): first 3 enrolments per provider are free; remainder
+  // are billable. EMS + WYK on per_enrolment_flat = £150. CD on per_enrolment_percent
+  // (course-fee dependent, fee is null in the providers table; we surface billable
+  // count separately and treat revenue as "—" for percent-priced providers).
+  let revenueEarnedGBP = 0;
+  let revenueIncomplete = false;
+  for (const r of billingRows) {
+    const meta = providerMeta.get(r.provider_id);
+    if (!meta) continue;
+    if (meta.pricing_model === "per_enrolment_flat" && meta.per_enrolment_fee !== null) {
+      revenueEarnedGBP += r.billable_count * Number(meta.per_enrolment_fee);
+    } else if (meta.pricing_model === "per_enrolment_percent" && r.billable_count > 0) {
+      revenueIncomplete = true;
+    }
+  }
 
-  // Pilot stats: free remaining + billable across providers
-  const totalFreeRemaining = billingRows.reduce((sum, r) => sum + (r.free_enrolments_remaining ?? 0), 0);
-  const totalBillable = billingRows.reduce((sum, r) => sum + (r.billable_count ?? 0), 0);
+  // Meta ad spend (placeholder until ingestion lands)
+  const metaSpendThisRows = (metaSpendThisWeekRes.data ?? []) as Array<{ spend: number | null }>;
+  const metaSpendLastRows = (metaSpendLastWeekRes.data ?? []) as Array<{ spend: number | null }>;
+  const metaSpendThis = metaSpendThisRows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
+  const metaSpendLast = metaSpendLastRows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
+  const metaIngestionLive = metaSpendThisRows.length > 0 || metaSpendLastRows.length > 0;
+  const cplThisWeek = metaIngestionLive && leadsThis > 0 ? metaSpendThis / leadsThis : null;
+  const profitLossThisWeek = metaIngestionLive ? -metaSpendThis : null; // revenue lifetime, not weekly; profit/loss strictly weekly cash-out for pilot
 
-  // Awaiting outcome (period-aware): routed-in-period leads minus those with
-  // a terminal-status enrolment row. "Implicitly open" leads (no enrolments
-  // row at all) count as awaiting because the provider hasn't acted yet.
-  const routedInPeriodIds = new Set(
-    ((routedInPeriodRes.data ?? []) as Array<{ id: number }>).map((r) => r.id)
-  );
-  const terminalSubmissionIds = new Set(
-    ((terminalEnrolmentsRes.data ?? []) as Array<{ submission_id: number }>).map((r) => r.submission_id)
-  );
-  const awaitingOutcome = [...routedInPeriodIds].filter((id) => !terminalSubmissionIds.has(id)).length;
+  const totalFreeRemaining = billingRows.reduce((s, r) => s + (r.free_enrolments_remaining ?? 0), 0);
+  const totalBillable = billingRows.reduce((s, r) => s + (r.billable_count ?? 0), 0);
 
-  // Things that need attention
   const unrouted = unroutedRes.count ?? 0;
   const presumed = presumedRes.count ?? 0;
   const disputed = disputedRes.count ?? 0;
   const errors = errorsRes.count ?? 0;
   const totalAttention = unrouted + presumed + disputed + errors;
+
+  // Earliest presumed -> billable date (presumed status_updated_at + 21 days)
+  const earliestPresumed = ((presumedListRes.data ?? []) as Array<{ status_updated_at: string }>)[0];
+  const firstBillableDate = earliestPresumed
+    ? new Date(new Date(earliestPresumed.status_updated_at).getTime() + 21 * 24 * 3600 * 1000)
+    : null;
+  const firstBillableDateLabel = firstBillableDate
+    ? firstBillableDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
+    : null;
+  const daysToFirstBillable = firstBillableDate
+    ? Math.ceil((firstBillableDate.getTime() - NOW().getTime()) / (24 * 3600 * 1000))
+    : null;
 
   return (
     <div className="max-w-6xl space-y-8">
@@ -250,76 +181,125 @@ export default async function AdminHomePage({
       />
       <PageHeader
         eyebrow="Overview"
-        title="Where the business is"
-        subtitle={
-          <span>
-            Top tiles are lifetime totals. The lifecycle breakdown below applies the period selector.
-          </span>
-        }
+        title="Business health"
+        subtitle={<span>Snapshot of where the business stands. This week vs last week, with money on the right.</span>}
       />
 
-      {/* ─── Headline numbers (lifetime, big) ─────────────────────────────── */}
+      {/* Section 1: Pace this week */}
       <section>
-        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Business health (lifetime, unique people)</p>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Pace (last 7 days)</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Headline
-            label="Qualified leads"
-            value={qualifiedUnique}
-            note="Unique people, not DQ'd"
-            href="/leads?dq=no"
-            theme="dark"
+          <PaceTile label="Leads in" value={leadsThis} delta={delta(leadsThis, leadsLast)} href="/leads?dq=no" />
+          <PaceTile label="Sent to providers" value={routedThis} delta={delta(routedThis, routedLast)} href="/leads?routed=yes" />
+          <PaceTile label="Enrolments confirmed" value={enrolThis} delta={delta(enrolThis, enrolLast)} href="/providers" theme="good" />
+          <PaceTile
+            label="Meta ad spend"
+            value={metaIngestionLive ? gbp(metaSpendThis) : "—"}
+            delta={metaIngestionLive ? deltaCurrency(metaSpendThis, metaSpendLast) : { sign: "flat", abs: 0, label: "Awaiting Meta ingestion" }}
+            href={metaIngestionLive ? undefined : undefined}
           />
-          <Headline
-            label="Routed"
-            value={totalRouted}
-            note="Unique people sent to a provider"
-            href="/leads?routed=yes"
+        </div>
+      </section>
+
+      {/* Section 2: Money */}
+      <section>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Money</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <MoneyTile
+            label="Cost per lead"
+            value={cplThisWeek === null ? "—" : gbp(cplThisWeek)}
+            note={metaIngestionLive ? "Meta spend ÷ leads, this week" : "Awaiting Meta ingestion"}
           />
-          <Headline
-            label="Enrolments"
-            value={totalEnrolments}
-            note={`${confirmedEnrolled} confirmed + ${totalEnrolments - confirmedEnrolled} presumed`}
-            href="/providers"
+          <MoneyTile
+            label="Revenue earned"
+            value={gbp(revenueEarnedGBP)}
+            note={revenueIncomplete ? "Plus % of CD enrolments (fee not yet set)" : "Lifetime, billable enrolments × fee"}
             theme="good"
           />
-          <Headline
-            label="Conversion"
-            value={conversionPotentialPct === null ? "—" : `${conversionPotentialPct}%`}
+          <MoneyTile
+            label="Profit/loss this week"
+            value={profitLossThisWeek === null ? "—" : gbp(profitLossThisWeek)}
+            note={metaIngestionLive ? "Revenue this week minus ad spend" : "Awaiting Meta ingestion"}
+          />
+          <MoneyTile
+            label="First billable hits"
+            value={firstBillableDateLabel ?? "Not yet"}
             note={
-              conversionConfirmedPct === null
-                ? "Enrolments ÷ routed"
-                : `Confirmed only: ${conversionConfirmedPct}%`
+              firstBillableDateLabel
+                ? `${daysToFirstBillable === 1 ? "tomorrow" : daysToFirstBillable === 0 ? "today" : daysToFirstBillable !== null && daysToFirstBillable < 0 ? `${Math.abs(daysToFirstBillable)} days ago, chase` : `in ${daysToFirstBillable} days`}`
+                : "No presumed enrolments yet"
             }
           />
         </div>
       </section>
 
-      {/* ─── Pilot billing state ──────────────────────────────────────────── */}
+      {/* Section 3: Provider scoreboard */}
       <section>
-        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Pilot billing</p>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <SmallTile
-            label="Active providers"
-            value={activeProvidersRes.count ?? 0}
-            href="/providers"
-          />
-          <SmallTile
-            label="Pilot free remaining"
-            value={totalFreeRemaining}
-            note={`Across ${billingRows.length} provider${billingRows.length === 1 ? "" : "s"}`}
-            href="/providers"
-          />
-          <SmallTile
-            label="Billable enrolments"
-            value={totalBillable}
-            note="Past 3-free per provider"
-            href="/providers"
-            emphasis={totalBillable > 0 ? "good" : undefined}
-          />
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Provider scoreboard</p>
+        <div className="bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
+          <table className="w-full text-sm">
+            <thead className="text-[10px] uppercase tracking-wide text-[#5a6a72] bg-[#f4f1ed]">
+              <tr>
+                <th className="px-4 py-2 text-left">Provider</th>
+                <th className="px-4 py-2 text-right">Routed</th>
+                <th className="px-4 py-2 text-right">Enrolled</th>
+                <th className="px-4 py-2 text-right">Conversion</th>
+                <th className="px-4 py-2 text-right">Free left</th>
+                <th className="px-4 py-2 text-right">Billable</th>
+                <th className="px-4 py-2 text-right">Revenue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {billingRows.filter((r) => r.active).map((r) => {
+                const meta = providerMeta.get(r.provider_id);
+                const flat = meta?.pricing_model === "per_enrolment_flat" && meta?.per_enrolment_fee !== null;
+                const providerRevenue = flat ? r.billable_count * Number(meta!.per_enrolment_fee) : null;
+                const totalEnrolled = r.confirmed_enrolled + r.presumed_enrolled;
+                return (
+                  <tr key={r.provider_id} className="border-t border-[#dad4cb]">
+                    <td className="px-4 py-3">
+                      <Link href={`/providers/${encodeURIComponent(r.provider_id)}`} className="font-medium text-[#143643] hover:text-[#cd8b76]">
+                        {r.company_name ?? r.provider_id}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold">{r.total_routed}</td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="font-bold text-emerald-700">{totalEnrolled}</span>
+                      {r.presumed_enrolled > 0 ? (
+                        <span className="text-[10px] text-[#5a6a72]"> ({r.confirmed_enrolled} confirmed + {r.presumed_enrolled} presumed)</span>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold">{r.conversion_rate_pct === null ? "—" : `${r.conversion_rate_pct}%`}</td>
+                    <td className="px-4 py-3 text-right">
+                      <span className={r.free_enrolments_remaining === 0 ? "font-bold text-[#cd8b76]" : ""}>{r.free_enrolments_remaining}</span>
+                      <span className="text-[10px] text-[#5a6a72]"> / 3</span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {r.billable_count > 0 ? <span className="font-bold text-[#cd8b76]">{r.billable_count}</span> : <span className="text-[#5a6a72]">0</span>}
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold">
+                      {providerRevenue === null ? <span className="text-[#5a6a72]">% of fee</span> : gbp(providerRevenue)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="text-xs bg-[#f4f1ed] border-t border-[#dad4cb]">
+              <tr>
+                <td className="px-4 py-3 font-bold uppercase tracking-wide text-[#5a6a72] text-[10px]">Total</td>
+                <td className="px-4 py-3 text-right font-bold">—</td>
+                <td className="px-4 py-3 text-right font-bold text-emerald-700">{billingRows.reduce((s, r) => s + r.confirmed_enrolled + r.presumed_enrolled, 0)}</td>
+                <td className="px-4 py-3"></td>
+                <td className="px-4 py-3 text-right font-bold">{totalFreeRemaining}</td>
+                <td className="px-4 py-3 text-right font-bold text-[#cd8b76]">{totalBillable}</td>
+                <td className="px-4 py-3 text-right font-bold">{gbp(revenueEarnedGBP)}</td>
+              </tr>
+            </tfoot>
+          </table>
         </div>
       </section>
 
-      {/* ─── Things that need attention ───────────────────────────────────── */}
+      {/* Section 4: Needs your attention */}
       <section>
         <div className="flex items-baseline justify-between mb-3">
           <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Needs your attention</p>
@@ -330,108 +310,52 @@ export default async function AdminHomePage({
           )}
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <SmallTile
-            label="Unrouted"
-            value={unrouted}
-            note="Qualified, awaiting routing"
-            href="/leads?routed=no&dq=no"
-            emphasis={unrouted > 0 ? "primary" : undefined}
-          />
-          <SmallTile
-            label="Presumed enrolled"
-            value={presumed}
-            note="Awaiting confirmation"
-            href="/actions"
-            emphasis={presumed > 0 ? "warn" : undefined}
-          />
-          <SmallTile
-            label="Disputed"
-            value={disputed}
-            note="Provider rebutted"
-            href="/leads?routed=yes"
-            emphasis={disputed > 0 ? "warn" : undefined}
-          />
-          <SmallTile
-            label="Unresolved errors"
-            value={errors}
-            note="Webhook / sheet failures"
-            href="/errors"
-            emphasis={errors > 0 ? "warn" : undefined}
-          />
+          <SmallTile label="Unrouted" value={unrouted} note="Qualified, awaiting routing" href="/leads?routed=no&dq=no" emphasis={unrouted > 0 ? "primary" : undefined} />
+          <SmallTile label="Presumed enrolled" value={presumed} note="Awaiting confirmation" href="/actions" emphasis={presumed > 0 ? "warn" : undefined} />
+          <SmallTile label="Disputed" value={disputed} note="Provider rebutted" href="/leads?routed=yes" emphasis={disputed > 0 ? "warn" : undefined} />
+          <SmallTile label="Unresolved errors" value={errors} note="Webhook / sheet / DB" href="/errors" emphasis={errors > 0 ? "warn" : undefined} />
         </div>
       </section>
-
-      {/* ─── Period-aware lifecycle breakdown ─────────────────────────────── */}
-      <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Lifecycle breakdown</p>
-          <div className="flex flex-wrap gap-2">
-            {(["week", "month", "all"] as Period[]).map((p) => {
-              const active = period === p;
-              const href = p === "week" ? "/" : `/?period=${p}`;
-              return (
-                <Link
-                  key={p}
-                  href={href}
-                  className={
-                    active
-                      ? "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#cd8b76] text-white border border-[#cd8b76]"
-                      : "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60"
-                  }
-                >
-                  {PERIOD_LABEL[p]}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
-          <SmallTile label="Qualified" value={weekQualifiedUnique} href="/leads?dq=no" />
-          <SmallTile label="Enrolments" value={weekEnrolmentsRes.count ?? 0} emphasis="good" href="/providers" />
-          <SmallTile label="Awaiting outcome" value={awaitingOutcome} note="Routed, no enrolment outcome yet" href="/actions" />
-          <SmallTile label="Cannot reach" value={cannotReachRes.count ?? 0} emphasis={(cannotReachRes.count ?? 0) > 0 ? "warn" : undefined} />
-          <SmallTile label="Lost" value={lostRes.count ?? 0} />
-          <SmallTile label="Waitlist (DQ)" value={waitlistUniqueRes.count ?? 0} href="/leads?dq=yes" />
-        </div>
-      </section>
-
     </div>
   );
 }
 
-/** Big headline tile — used for top-level lifetime numbers. */
-function Headline({
+function deltaCurrency(thisWeek: number, lastWeek: number): { sign: "up" | "down" | "flat"; abs: number; label: string } {
+  if (thisWeek === lastWeek) return { sign: "flat", abs: 0, label: "no change" };
+  const diff = thisWeek - lastWeek;
+  return {
+    sign: diff > 0 ? "up" : "down",
+    abs: Math.abs(diff),
+    label: lastWeek === 0 ? `from £0` : `${diff > 0 ? "+" : ""}${gbp(diff)} vs last week`,
+  };
+}
+
+function PaceTile({
   label,
   value,
-  note,
+  delta,
   href,
   theme,
 }: {
   label: string;
   value: number | string;
-  note?: string;
+  delta: { sign: "up" | "down" | "flat"; abs: number; label: string };
   href?: string;
-  theme?: "dark" | "good";
+  theme?: "good";
 }) {
-  const cls =
-    theme === "dark"
-      ? "bg-[#143643] text-white"
-      : theme === "good"
-        ? "bg-white border-2 border-emerald-200"
-        : "bg-white border border-[#dad4cb]";
-  const labelCls = theme === "dark" ? "text-[#cd8b76]" : "text-[#5a6a72]";
-  const noteCls = theme === "dark" ? "text-white/60" : "text-[#5a6a72]";
-  const valueCls =
-    theme === "dark" ? "text-white" :
-    theme === "good" ? "text-emerald-700" :
-    "text-[#11242e]";
+  const cls = theme === "good" ? "bg-white border-2 border-emerald-200" : "bg-white border border-[#dad4cb]";
+  const valueCls = theme === "good" ? "text-emerald-700" : "text-[#11242e]";
+  const deltaCls =
+    delta.sign === "up" ? "text-emerald-700" : delta.sign === "down" ? "text-[#b3412e]" : "text-[#5a6a72]";
+  const arrow = delta.sign === "up" ? "↑" : delta.sign === "down" ? "↓" : "→";
   const inner = (
     <>
-      <p className={`text-[10px] font-bold uppercase tracking-[2px] ${labelCls}`}>{label}</p>
-      <p className={`text-4xl font-extrabold mt-2 tracking-tight ${valueCls}`}>
-        {typeof value === "number" ? value.toLocaleString() : value}
+      <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">{label}</p>
+      <p className={`text-4xl font-extrabold mt-2 tracking-tight ${valueCls}`}>{typeof value === "number" ? value.toLocaleString() : value}</p>
+      <p className={`text-[10px] mt-2 ${deltaCls} font-semibold`}>
+        {delta.sign !== "flat" ? `${arrow} ` : ""}
+        {delta.label}
       </p>
-      {note ? <p className={`text-[10px] mt-2 ${noteCls}`}>{note}</p> : null}
     </>
   );
   const wrapper = `${cls} rounded-xl p-6 shadow-[0_4px_12px_rgba(17,36,46,0.08)] block transition-all`;
@@ -442,7 +366,27 @@ function Headline({
   );
 }
 
-/** Smaller tile — used for second-tier info and lifecycle breakdown. */
+function MoneyTile({
+  label,
+  value,
+  note,
+  theme,
+}: {
+  label: string;
+  value: string | number;
+  note?: string;
+  theme?: "good";
+}) {
+  const valueCls = theme === "good" ? "text-emerald-700" : "text-[#11242e]";
+  return (
+    <div className="bg-white border border-[#dad4cb] rounded-xl p-6 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
+      <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">{label}</p>
+      <p className={`text-3xl font-extrabold mt-2 tracking-tight ${valueCls}`}>{value}</p>
+      {note ? <p className="text-[10px] text-[#5a6a72] mt-2">{note}</p> : null}
+    </div>
+  );
+}
+
 function SmallTile({
   label,
   value,
@@ -469,9 +413,7 @@ function SmallTile({
   const inner = (
     <>
       <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">{label}</p>
-      <p className={`text-3xl font-extrabold mt-2 tracking-tight ${valueColor}`}>
-        {typeof value === "number" ? value.toLocaleString() : value}
-      </p>
+      <p className={`text-3xl font-extrabold mt-2 tracking-tight ${valueColor}`}>{typeof value === "number" ? value.toLocaleString() : value}</p>
       {note ? <p className="text-[10px] text-[#5a6a72] mt-1">{note}</p> : null}
     </>
   );

@@ -28,11 +28,30 @@ type SearchParams = {
   from?: string;
   to?: string;
   page?: string;
-  // Show child rows (re-applications + waitlist-enrichment children) too.
-  // Default OFF — list shows unique people. Pass ?show_children=yes to see
-  // every row.
   show_children?: string;
+  // Lifecycle pill filter. Drives the high-level "where in the funnel" view.
+  // Values: all | qualified | routed | awaiting | enrolled | lost | dq | archived
+  stage?: string;
 };
+
+type Stage = "all" | "qualified" | "routed" | "awaiting" | "enrolled" | "lost" | "dq" | "archived";
+
+const STAGE_LABELS: Record<Stage, string> = {
+  all: "All",
+  qualified: "Qualified",
+  routed: "Routed",
+  awaiting: "Awaiting outcome",
+  enrolled: "Enrolled",
+  lost: "Lost",
+  dq: "DQ",
+  archived: "Archived",
+};
+
+const STAGE_ORDER: Stage[] = ["all", "qualified", "routed", "awaiting", "enrolled", "lost", "dq", "archived"];
+
+function normaliseStage(v: string | undefined): Stage {
+  return (STAGE_ORDER as string[]).includes(v ?? "") ? (v as Stage) : "all";
+}
 
 type LeadRow = {
   id: number;
@@ -60,8 +79,32 @@ export default async function LeadsPage({
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.page) || 1);
   const offset = (page - 1) * PAGE_SIZE;
+  const stage = normaliseStage(sp.stage);
 
   const supabase = await createClient();
+
+  // Stages that need a join with crm.enrolments (awaiting / enrolled / lost)
+  // pre-fetch the relevant submission IDs so the main query can filter via
+  // .in("id", [...]) without a server-side join.
+  let stageIdFilter: { in?: number[]; notIn?: number[] } | null = null;
+  if (stage === "awaiting" || stage === "enrolled" || stage === "lost") {
+    const statuses = stage === "awaiting"
+      ? ["enrolled", "presumed_enrolled", "lost", "cannot_reach"]
+      : stage === "enrolled"
+        ? ["enrolled", "presumed_enrolled"]
+        : ["lost"];
+    const { data: enrolForStage } = await supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("submission_id")
+      .in("status", statuses);
+    const ids = ((enrolForStage ?? []) as Array<{ submission_id: number }>).map((r) => r.submission_id);
+    if (stage === "awaiting") {
+      stageIdFilter = { notIn: ids };
+    } else {
+      stageIdFilter = { in: ids };
+    }
+  }
 
   let q = supabase
     .schema("leads")
@@ -82,25 +125,51 @@ export default async function LeadsPage({
     q = q.is("parent_submission_id", null);
   }
 
-  if (sp.funding_category) q = q.eq("funding_category", sp.funding_category);
-  if (sp.funding_route) q = q.eq("funding_route", sp.funding_route);
-  if (sp.course_id) q = q.eq("course_id", sp.course_id);
-  if (sp.provider) q = q.eq("primary_routed_to", sp.provider);
-  if (sp.dq === "yes") q = q.eq("is_dq", true);
-  if (sp.dq === "no") q = q.eq("is_dq", false);
-  if (sp.has_phone === "yes") q = q.not("phone", "is", null);
-  if (sp.has_phone === "no") q = q.is("phone", null);
-  // "Routed" / "Unrouted" exclude archived rows. Archived rows are owner-test
-  // submissions or other deliberately-removed leads that should never appear in
-  // active counts. Without this exclusion, retroactively-archived test rows
-  // that had primary_routed_to set inflate the routed count above what reaches
-  // the providers' sheets.
-  if (sp.routed === "yes") {
+  // Stage pill filter. Each value is a self-contained translation into the
+  // submissions/enrolments shape. Pills are NOT additive on top of the legacy
+  // dq/routed filters.
+  if (stage === "qualified") {
+    q = q.eq("is_dq", false).is("archived_at", null);
+  } else if (stage === "routed") {
     q = q.not("primary_routed_to", "is", null).is("archived_at", null);
+  } else if (stage === "awaiting") {
+    q = q.not("primary_routed_to", "is", null).is("archived_at", null);
+    // exclude submission IDs that already have a terminal-status enrolment row
+    if (stageIdFilter?.notIn && stageIdFilter.notIn.length > 0) {
+      q = q.not("id", "in", `(${stageIdFilter.notIn.join(",")})`);
+    }
+  } else if (stage === "enrolled" || stage === "lost") {
+    if (stageIdFilter?.in && stageIdFilter.in.length > 0) {
+      q = q.in("id", stageIdFilter.in);
+    } else {
+      // No matching enrolments. Return empty result without throwing.
+      q = q.eq("id", -1);
+    }
+  } else if (stage === "dq") {
+    q = q.eq("is_dq", true).is("archived_at", null);
+  } else if (stage === "archived") {
+    q = q.not("archived_at", "is", null);
   }
-  if (sp.routed === "no") {
-    q = q.is("primary_routed_to", null).is("archived_at", null);
+
+  // Legacy (LeadFilters component) only applied when stage is "all" so the
+  // pill view doesn't get further narrowed by an unrelated dropdown selection.
+  if (stage === "all") {
+    if (sp.funding_category) q = q.eq("funding_category", sp.funding_category);
+    if (sp.funding_route) q = q.eq("funding_route", sp.funding_route);
+    if (sp.course_id) q = q.eq("course_id", sp.course_id);
+    if (sp.provider) q = q.eq("primary_routed_to", sp.provider);
+    if (sp.dq === "yes") q = q.eq("is_dq", true);
+    if (sp.dq === "no") q = q.eq("is_dq", false);
+    if (sp.has_phone === "yes") q = q.not("phone", "is", null);
+    if (sp.has_phone === "no") q = q.is("phone", null);
+    if (sp.routed === "yes") {
+      q = q.not("primary_routed_to", "is", null).is("archived_at", null);
+    }
+    if (sp.routed === "no") {
+      q = q.is("primary_routed_to", null).is("archived_at", null);
+    }
   }
+
   if (sp.from) q = q.gte("submitted_at", sp.from);
   if (sp.to) q = q.lte("submitted_at", sp.to);
   if (sp.q) {
@@ -166,13 +235,17 @@ export default async function LeadsPage({
         }
       />
 
-      <LeadFilters
-        fundingCategories={fundingCategories}
-        fundingRoutes={fundingRoutes}
-        courseIds={courseIds}
-        providers={providers}
-        current={sp}
-      />
+      <StagePills active={stage} />
+
+      {stage === "all" ? (
+        <LeadFilters
+          fundingCategories={fundingCategories}
+          fundingRoutes={fundingRoutes}
+          courseIds={courseIds}
+          providers={providers}
+          current={sp}
+        />
+      ) : null}
 
       <div className="mt-6 bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
         <Table>
@@ -300,6 +373,30 @@ export default async function LeadsPage({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function StagePills({ active }: { active: Stage }) {
+  return (
+    <div className="flex flex-wrap gap-2 mb-4">
+      {STAGE_ORDER.map((s) => {
+        const isActive = s === active;
+        const href = s === "all" ? "/leads" : `/leads?stage=${s}`;
+        return (
+          <Link
+            key={s}
+            href={href}
+            className={
+              isActive
+                ? "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#cd8b76] text-white border border-[#cd8b76]"
+                : "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60"
+            }
+          >
+            {STAGE_LABELS[s]}
+          </Link>
+        );
+      })}
     </div>
   );
 }

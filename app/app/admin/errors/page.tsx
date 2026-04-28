@@ -172,25 +172,24 @@ export default async function ErrorsPage() {
     <div className="max-w-6xl space-y-6">
       <PageHeader
         eyebrow="Tools"
-        title="Errors & DB reconciliation"
+        title="Data health"
         subtitle={
           deadLetterRes.error ? (
             <span className="text-[#b3412e]">Error: {deadLetterRes.error.message}</span>
           ) : (
-            <>
-              {unresolved.length} item{unresolved.length === 1 ? "" : "s"} to review · {resolved.length} resolved
-              {over7d > 0 && <span className="text-[#b3412e]"> · {over7d} over 7 days old</span>}
-            </>
+            <>Two sections: does the database reconcile, and is anything broken right now.</>
           )
         }
       />
 
       <ReconciliationCard data={reconciliation} />
 
+      <ErrorsSectionHeader unresolvedCount={unresolved.length} resolvedCount={resolved.length} over7dCount={over7d} />
+
       {unresolved.length === 0 ? (
         <Card className="border-emerald-200 bg-emerald-50">
           <CardContent className="pt-4 text-xs text-emerald-900">
-            <strong>Inbox zero.</strong> Nothing to review.
+            <strong>No errors.</strong> Every webhook, sheet append, and ingestion ran cleanly. Nothing needs your attention here.
           </CardContent>
         </Card>
       ) : (
@@ -348,39 +347,41 @@ function ReconciliationCard({ data }: { data: ReconciliationData }) {
     <Card className={reconciles ? "border-emerald-200" : "border-[#b3412e]/40 bg-[#b3412e]/5"}>
       <CardHeader>
         <CardTitle className="text-sm flex items-center gap-2">
-          DB reconciliation: routing
+          Database reconciliation
           {reconciles ? (
-            <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">All accounted for</Badge>
+            <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">Match ✓</Badge>
           ) : (
-            <Badge className="text-[10px] bg-[#b3412e] text-white hover:bg-[#b3412e]">Gap: investigate</Badge>
+            <Badge className="text-[10px] bg-[#b3412e] text-white hover:bg-[#b3412e]">Drift, investigate</Badge>
           )}
         </CardTitle>
         <p className="text-xs text-[#5a6a72] mt-2">
-          Why this exists: the raw routing log records every send to a provider. The unique-people KPI on Overview counts distinct emails. The two won&rsquo;t match exactly. This card shows where the difference comes from.
+          What this measures: every time we send a lead to a provider, we log it in the database. The same person can be sent more than once (came back for another course; submitted twice in a row by accident). The dashboard counts <strong>unique people</strong>, not raw sends. This card shows whether those numbers reconcile and explains any difference.
         </p>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs">
-          <Metric label="Routing-log rows (raw sends)" value={data.routing_log_rows} />
-          <Metric label="Unique people routed (KPI)" value={data.unique_people_routed} highlight />
-          <Metric label="Gap to explain" value={gap} />
+          <Metric label="Times we sent a lead" value={data.routing_log_rows} />
+          <Metric label="Unique people sent" value={data.unique_people_routed} highlight />
+          <Metric label="Difference to explain" value={gap} />
         </div>
         <div className="mt-5 border-t border-[#dad4cb] pt-4">
-          <p className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold mb-2">Gap breakdown</p>
+          <p className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold mb-2">Where the difference comes from</p>
           <ul className="text-xs text-[#11242e] space-y-1.5">
+            {data.archived_routed_rows > 0 && (
+              <li>
+                <strong>{data.archived_routed_rows}</strong> archived test rows (sent at the time, since soft-deleted from the live set).
+              </li>
+            )}
             <li>
-              <strong>{data.archived_routed_rows}</strong> archived test rows (sent at the time, then later soft-deleted from the live set)
+              <strong>{data.linked_reapplications}</strong> re-applications (same person came back for a different course).
             </li>
             <li>
-              <strong>{data.linked_reapplications}</strong> linked re-applications (same person came back for a different course; system tagged as parent/child)
-            </li>
-            <li>
-              <strong>{data.rapid_fire_dupes}</strong> same-email duplicates (one person submitted multiple times in a short window before the dedupe could catch up)
+              <strong>{data.rapid_fire_dupes}</strong> rapid-fire duplicates (same person submitted multiple times in a short window before the dedupe could catch up).
             </li>
           </ul>
           <p className="text-xs text-[#11242e] mt-3">
             {reconciles ? (
-              <>Total: <strong>{accountedFor}</strong> = the gap. Reconciles cleanly.</>
+              <>The numbers reconcile: <strong>{data.routing_log_rows}</strong> sends = <strong>{data.unique_people_routed}</strong> unique people + <strong>{accountedFor}</strong> known duplicates.</>
             ) : (
               <>Total accounted for: <strong>{accountedFor}</strong>. Remaining: <strong className="text-[#b3412e]">{gap - accountedFor}</strong> row(s) need investigating.</>
             )}
@@ -396,6 +397,32 @@ function Metric({ label, value, highlight }: { label: string; value: number; hig
     <div>
       <div className={`text-2xl font-bold ${highlight ? "text-[#cd8b76]" : "text-[#143643]"}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold mt-1">{label}</div>
+    </div>
+  );
+}
+
+function ErrorsSectionHeader({
+  unresolvedCount,
+  resolvedCount,
+  over7dCount,
+}: {
+  unresolvedCount: number;
+  resolvedCount: number;
+  over7dCount: number;
+}) {
+  return (
+    <div className="mt-2">
+      <h2 className="text-sm font-bold text-[#11242e] uppercase tracking-[2px] mb-1">Errors</h2>
+      <p className="text-xs text-[#5a6a72]">
+        {unresolvedCount === 0 ? (
+          <>No unresolved errors. {resolvedCount > 0 ? `${resolvedCount} resolved (audit trail below)` : null}</>
+        ) : (
+          <>
+            {unresolvedCount} unresolved · {resolvedCount} resolved
+            {over7dCount > 0 && <span className="text-[#b3412e]"> · {over7dCount} over 7 days old</span>}
+          </>
+        )}
+      </p>
     </div>
   );
 }
