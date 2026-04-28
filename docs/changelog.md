@@ -4,6 +4,31 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-28: data-ops 011 DB tidy
+
+**Type:** One-off data cleanup. No schema change.
+
+Three deletions + nine dead_letter resolutions in one transaction. Owner instruction: single source of truth + tidy DB before building further.
+
+1. **Deleted routing_log entries for archived test submissions** (sid 29 charliemarieharris, sid 30 test7@testing.com). Both pre-date `applyOwnerTestOverrides` (which shipped 22 Apr) so they slipped past the test-row guard. One-off cleanup; no policy change needed because the guard prevents recurrence.
+2. **Deleted Anita's orphan routing_log entry** (sid 184). Per data-ops/010 her submission is now is_dq=true with primary_routed_to=NULL. Owner direction: this was a DQ lead on the waitlist, should not be in routing_log at all. Audit trail of the misroute lives in the data-ops/010 file + this changelog.
+3. **Marked 9 dead_letter rows resolved with explanatory notes**:
+   - id 85 (sheet_append fail for sid 29): archived test, no real failure.
+   - id 89 (Jodie Mccafferty sid 90 sheet_append fail): owner added to Courses Direct sheet manually 23 Apr; lead routed in DB.
+   - id 90 (Lesley-Ann Cawsey sid 109 sheet_append fail): same as above.
+   - ids 91-96 (six reconcile_backfill audit rows): cron found leads missing from DB and back-filled them; all six leads are present and routed correctly. Verified via unique-people count reconciliation.
+
+**Post-state:**
+- `leads.routing_log`: 94 rows (was 97).
+- `leads.dead_letter`: 0 unresolved (was 9).
+- Reconciliation: 94 routing-log = 89 unique people + 5 same-email duplicates (3 linked re-applications with same email as parent; 2 Jade Millward rapid-fire submissions). Closes cleanly.
+
+**Idempotency:** Each DELETE has WHERE clauses that match zero rows on a second run. UPDATE on dead_letter is guarded by `replayed_at IS NULL`. Safe to retry.
+
+**Signed off:** Owner (Session 14, 2026-04-28 morning).
+
+---
+
 ## 2026-04-27: Migration 0036 + awaiting-outcome fix
 
 **Type:** View redefinition + UI data fix.
