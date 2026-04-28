@@ -148,7 +148,7 @@ Things that are not needed yet but should be surfaced when the conditions are me
 | Dead letter table rows exceed 10 | Investigate upstream failure cause; flag to owner |
 | `leads.partials` volume crosses 200 sessions/week OR Iris starts asking funnel questions weekly | Prioritise Metabase setup — SQL queries become painful at that volume and Iris needs dashboards for ad optimisation |
 | Any `leads.partials` session with `upsert_count` ≥ 50 (cap hit) | Investigate abuse source; consider Cloudflare in front of `netlify-partial-capture` if recurring |
-| Recurring manual DB edits by owner | TRIGGERED 2026-04-22 → admin dashboard MVP in build per `platform/docs/admin-dashboard-scoping.md`. Re-fire this trigger if a NEW manual workflow emerges that the admin dashboard doesn't cover after Sessions A-F ship. |
+| Recurring manual DB edits by owner | FIRED 2026-04-22 → admin dashboard delivered (Sessions A-G shipped through 2026-04-27, deployed at admin.switchleads.co.uk). Re-fire this trigger if a NEW manual workflow emerges that the dashboard doesn't cover. |
 | Any schema change where impact touches 3+ consumers | Escalate to Mira for full impact assessment before shipping |
 
 ---
