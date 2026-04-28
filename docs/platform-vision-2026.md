@@ -1,7 +1,7 @@
-# Platform Vision — what could make this really special
+# Platform Vision: what could make this really special
 
-**Status:** Strategic doc, written 2026-04-25 in answer to Charlotte's prompt: *"how can we make this backend platform really special. i want to run the whole business from here."*
-**Purpose:** Collect every feature idea worth considering, categorised. Not a build queue — that's `admin-dashboard-scoping.md`. This is the longer view to inform what gets pulled into Sessions G, H, I onwards.
+**Status:** Strategic doc, written 2026-04-25 in answer to Charlotte's prompt: *"how can we make this backend platform really special. i want to run the whole business from here."* Refreshed 2026-04-28 (Session 14) to reflect what shipped and to lock in the principles that have crystallised in flight.
+**Purpose:** Collect every feature idea worth considering, categorised. Not a build queue (that's `admin-dashboard-scoping.md`). This is the longer view to inform what gets pulled into Sessions G, H, I onwards.
 
 ---
 
@@ -33,12 +33,63 @@ The features below are sorted into six tiers. Tier doesn't mean "priority" exact
 
 - **Session E:** live health bar + on-demand audit button (uses `vw_admin_health` already shipped)
 - **Session F:** GDPR erase pipeline (blocks on Clara retention input)
-- **Session G:** organic social module (LinkedIn + later Meta) — Thea's content workflow
+- **Session G:** organic social module (LinkedIn + later Meta), Thea's content workflow. **G.1, G.2, G.3, G.4 shipped 2026-04-26 / 2026-04-27.** First autonomous publish proven (Post 2 fired 2026-04-28 09:00 BST, 4-second lag, status `published`). G.5 (`social-draft-generate` autonomous Mon + Thu cron) is the remaining piece.
 - **Session H:** Meta + Instagram extension to Session G
 - **Session I:** cross-brand reporting module (placeholder added 2026-04-25)
-- **Phase 4:** provider portal at `app.switchleads.co.uk` — same codebase, RLS-scoped per provider
+- **Phase 4:** provider portal at `app.switchleads.co.uk`, same codebase, RLS-scoped per provider
 
 The roadmap below is *additive* to those.
+
+---
+
+## Shipped since 2026-04-25 (not in original queue)
+
+These weren't in the build queue at the bottom of this doc. They surfaced in flight as bug fixes, owner asks, or natural follow-ons from items that did ship. Logged here so the queue stays honest.
+
+| Date | Item | Why it happened |
+|------|------|-----------------|
+| 2026-04-26 | **Realtime auto-refresh fix** (Session 10) | Live bug: a real lead landed without auto-update. `realtime-refresh.tsx` now forwards `TOKEN_REFRESHED`, refreshes on `visibilitychange`/`focus`, reconnects with backoff. |
+| 2026-04-26 | **Status taxonomy refactor** (migration 0028) | `open / enrolled / presumed_enrolled / cannot_reach / lost` + `lost_reason` enum + `disputed_at` flag. Operationally separates "couldn't contact" from "contact made, declined". |
+| 2026-04-26 | **Per-provider catch-up page** (`/admin/providers/[id]/catch-up`) | Item B from this doc, pulled forward. Tuesday's call gets a dedicated review screen. |
+| 2026-04-27 | **Sessions G.1 to G.4** (multi-brand social automation) | 4 schema migrations, 2 Edge Functions, OAuth flow, drafts UI, analytics page. Post 1 published autonomously 2026-04-27. |
+| 2026-04-27 | **DQ leak fix** (ticket 869d2rxap) | Self-funded form was sending DQ'd learners to providers as if qualified. Form payload now carries `dq_reason` hidden input, Edge Function honours it, simulator updated, Anita backfilled. |
+| 2026-04-27 | **Admin dashboard correctness pass** (Session 13 batch 2) | Overview KPI to distinct emails, leads enrolled badge deepened, providers Total Enrolled + dual conversion, errors page DB reconciliation card, topbar dropdown rewritten as vanilla `UserMenu`. |
+| 2026-04-27 | **Migration 0036** | `vw_provider_billing_state.total_routed` redefined as distinct emails per provider. Reconciles with overview KPI. |
+| 2026-04-27 | **Awaiting outcome tile fix** | Was querying `enrolments WHERE status='open'` (1 row); now counts routed-no-terminal-outcome (84). |
+| 2026-04-28 | **DB tidy data-ops 011** | Deleted 2 archived test routing-log rows + Anita's orphan; resolved 9 dead_letter rows. Reconciliation closes cleanly: 94 routing-log = 89 unique people + 5 same-email duplicates. |
+| 2026-04-28 | **Overview business-health redesign** | Pace / Money / Provider scoreboard / Needs attention. Period selector (2d/7d/30d/lifetime). Confirmed vs potential split everywhere. Top-level conversion rate. Free-3 deal explicit. |
+| 2026-04-28 | **Lifecycle pills on `/admin/leads`** | All / Qualified / Routed / Awaiting / Enrolled / Lost / DQ / Archived. Each is a self-contained filter. |
+| 2026-04-28 | **`/admin/errors` reframe as Data health** | Reconciliation card always visible at top with plain-English explanation. Errors section below with clear empty-state. |
+| 2026-04-28 | **Manual ad-spend paste form** (`/admin/ads`) | Interim fallback while Meta API ingestion is blocked on FB device-trust. Same table, distinguishable rows (`ad_account_id='manual_paste'`). |
+| 2026-04-28 | **`/admin/analytics` page** | 7 sections: lead source quality, demographics, funnel drop-off, course demand vs supply, DQ patterns, geographic, time patterns. Period-aware. People-grain vs event-grain dedupe rule applied per section. Notable strip at top with deterministic flags. |
+
+---
+
+## Core principles (locked 2026-04-28)
+
+These crystallised over Sessions 13-14 as we untangled drift. Treat them as constraints when scoping any new feature; if a feature would violate one, fix the principle first or change it deliberately.
+
+- **One email = one person.** All people-counting metrics dedupe by `lower(trim(email))`. People-grain metrics (demographics, DQ patterns, geographic, top-level KPIs) use this. Event-grain metrics (sources, funnel, time, raw routing log) keep one row per event because each event has its own UTM, step, or timestamp that would be lost on dedupe.
+
+- **Reconciliation belongs on `/admin/errors` (Data health), not on the overview.** Overview answers "is the business winning?". Errors page answers "does the data add up, and is anything broken?". A user looking at the overview should never have to mentally reconcile two numbers; that's done for them on the errors page.
+
+- **Tidy DB before features.** Manual data hygiene precedes any new build that surfaces or aggregates data. Otherwise drift compounds and every new view inherits the noise. Pattern: spot the anomaly, write a `data-ops/NNN_*.sql` script, owner sign-off, apply, log in changelog.
+
+- **Provider emails never carry learner PII.** Hard rule (`feedback_provider_email_no_pii.md`). Provider notification emails carry lead ID + "check your sheet" only. Sheet is the access-gated channel; email is not.
+
+- **Routing log is append-only audit history.** Once a routing event lands, the row stays. Corrections happen via UPDATE on submissions, not DELETE on routing_log. Exception: archived test rows or fully-corrected misroutes can be cleaned out via dedicated `data-ops/` scripts with owner sign-off (precedent: data-ops 011).
+
+- **Period-aware vs lifetime.** Pace + ad spend respect the period selector. Conversion + revenue + provider state are lifetime. Period-aware conversion is misleading because of enrolment lag (lead routed week 1 might not enrol until week 4); always show conversion as a lifetime KPI.
+
+- **Confirmed vs potential.** Revenue and conversion math shows both: confirmed-only (lock-in, no dispute risk) and potential (incl. presumed enrolments per pilot rule in `business.md`). Single-number views are misleading; pair them.
+
+- **Free-3 per provider always factored into revenue.** Pilot deal: first 3 enrolments per provider are free. Every revenue figure already excludes these. Footnote in the UI keeps the calc transparent so the owner doesn't have to remember the rule.
+
+- **Plain English over jargon on the dashboard.** "Lead recovered from Netlify" not `reconcile_backfill`. "Database matches" not "All accounted for". "Held on DQ panel" not "Step 91". Internal column names stay; user-facing labels translate.
+
+- **Defence in depth on the data ingestion path.** When the form sends a flag (e.g. `dq_reason`), the Edge Function enforces the consequence (`is_dq=true`, `provider_ids=[]`) regardless of what other fields the payload also carries. The form may forget; the Edge Function shouldn't trust it.
+
+- **Manual fallback before automation.** When an automated path is blocked (e.g. Meta API on FB device-trust today), ship the manual paste form first. Same table, distinguishable rows, automation slots in later. Means the dashboard always has data to show, even on day one of a new metric.
 
 ---
 
@@ -137,49 +188,56 @@ Current state: every schema change is a `supabase db push` from CLI. Power user 
 
 ---
 
-## What I'd recommend prioritising next (after current Session D wraps)
+## Build queue, refreshed 2026-04-28
 
-**Status 2026-04-25: all 19 features below approved by owner.** Sequencing locked, build queue per below.
+Sequencing rebuilt to reflect what shipped, what's now blocking, and what's freshly worth pulling forward.
 
-### Build queue (in order)
+### Shipped
+
+| Original # | Item | Status |
+|---|---|---|
+| 1 | Auto-routing v1 (A) | Shipped via Edge Function single-candidate auto-route path + `crm.providers.auto_route_enabled` flag. |
+| 2 | Lead deduplication (D) | Shipped (migration 0026, `parent_submission_id` linkage on rapid re-submissions). |
+| 3 | In-dashboard provider catch-up (B) | Shipped Session 10 (`/admin/providers/[id]/catch-up`). |
+
+Plus the in-flight additions from the "Shipped since 2026-04-25" table above.
+
+### Up next (priority order, refreshed today)
 
 | # | Item | Tier | Estimate | Why this position |
-|---|------|------|----------|--------------------|
-| 1 | **Auto-routing v1 (A)** | 1 | 1-2h | Already designed, immediately removes the Charlotte-as-router bottleneck. Easy first win. |
-| 2 | **Lead deduplication (D)** | 1 | 2-3h | The Alistair-Divers double-row pattern keeps recurring. Cleans data before more downstream features build on top. |
-| ~~3~~ | ~~AI catch-up summaries (K)~~ | ~~3~~ | ~~half day~~ | **Deferred 2026-04-26.** Owner reasoning: if the dashboard surfaces data clearly, she can read it herself; can ask Claude in-session for prose. Re-fire trigger: dashboard becomes too noisy to read at a glance, OR owner asks for it. Implication: prioritise clear presentation over AI summarisation. |
-| 3 | **In-dashboard provider catch-up (B)** | 1 | half day | Tuesday's call gets a dedicated review page. Faster bulk-outcome marking. |
-| 4 | **Bulk operations (C)** | 1 | half day | Multi-select on the leads list. Archive / mark / route in batches. |
-| 5 | **AI follow-up email drafts (L)** | 3 | half day | Click "draft follow-up to Heena," get a draft in Charlotte's voice. Removes blank-page friction. |
-| 6 | **Anomaly detection — Sasha extension (E)** | 1 | 1 day | Daily pattern-watch on top of Sasha's existing Monday checks. Catches problems hours after they start. |
-| 7 | **Closed-loop attribution wiring (F)** | 2 | 1-2 days | Big payoff for Mira / reporting. Wires UTMs through routing → enrolment → revenue. Foundation for Session I. |
-| 8 | **Cohort analysis (I)** | 2 | 1 day | Funnel decay over time. Drives ad spend decisions. Session I work. |
-| 9 | **Multi-hand-off audit (V)** | 6 | half day | Re-routing chain visible. Plumbing — slot in alongside other write surfaces work. |
-| 10 | **Course YAML → DB sync (U)** | 6 | half day | Nightly sync, drift alerting. Removes "is the YAML in sync with the DB?" question. |
-| 11 | **Lead-to-content automation (M)** | 3 | 1 day | Milestones (50th lead, first enrolment) auto-draft Thea's posts. Closes the Switchable→SwitchLeads loop. |
-| 12 | **AI lead triage (J)** | 3 | 1 day | When multi-provider courses get real performance data, AI reads lead profile + history and recommends a routing. Phase 2 territory — needs enrolment data first. |
-| 13 | **Billing module (G)** | 2 | 2-3 days | Track pilot enrolment counts, free-tier exhaustion, generate invoices via GoCardless. Once 5+ providers are live this becomes daily admin. |
-| 14 | **Provider onboarding wizard (H)** | 2 | 2-3 days | 90 min manual onboarding → 5 min wizard. Built before next big provider sign-up wave. |
-| 15 | **Provider portal MVP read-only (N)** | 4 | ~2 weeks | The Phase 4 unlock. Sheets retire, `SHEETS_APPEND_TOKEN` retires, per-provider Apps Script retires. Foundation for items 16-17. |
-| 16 | **Provider self-serve outcome marking (O)** | 4 | 1 week | Built on top of #15. Tuesday calls die. |
-| 17 | **Provider invoicing portal (P)** | 4 | 1 week | Built on top of #13 + #15. Provider self-serves invoices, pays via GoCardless. Manual chase dies. |
-| 18 | **Learner status check page (Q)** | 5 | 2-3 days | Tracking URL on the thank-you page. Phase 2 territory. |
-| 19 | **Learner outcome feedback survey (R)** | 5 | 2-3 days | Closes the loop on lead quality. Drives provider scoring + ad targeting. |
-| 20 | **A/B variant tracking (T)** | 6 | 1 day | When you start running A/B tests on Switchable, this makes outcomes provable. Slot in when first A/B planned. |
-| 21 | **Migration UI in dashboard (W)** | 6 | 1 day | Self-serve schema state visibility. Quality-of-life. |
+|---|---|---|---|---|
+| 1 | **Meta ad spend ingestion** (NEW; was implicit in F) | 2 | half day to 1 day | Highest-leverage outstanding platform task. Unlocks closed-loop attribution, cost-per-lead, profit/loss math, and the Phase 1 KPI scorecard Mira's been waiting on. Currently blocked on FB device-trust check; manual paste form (`/admin/ads`) is the interim. Build the Edge Function + cron the moment FB unblocks; rest of the platform is wired and waiting. |
+| 2 | **Bulk operations (C)** | 1 | half day | Multi-select on the leads list. Archive / mark / route in batches. Friction every day for catch-up calls. |
+| 3 | **Anomaly detection (E)** | 1 | 1 day | Daily pattern-watch on top of Sasha's existing Monday checks. Now that the analytics page exists, the rules to watch are concrete and writeable. |
+| 4 | **AI follow-up email drafts (L)** | 3 | half day | Click "draft follow-up to Heena", get a draft in Charlotte's voice. Removes blank-page friction. Pairs with the Tuesday catch-up. |
+| 5 | **Closed-loop attribution finishing (F)** | 2 | half day | Most of the wiring exists (UTMs persisted on submissions, ad spend ingestion landing). Final layer: per-source CPL on the analytics page, per-source enrolment lifetime value, "best ad" view. Unlocks Mira's £10k revenue model. |
+| 6 | **Cohort analysis (I)** | 2 | 1 day | Funnel decay over time. "Of the 20 leads who submitted on May 5, how many enrolled by week 4?" Drives ad spend decisions. Slots naturally next to the analytics page. |
+| 7 | **Weekly report email** (NEW) | 1 | half day | Edge Function that emails Charlotte every Monday at 06:00 UK with the analytics highlights + Notable callouts + week-over-week deltas. Removes the "click through 5 pages" tax. Builds on existing analytics + Brevo wiring. |
+| 8 | **Multi-hand-off audit (V)** | 6 | half day | Re-routing chain visible (lead routed to EMS, EMS doesn't take, re-routed to WYK). Currently `primary_routed_to` overwrites. Plumbing for a future where re-routing is real. |
+| 9 | **Course YAML → DB sync (U)** | 6 | half day | Nightly sync + drift alerting between switchable/site YAMLs and `crm.provider_courses`. Closes the gap between content config and CRM. |
+| 10 | **Lead-to-content automation (M)** | 3 | 1 day | Milestones (50th lead, first enrolment) auto-draft Thea's posts. Closes the Switchable to SwitchLeads loop. |
+| 11 | **AI lead triage (J)** | 3 | 1 day | When multi-provider courses get real performance data, AI reads lead profile + history and recommends a routing. Phase 2 territory; needs enrolment data first. |
+| 12 | **Billing module (G)** | 2 | 2-3 days | Track pilot enrolment counts, free-tier exhaustion, generate invoices via GoCardless. Fires the moment first billable enrolment confirms (Susan, ~10 May). |
+| 13 | **Provider onboarding wizard (H)** | 2 | 2-3 days | 90-min manual onboarding to 5-min wizard. Pre-empts next provider sign-up wave. |
+| 14 | **Provider portal MVP read-only (N)** | 4 | ~2 weeks | The Phase 4 unlock. Sheets retire, `SHEETS_APPEND_TOKEN` retires, per-provider Apps Script retires. Foundation for #15-16. |
+| 15 | **Provider self-serve outcome marking (O)** | 4 | 1 week | Built on top of #14. Tuesday calls die. |
+| 16 | **Provider invoicing portal (P)** | 4 | 1 week | Built on top of #12 + #14. Provider self-serves invoices, pays via GoCardless. Manual chase dies. |
+| 17 | **Learner status check page (Q)** | 5 | 2-3 days | Tracking URL on the thank-you page. Phase 2 territory. |
+| 18 | **Learner outcome feedback survey (R)** | 5 | 2-3 days | Closes the loop on lead quality. Drives provider scoring + ad targeting. |
+| 19 | **A/B variant tracking (T)** | 6 | 1 day | When you start running A/B tests on Switchable, this makes outcomes provable. Slot in when first A/B planned. |
+| 20 | **Migration UI in dashboard (W)** | 6 | 1 day | Self-serve schema state visibility. Quality-of-life. |
+| 21 | **Session G.5: autonomous draft generation** | 3 | 1 day | `social-draft-generate` Edge Function, Mon + Thu cron, Thea writes / owner approves / system schedules. Closes the manual-content-load tax for the social automation. Last piece of Session G. |
 
-### Why this order
+### Why this order changed
 
-- **#1-6 ship over the next ~2 weeks.** Each builds on Session D foundations. Each removes friction or adds visibility you can feel daily.
-- **#7-8 ship in Session I window** — both are reporting / attribution wiring that justify the unified data layer.
-- **#9-11 are mid-tier** — useful, not urgent. Slot in alongside larger work.
-- **#13-14 ship before next provider wave** — pre-empt scaling pain.
-- **#15-17 are Phase 4** — provider portal arc, ~4-5 weeks total, sequenced together.
-- **#18-21 are Phase 2 / opportunistic** — learner experience + foundations. Slot in as relevance arises.
+- **#1 (Meta ad spend) jumped to top.** Wasn't on the original list at all because closed-loop attribution was framed as item 7. In practice, ad spend is the single missing input for half the dashboard's value (CPL, profit/loss, source-level conversion). Owner-flagged on 2026-04-28.
+- **AI catch-up summaries (K) stayed deferred.** Owner reasoning held: clear presentation beats AI summarisation. The analytics page + Notable strip is the alternative path, and it ships data faster than prose ever would.
+- **Weekly report email is new.** Builds on the analytics page. Trivial to write, removes the "I have to click through to find anything" tax for Mira's Monday review and Charlotte's morning glance.
+- **Session G.5 dropped to #21.** Not blocked, but lower leverage than the things above. Posts 2-12 are already queued and publishing autonomously per the cron; G.5 only matters once Thea wants to fully retire the manual-load step.
 
-### What "approved" means
+### What "in this queue" means
 
-The shapes are agreed. Each item's full scoping (database changes, UI design, edge cases) happens at the start of its session. This list is the *direction*, not the spec.
+Direction, not spec. Each item's full scoping (DB changes, UI design, edge cases) happens at the start of its session. The principles section above is the constraint set every scoping must respect.
 
 ---
 
