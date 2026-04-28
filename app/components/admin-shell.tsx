@@ -28,7 +28,8 @@ const NAV_SECTIONS: Array<{
     label: "Tools",
     items: [
       { href: "/social/drafts", label: "Social" },
-      { href: "/errors", label: "Errors" },
+      { href: "/ads", label: "Ad spend" },
+      { href: "/errors", label: "Data health" },
     ],
   },
 ];
