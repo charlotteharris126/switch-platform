@@ -22,6 +22,7 @@ const NAV_SECTIONS: Array<{
       { href: "/actions", label: "Actions" },
       { href: "/leads", label: "Leads" },
       { href: "/providers", label: "Providers" },
+      { href: "/analytics", label: "Analytics" },
     ],
   },
   {
