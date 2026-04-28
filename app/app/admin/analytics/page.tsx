@@ -299,6 +299,50 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
     .sort((a, b) => b.n - a.n)
     .slice(0, 12);
 
+  // ─── Notable patterns: deterministic flags worth acting on ─────────
+  // Each rule is small, opinionated, and self-explaining. Surfaces only
+  // when there's enough data to be confident. Not a "smart insights" pile;
+  // just facts the page would otherwise bury.
+  const notable: Array<{ tone: "bad" | "ok" | "good"; text: string; href?: string }> = [];
+  if (totalUniqueDQ >= 5) {
+    const topDQ = dqRows[0];
+    if (topDQ && topDQ.count / totalUniqueDQ >= 0.25) {
+      notable.push({
+        tone: "bad",
+        text: `${pct(topDQ.count, totalUniqueDQ)} of DQ'd people fell out for "${topDQ.label}". Worth tightening the form copy or adding a provider that covers it.`,
+      });
+    }
+  }
+  for (const r of courseRows) {
+    if (r.providerCount === 0 && r.leads >= 3) {
+      notable.push({
+        tone: "bad",
+        text: `Course "${r.course}" has ${r.leads} lead${r.leads === 1 ? "" : "s"} and zero providers attached. Demand without supply.`,
+      });
+    }
+  }
+  if (sourceRows.length > 0 && sourceRows[0].total >= 5) {
+    const top = sourceRows[0];
+    notable.push({
+      tone: "ok",
+      text: `Top source: ${top.source} (${top.medium ?? "—"} / ${top.campaign ?? "—"}) with ${top.total} leads, ${pct(top.qualified, top.total)} qualified.`,
+    });
+  }
+  if (totalRouted > 0 && totalEnrolled > 0) {
+    const conv = (totalEnrolled / totalRouted) * 100;
+    if (conv >= 10) {
+      notable.push({
+        tone: "good",
+        text: `Conversion (lifetime): ${conv.toFixed(1)}% routed-to-enrolled. Healthy at pilot scale.`,
+      });
+    } else if (conv < 5 && totalRouted >= 20) {
+      notable.push({
+        tone: "bad",
+        text: `Conversion (lifetime): ${conv.toFixed(1)}% routed-to-enrolled. Worth investigating provider follow-up speed or lead quality.`,
+      });
+    }
+  }
+
   // ─── Section 7: Time patterns ───────────────────────────────────────
   const dowCounts = Array(7).fill(0);
   const hourCounts = Array(24).fill(0);
@@ -325,6 +369,30 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
       />
 
       <PeriodPills active={period} />
+
+      {notable.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-[10px] uppercase tracking-[2px] text-[#5a6a72] font-bold">Notable</h2>
+          <div className="space-y-2">
+            {notable.map((n, i) => {
+              const cls =
+                n.tone === "bad"
+                  ? "border-[#cd8b76]/40 bg-[#fef9f5]"
+                  : n.tone === "good"
+                    ? "border-emerald-200 bg-emerald-50"
+                    : "border-[#dad4cb] bg-white";
+              const dot =
+                n.tone === "bad" ? "bg-[#cd8b76]" : n.tone === "good" ? "bg-emerald-500" : "bg-[#143643]";
+              return (
+                <div key={i} className={`border ${cls} rounded-lg px-4 py-2.5 flex items-start gap-3`}>
+                  <span className={`mt-1.5 inline-block w-2 h-2 rounded-full ${dot} flex-shrink-0`} />
+                  <p className="text-xs text-[#11242e]">{n.text}</p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Section 1: Sources */}
       <Section title="Lead source quality" subtitle="Where leads come from and how well each source converts.">
