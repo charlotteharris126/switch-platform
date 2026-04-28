@@ -154,12 +154,37 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   const enrolledSubIds = new Set(enrolments.filter((e) => e.status === "enrolled" || e.status === "presumed_enrolled").map((e) => e.submission_id));
   const totalAdSpend = adRows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
 
+  // Dedupe by email for sections that count *people* (demographics, DQ
+  // patterns, geographic). Sections that count *events* keep all rows
+  // (sources, funnel, time): each submission has its own UTM and timestamp
+  // and collapsing them would lose those signals.
+  //
+  // Tie-breaker rule: keep the latest non-DQ row per email if any exists,
+  // otherwise the latest row (so demographics shows the version of the
+  // person we'd actually engage with).
+  const subsByEmail = new Map<string, SubmissionRow>();
+  for (const s of subs) {
+    const key = s.email?.toLowerCase().trim() ?? "";
+    if (!key) continue;
+    const existing = subsByEmail.get(key);
+    if (!existing) {
+      subsByEmail.set(key, s);
+      continue;
+    }
+    const existingScore = (existing.is_dq ? 0 : 100) + new Date(existing.submitted_at).getTime() / 1e10;
+    const incomingScore = (s.is_dq ? 0 : 100) + new Date(s.submitted_at).getTime() / 1e10;
+    if (incomingScore > existingScore) subsByEmail.set(key, s);
+  }
+  const peopleSubs = Array.from(subsByEmail.values());
+
   // Helper: filter to "live" leads (we can use just non-DQ count or DQ count)
   const totalLeads = subs.length;
   const totalQualified = subs.filter((s) => !s.is_dq).length;
   const totalDQ = subs.filter((s) => s.is_dq).length;
   const totalRouted = subs.filter((s) => s.primary_routed_to).length;
   const totalEnrolled = subs.filter((s) => enrolledSubIds.has(s.id)).length;
+  const totalUniquePeople = peopleSubs.length;
+  const totalUniqueDQ = peopleSubs.filter((s) => s.is_dq).length;
 
   // ─── Section 1: Lead source quality ─────────────────────────────────
   // Group by utm_source × utm_campaign. utm_medium often duplicates source so
@@ -190,12 +215,12 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   }
   const sourceRows = Array.from(sourceMap.values()).sort((a, b) => b.total - a.total);
 
-  // ─── Section 2: Demographics ────────────────────────────────────────
-  const ageBands = bucketBy(subs, (s) => s.age_band, enrolledSubIds);
-  const employments = bucketBy(subs, (s) => s.employment_status, enrolledSubIds);
-  const interests = bucketBy(subs, (s) => s.interest, enrolledSubIds);
-  const qualifications = bucketBy(subs, (s) => s.qualification, enrolledSubIds);
-  const priorL3 = bucketBy(subs, (s) => (s.prior_level_3_or_higher === null ? null : s.prior_level_3_or_higher ? "Yes (Level 3+)" : "No"), enrolledSubIds);
+  // ─── Section 2: Demographics (deduped by email) ─────────────────────
+  const ageBands = bucketBy(peopleSubs, (s) => s.age_band, enrolledSubIds);
+  const employments = bucketBy(peopleSubs, (s) => s.employment_status, enrolledSubIds);
+  const interests = bucketBy(peopleSubs, (s) => s.interest, enrolledSubIds);
+  const qualifications = bucketBy(peopleSubs, (s) => s.qualification, enrolledSubIds);
+  const priorL3 = bucketBy(peopleSubs, (s) => (s.prior_level_3_or_higher === null ? null : s.prior_level_3_or_higher ? "Yes (Level 3+)" : "No"), enrolledSubIds);
 
   // ─── Section 3: Funnel drop-off ─────────────────────────────────────
   const stepMap = new Map<number, { step: number; total: number; completed: number; abandoned: number }>();
@@ -232,9 +257,9 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
     .map((r) => ({ ...r, providerCount: r.providers.size }))
     .sort((a, b) => b.leads - a.leads);
 
-  // ─── Section 5: DQ pattern analysis ─────────────────────────────────
+  // ─── Section 5: DQ pattern analysis (deduped by email) ──────────────
   const dqMap = new Map<string, number>();
-  for (const s of subs) {
+  for (const s of peopleSubs) {
     if (!s.is_dq) continue;
     const reason = s.dq_reason ?? "(unspecified)";
     dqMap.set(reason, (dqMap.get(reason) ?? 0) + 1);
@@ -244,9 +269,9 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
     .sort((a, b) => b.count - a.count);
   const dqMax = Math.max(1, ...dqRows.map((r) => r.count));
 
-  // ─── Section 6: Geographic distribution ─────────────────────────────
+  // ─── Section 6: Geographic distribution (deduped by email) ──────────
   const laMap = new Map<string, { la: string; total: number; qualified: number; enrolled: number }>();
-  for (const s of subs) {
+  for (const s of peopleSubs) {
     const la = s.la?.trim();
     if (!la) continue;
     let bucket = laMap.get(la);
@@ -260,9 +285,10 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   }
   const laRows = Array.from(laMap.values()).sort((a, b) => b.total - a.total);
 
-  // Postcode prefix (outward code, e.g. "SW1A") for self-funded leads
+  // Postcode prefix (outward code, e.g. "SW1A") for self-funded leads. Also
+  // deduped by email so one person counts once even if they submitted twice.
   const postcodeMap = new Map<string, number>();
-  for (const s of subs) {
+  for (const s of peopleSubs) {
     if (!s.postcode) continue;
     const pc = s.postcode.replace(/\s+/g, "").toUpperCase();
     const outward = pc.slice(0, Math.max(2, pc.length - 3));
@@ -291,8 +317,9 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
         title="Analytics"
         subtitle={
           <span>
-            {PERIOD_LABEL[period]} unless noted. {totalLeads} submissions, {totalQualified} qualified, {totalRouted}{" "}
-            routed, {totalEnrolled} enrolled.
+            {PERIOD_LABEL[period]} unless noted. {totalLeads} submissions from {totalUniquePeople} unique people,{" "}
+            {totalQualified} submissions qualified, {totalRouted} routed, {totalEnrolled} enrolled. Sections that count{" "}
+            <em>people</em> dedupe by email; sections that count <em>events</em> (sources, funnel, time) keep every row.
           </span>
         }
       />
@@ -400,7 +427,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
       {/* Section 5: DQ pattern analysis */}
       <Section
         title="DQ pattern analysis"
-        subtitle="Why people get DQ'd. Tall bars are the biggest leakage points to consider in copy or eligibility tuning."
+        subtitle="Why people get DQ'd. Tall bars are the biggest leakage points to consider in copy or eligibility tuning. Counts unique people, not events."
       >
         {dqRows.length === 0 ? (
           <Empty>No DQ rows in this window.</Empty>
@@ -411,7 +438,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
                 <div className="flex justify-between items-baseline text-xs">
                   <span className="text-[#11242e]"><strong>{r.label}</strong> <span className="font-mono text-[10px] text-[#5a6a72]">({r.reason})</span></span>
                   <span className="text-[#5a6a72]">
-                    {r.count} ({pct(r.count, totalDQ)})
+                    {r.count} ({pct(r.count, totalUniqueDQ)})
                   </span>
                 </div>
                 <div className="h-3 w-full bg-[#f4f1ed] rounded-full overflow-hidden">
