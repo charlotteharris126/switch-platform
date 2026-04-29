@@ -5,7 +5,7 @@
 //   - routing-confirm      — sends provider notification ("new enquiry, check sheet"),
 //                             owner fallback ("sheet append failed, paste manually"),
 //                             AND upserts the learner as a Brevo contact + adds to lists
-//                             so Brevo Automations can run the Switchable utility + nurture
+//                             so Brevo Automations can run the Switchable utility + marketing
 //                             sequences (Switchable brand, learner-facing).
 //
 // Secrets expected in env:
@@ -13,7 +13,7 @@
 //   BREVO_SENDER_EMAIL             — SwitchLeads verified sender (e.g. charlotte@switchleads.co.uk)
 //   BREVO_SENDER_EMAIL_SWITCHABLE  — Switchable verified sender (e.g. hello@switchable.org.uk)
 //   BREVO_LIST_ID_SWITCHABLE_UTILITY  — list ID for Switchable utility stream (contract basis)
-//   BREVO_LIST_ID_SWITCHABLE_NURTURE  — list ID for Switchable nurture stream (consent basis)
+//   BREVO_LIST_ID_SWITCHABLE_MARKETING  — list ID for the consolidated Switchable marketing list (consent basis)
 //
 // On error, the caller is responsible for logging to leads.dead_letter.
 // This helper surfaces the failure plainly and does not retry.
@@ -152,7 +152,7 @@ export async function upsertBrevoContact(args: UpsertContactArgs): Promise<Brevo
 
 /**
  * Add an existing contact to an additional Brevo list. Use when the contact
- * already exists (e.g. flipping a learner from utility-only to nurture-included
+ * already exists (e.g. flipping a learner from utility-only to marketing-included
  * after they later opt in).
  *
  * For first-time contact creation, prefer upsertBrevoContact with listIds

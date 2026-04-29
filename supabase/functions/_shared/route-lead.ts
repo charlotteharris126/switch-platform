@@ -189,7 +189,7 @@ export async function routeLead(
 
   // Brevo learner upsert (best-effort; failure logs dead_letter, doesn't unwind
   // routing). Fires here so both auto-route and manual-confirm paths trigger
-  // the Switchable utility + nurture email automations identically. Skips
+  // the Switchable utility + marketing email automations identically. Skips
   // silently if BREVO_LIST_ID_SWITCHABLE_UTILITY isn't set (i.e. before the
   // owner finishes the Brevo dashboard wiring) — no error, no dead_letter
   // spam, just a no-op until the env vars land.
@@ -364,9 +364,12 @@ function readCourse(routes: Map<string, MatrixRoute>, courseId: string): { title
 
 // Composes the learner's Brevo contact from the submission + provider rows
 // and upserts it into the Switchable utility list (contract basis, every
-// matched lead) plus the nurture list if marketing_opt_in=true (consent
-// basis). Brevo Automations watch list membership + attribute updates to
-// trigger the utility and nurture sequences described in switchable/email/.
+// matched lead) plus the marketing list if marketing_opt_in=true (consent
+// basis). The marketing list is a single consolidated list — earlier
+// designs split nurture vs monthly; collapsed 2026-04-29 because cadence
+// is a Brevo Automation concern, not a list-membership concern.
+// Brevo Automations watch list membership + attribute updates to trigger
+// the utility and marketing sequences described in switchable/email/.
 //
 // Best-effort: failure logs a leads.dead_letter row and returns. Routing is
 // already committed by the time we get here; Brevo is a downstream side-
@@ -379,7 +382,7 @@ async function upsertLearnerInBrevo(
   if (!submission.email) return;
 
   const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
-  const nurtureListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_NURTURE");
+  const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
 
   if (utilityListId == null) {
     // Email launch hasn't been wired yet — silently skip rather than spam
@@ -432,15 +435,15 @@ async function upsertLearnerInBrevo(
     return;
   }
 
-  if (submission.marketing_opt_in && nurtureListId != null) {
+  if (submission.marketing_opt_in && marketingListId != null) {
     const addResult = await addBrevoContactToList({
       email: submission.email,
-      listId: nurtureListId,
+      listId: marketingListId,
     });
     if (!addResult.ok) {
       await persistDeadLetter(sql, "edge_function_brevo_upsert",
         { provider_id: provider.provider_id, submission_id: submission.id },
-        `Brevo nurture-add failed: ${addResult.error ?? "unknown"}`);
+        `Brevo marketing-add failed: ${addResult.error ?? "unknown"}`);
     }
   }
 }

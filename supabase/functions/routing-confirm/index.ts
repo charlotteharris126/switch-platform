@@ -21,7 +21,7 @@
 //   BREVO_SENDER_EMAIL                  (read by route-lead.ts)
 //   BREVO_LIST_ID_SWITCHABLE_UTILITY    (read by route-lead.ts; optional until
 //                                        Brevo dashboard is wired)
-//   BREVO_LIST_ID_SWITCHABLE_NURTURE    (read by route-lead.ts; optional)
+//   BREVO_LIST_ID_SWITCHABLE_MARKETING  (read by route-lead.ts; optional)
 
 import postgres from "npm:postgres@3";
 import { verifyRoutingToken } from "../_shared/routing-token.ts";
