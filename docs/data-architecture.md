@@ -1,7 +1,7 @@
 # Data Architecture - Switchable Ltd
 
 **Status:** Live in production. Pilot schemas implemented; Sessions 3 and 3.3 operational. Session 5 (2026-04-21 evening) extends `leads.submissions` for multi-provider self-funded routing and adds `crm.providers.cc_emails`.
-**Last updated:** 2026-04-29 - **planned (not yet applied):** cohort-aware intake fields added to `leads.submissions` (`preferred_intake_id`, `acceptable_intake_ids`), `leads.routing_log` (`confirmed_intake_id`), and `crm.enrolments` (`intake_id`) per the multi-cohort intake spec in `switchable/site/docs/funded-funnel-architecture.md`. All additive, all nullable, `can_start_on_intake_date` retained for one transition cycle. Migration file pending — site-side code being staged first; migration ships alongside edge function deploy.
+**Last updated:** 2026-04-29 - migration 0041 applied: cohort-aware intake fields on `leads.submissions` (`preferred_intake_id`, `acceptable_intake_ids`) live, captured by `_shared/ingest.ts`, surfaced to provider sheets via `_shared/route-lead.ts`. Lead payload schema bumped 1.0 → 1.2 at the form. **Still planned (not yet applied):** `leads.routing_log.confirmed_intake_id` (only needed when owner overrides learner's pick at confirm time — no surface for that yet) and `crm.enrolments.intake_id` (only needed for per-cohort enrolment reporting). `can_start_on_intake_date` retained for one transition cycle.
 **Previous:** 2026-04-21 (Session 5 - self-funded canonical columns + cc_emails)
 **Schema versioning:** see `.claude/rules/schema-versioning.md` and Postgres addendum therein.
 
@@ -194,7 +194,7 @@ CREATE TABLE leads.submissions (
   outcome_interest           TEXT,
   why_this_course            TEXT,
 
-  -- Cohort-aware intake fields (added in migration NNNN — pending; lead payload schema v1.2).
+  -- Cohort-aware intake fields (added in migration 0041; lead payload schema v1.2).
   -- preferred_intake_id: the cohort the learner picked first when offered multiple
   --   (e.g. "tv-may-06"). On single-cohort pages, equals the only available cohort id.
   --   On rolling-start pages (schedule_type: rolling), NULL — those courses use

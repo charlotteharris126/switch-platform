@@ -57,6 +57,11 @@ export interface CanonicalSubmission {
   outcome_interest: string | null;
   why_this_course: string | null;
 
+  // Cohort-intake fields (lead payload schema 1.2, migration 0041). Set by
+  // multi-cohort funded pages; NULL on rolling-intake and pre-1.2 forms.
+  preferred_intake_id: string | null;
+  acceptable_intake_ids: string[];
+
   // Self-funded-shape learner fields (schema 1.1, Session 5). Any form may
   // send these; they simply carry null on funded submissions that don't
   // collect them. WYK's LIFT funded form collects `postcode` for the borough
@@ -227,6 +232,7 @@ export async function insertSubmission(
         first_name, last_name, email, phone, la, age_band,
         employment_status, prior_level_3_or_higher, can_start_on_intake_date,
         outcome_interest, why_this_course,
+        preferred_intake_id, acceptable_intake_ids,
         postcode, region, reason, interest, situation, qualification,
         start_when, budget, courses_selected,
         terms_accepted, marketing_opt_in,
@@ -240,6 +246,7 @@ export async function insertSubmission(
         ${row.first_name}, ${row.last_name}, ${row.email}, ${row.phone}, ${row.la}, ${row.age_band},
         ${row.employment_status}, ${row.prior_level_3_or_higher}, ${row.can_start_on_intake_date},
         ${row.outcome_interest}, ${row.why_this_course},
+        ${row.preferred_intake_id}, ${row.acceptable_intake_ids},
         ${row.postcode}, ${row.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
         ${row.terms_accepted}, ${row.marketing_opt_in},
@@ -376,6 +383,13 @@ function normalise(
     ),
     outcome_interest: firstString(data["outcome_interest"], data["outcome"]),
     why_this_course: firstString(data["why_this_course"], data["why"]),
+
+    // Schema 1.2 cohort fields. preferred_intake_id is a single string
+    // (slug like "tv-may-06"). acceptable_intake_ids comes from a hidden
+    // input as a CSV string OR as an array if Netlify groups duplicates;
+    // parseStringArray handles both shapes.
+    preferred_intake_id: firstString(data["preferred_intake_id"]),
+    acceptable_intake_ids: parseStringArray(data["acceptable_intake_ids"]),
 
     // Self-funded canonical fields (schema 1.1). Read generically at the
     // base so any form shape (self-funded, WYK-LIFT funded with postcode

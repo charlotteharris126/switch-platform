@@ -4,6 +4,20 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-29: Migration 0041 — cohort intake capture (lead payload v1.2)
+
+**Type:** Additive schema change + Edge Function ingest update.
+
+`leads.submissions` gains `preferred_intake_id TEXT` and `acceptable_intake_ids TEXT[]`. `_shared/ingest.ts` extracts the new fields from the form payload (form schema 1.2 hidden inputs `preferred_intake_id`, `acceptable_intake_ids`). `_shared/route-lead.ts` includes them in the sheet append payload so Apps Script v2 surfaces them on the provider sheet under header columns "Preferred intake" / "Acceptable intakes" once the owner adds those columns.
+
+Site shipped the form template + matrix.json + page YAML changes for two multi-cohort pages (Counselling Tees Valley 6 May + 2 Jun, SMM Tees Valley 21 May + 26 May) as part of the same coordinated push. Single-cohort and rolling-intake forms send NULL for these fields and pass through cleanly.
+
+**Deferred (not part of this migration):** `leads.routing_log.confirmed_intake_id` (no surface for owner override at confirm time yet) and `crm.enrolments.intake_id` (per-cohort enrolment reporting not yet needed). Both flagged in `platform/docs/data-architecture.md`.
+
+**Owner action:** add "Preferred intake" and "Acceptable intakes" columns to each provider sheet that runs multi-cohort courses. Apps Script v2 reads the header row, so existing Apps Script deploys don't need redeployment.
+
+---
+
 ## 2026-04-29: Migrations 0037-0040 + email + agents page + LinkedIn scope correction + trust-edit dashboard surface
 
 **Type:** Three migrations, Edge Function extension, dashboard addition, doc corrections.

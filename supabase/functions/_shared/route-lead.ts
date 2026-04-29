@@ -78,6 +78,8 @@ export interface SubmissionRow {
   primary_routed_to: string | null;
   archived_at: string | null;
   marketing_opt_in: boolean;
+  preferred_intake_id: string | null;
+  acceptable_intake_ids: string[] | null;
 }
 
 export type RouteTrigger = "owner_confirm" | "auto_route" | "re_application";
@@ -139,7 +141,8 @@ export async function routeLead(
              postcode, region, reason, interest, situation,
              qualification, start_when, budget, courses_selected,
              is_dq, primary_routed_to, archived_at,
-             marketing_opt_in
+             marketing_opt_in,
+             preferred_intake_id, acceptable_intake_ids
         FROM leads.submissions
        WHERE id = ${submissionId}
     `;
@@ -537,6 +540,14 @@ async function appendToProviderSheet(
     start_when: lc(submission.start_when),
     budget: lc(submission.budget),
     courses_selected: lc(coursesSelectedCsv),
+
+    // Cohort intake fields (lead payload schema 1.2). Apps Script v2 picks
+    // these up if the provider's sheet has matching headers ("Preferred
+    // intake", "Acceptable intakes"). Empty / NULL passes through as
+    // empty string so single-cohort and rolling-intake leads don't write
+    // garbage rows.
+    preferred_intake_id: lc(submission.preferred_intake_id),
+    acceptable_intake_ids: lc((submission.acceptable_intake_ids ?? []).join(", ")),
 
     // Provider-sheet notes column. Apps Script v2 FIELD_MAP recognises
     // "notes" / "note" / "comment" / "comments" header names. Populated
