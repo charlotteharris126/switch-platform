@@ -134,7 +134,7 @@ When the Phase 4 provider dashboard ships and a provider cuts over:
 ## References
 
 - Canonical script: `platform/apps-scripts/provider-sheet-appender-v2.gs`
-- v1 reference (kept until all sheets are migrated to v2): `platform/apps-scripts/provider-sheet-appender.gs`
+- v1 historical reference (no live deployments since 2026-04-29 EMS migration): `platform/apps-scripts/provider-sheet-appender.gs`
 - Routing flow architecture: `platform/docs/data-architecture.md` (§ `leads.submissions` writers + `crm.providers` sheet integration)
 - Session 5 design rationale: `platform/docs/changelog.md` 2026-04-21 (evening) entry
 - Hard rules on PII sharing: `memory/feedback_pii_sharing.md`, `memory/feedback_provider_email_no_pii.md`

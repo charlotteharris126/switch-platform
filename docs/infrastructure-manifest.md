@@ -116,13 +116,13 @@ Third-party services the live pipe calls out to.
 
 ## Apps Script deployments (per provider)
 
-Canonical script from Session 5 onwards: `platform/apps-scripts/provider-sheet-appender-v2.gs` (header-driven FIELD_MAP; one script, any sheet headers). v1 file is kept as reference only until the EMS deployment migrates to v2; v1 and v2 are both payload-compatible with Session 5 routing-confirm.
+Canonical script: `platform/apps-scripts/provider-sheet-appender-v2.gs` (header-driven FIELD_MAP; one script, any sheet headers). All three pilot provider sheets now run v2 as of 2026-04-29. v1 file (`provider-sheet-appender.gs`) retained in repo as historical reference only — no live deployments use it.
 
 Onboarding new providers: follow `platform/docs/provider-onboarding-playbook.md`.
 
 | Provider | Sheet ID | Web app URL (in `crm.providers.sheet_webhook_url`) | Script version | Status |
 |---|---|---|---|---|
-| `enterprise-made-simple` | `1ABX9p_5OQUS3kLD1ztvFYSccozoTOmt7RiiDBg4IOuU` | `https://script.google.com/macros/s/AKfycbw35aTlElUvxdU3zh-EwLeI0M_XUfLKHQoU08xewvz2Xgoz-UCbRa_4k4rE5k2sKT4R-Q/exec` | v1 | Live (Session 3, 2026-04-20). Migration to v2 optional; v1 ignores the extra payload keys from Session 5. |
+| `enterprise-made-simple` | `1ABX9p_5OQUS3kLD1ztvFYSccozoTOmt7RiiDBg4IOuU` | `https://script.google.com/macros/s/AKfycbw35aTlElUvxdU3zh-EwLeI0M_XUfLKHQoU08xewvz2Xgoz-UCbRa_4k4rE5k2sKT4R-Q/exec` | v2 | Live. Migrated v1 → v2 on 2026-04-29 to enable cohort intake columns ("Preferred intake" / "Acceptable intakes") for multi-cohort EMS courses (Counselling Tees Valley, SMM Tees Valley). URL preserved across migration (New version, not New deployment). End-to-end verified with live lead. |
 | `courses-direct` | owner to paste after sheet creation (data-ops/007) | owner to paste after Apps Script deploy (data-ops/007) | v2 | Session 5 - pending sheet creation + Apps Script v2 deploy. Unblocks auto-routing of self-funded leads. |
 | `wyk-digital` | owner to paste after sheet creation (data-ops/007) | owner to paste after Apps Script deploy (data-ops/007) | v2 | Session 5 - pending sheet creation + Apps Script v2 deploy. LIFT Digital Marketing Futures cohort starts 2026-04-27. |
 
@@ -165,3 +165,4 @@ Nothing retired yet.
 | 2026-04-19 | Initial manifest, post-incident (webhook-disabled outage). Seeded from Session 2 infra state. |
 | 2026-04-21 | Session 3.3 - added `netlify-leads-reconcile` Edge Function + `netlify-leads-reconcile-hourly` cron, noted audit-cron timeout fix. |
 | 2026-04-21 | Session 5 - Apps Script v2 canonical from this date; Courses Direct + WYK Digital added to provider deployments table pending sheet setup. SHEETS_APPEND_TOKEN reference updated to name both v1 and v2 scripts as valid deployments. |
+| 2026-04-29 | EMS migrated v1 → v2 (driven by multi-cohort cohort intake columns). All three pilot sheets now on v2. FIELD_MAP gained `preferredintake` and `acceptableintakes` entries, redeployed on all three sheets in lockstep. Live-lead verified end-to-end on EMS multi-cohort page. |
