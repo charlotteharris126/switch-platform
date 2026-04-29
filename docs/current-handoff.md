@@ -1,135 +1,128 @@
-# Platform: Current Handoff: 2026-04-28 (Session 15 closed): full-day pass on data discipline + business-health overview + analytics + roadmap refresh
+# Platform: Current Handoff: 2026-04-29 (Session 16 closed): email launch infra + cohort capture + agents page + cross-project audit
 
-**Session type:** Continuation of Session 14, picked up Tuesday morning. Owner direction: single source of truth + tidy DB before further build, then business-health overview, then analytics, then roadmap refresh.
+**Session type:** Continuation of Session 15 (closed early hours today). Wide cross-project session covering platform, switchable/email, switchable/site, and switchleads/social. Owner direction shifted multiple times; no-patchwork rule invoked once and the recommendation was reversed accordingly.
 
-**Session opened:** 2026-04-28 morning (continuation of Session 14)
-**Session closed:** 2026-04-28 evening
+**Session opened:** 2026-04-29 morning (07:06 BST start, post-Mira-review)
+**Session closed:** 2026-04-29 evening
 
 ---
 
 ## What we worked on
 
-### 1. DB tidy (data-ops 011, applied)
+### 1. /admin/agents page under Tools sidebar (deployed)
 
-Owner approved cleanup of three anomaly classes the morning audit surfaced:
+New static directory of every agent: name, role, project folder, cadence, automations. Live cron status per automation via `public.admin_cron_status()` (migration 0039 — SECURITY DEFINER, gated by `admin.is_admin()`). Green dot = scheduled and active, rose dot = scheduled but disabled, red dot = expected but missing from cron.job. Static roster + live cron query, hybrid surface.
 
-- 2 archived test routing-log rows (sid 29 charliemarieharris, sid 30 test7@testing.com): pre-22-Apr legacy from before `applyOwnerTestOverrides` shipped. Deleted.
-- 1 orphaned routing-log row (sid 184 Anita's DQ correction). Deleted (precedent set; DQ-corrected leads exit routing_log entirely).
-- 9 unresolved dead_letter rows: 3 historical sheet-append failures (1 archived test, 2 owner-handled-manually), plus 6 reconcile_backfill audit logs. All marked resolved with explanatory notes.
+### 2. Migration 0037 — `social` schema reads for `readonly_analytics` (deployed)
 
-Post-state: `leads.routing_log` 94 rows (was 97), `leads.dead_letter` 0 unresolved (was 9). Reconciliation closes cleanly: 94 sends = 89 unique people + 5 same-email duplicates (3 linked re-applications + 2 Jade Millward rapid-fire).
+Thea's MCP queries against `social.*` were failing with "permission denied for schema social". Migration grants USAGE on schema + SELECT on five tables (drafts, engagement_targets, engagement_queue, post_analytics, engagement_log) and six views, plus matching SELECT-only RLS policies for the role. Excluded sensitive tables (oauth_tokens, push_subscriptions).
 
-Anomaly 3 from the morning audit (Luana #159 "archived submission with open enrolment") was a false alarm: my UNION query mislabeled `e.status_updated_at` as `archived_at`. Luana is a normal routed-to-EMS lead. No action needed.
+### 3. Migration 0038 — provider trust content on `crm.providers` (deployed)
 
-### 2. Overview rebuilt as business-health (commit `5b0c5b3` then `d6a8fc7`)
+Added `trust_line TEXT`, `funding_types TEXT[]`, `regions TEXT[]`, `voice_notes TEXT` to `crm.providers`. Backfilled three signed providers verbatim from existing YAML files. WHERE-guarded backfill (`WHERE trust_line IS NULL`) to prevent re-run from overwriting owner edits. Tuesday's Path 4 (YAML-native) decision reversed — Edge Functions can't read switchable/site repo at runtime, so DB is canonical.
 
-Per owner direction "dashboard overview needs to be business health, reconciliation needs to exist in errors". Four sections:
+### 4. Migration 0039 — `public.admin_cron_status()` (deployed)
 
-1. **Pace** (period-aware): Leads in / Sent to providers / Enrolments confirmed / Meta ad spend. Each shows delta vs prior period.
-2. **Conversion** (lifetime): Confirmed conversion (7.9%) and Potential conversion incl. presumed (11.2%). Period-aware conversion is misleading because of enrolment lag, so this stays lifetime.
-3. **Money** (lifetime): Revenue confirmed (no dispute risk) / Revenue potential (incl. presumed) / Cost per lead / First billable date countdown. Italic footnote makes the free-3-per-provider deal explicit.
-4. **Provider scoreboard**: per-provider table with Routed / Enrolled / Conversion / Free left / Billable / Revenue.
-5. **Needs your attention**: Unrouted / Presumed / Disputed / Errors.
+SECURITY DEFINER function returning jobname, schedule, active. Powers the agents page live status. Function lives in `public` so PostgREST exposes it via default Data API schemas; admin gating happens at function body via `admin.is_admin()`.
 
-Period selector pills at top: Last 2 days / Last 7 days (default) / Last 30 days / Lifetime. Drives Pace + Meta ad spend.
+### 5. Migration 0040 — `crm.update_provider_trust()` RPC (deployed)
 
-### 3. Lifecycle pills on `/admin/leads` (commit `5b0c5b3`)
+SECURITY DEFINER, gated by `admin.is_admin()`, validates `funding_types` against `gov`/`self`/`loan`, writes audit row via `audit.log_action('edit_provider_trust', ...)`. Powers the new `/admin/providers/[id]/trust` form.
 
-Replaced the lifecycle period selector that used to live on the overview. Pills: All / Qualified / Routed / Awaiting outcome / Enrolled / Lost / DQ / Archived. Each is a self-contained filter that translates into the underlying submissions/enrolments query. Awaiting/Enrolled/Lost pre-fetch terminal-status submission IDs from `crm.enrolments` and pipe through `.in("id", ...)`.
+### 6. /admin/providers/[id]/trust form (deployed)
 
-### 4. Errors page reframed as Data health (commit `5b0c5b3`)
+Third tab on provider detail page. Form fields: trust line textarea, funding types multi-select pill buttons, regions comma-separated input, voice notes textarea. Pre-fills from existing values; doubles as initial-set + ongoing-edit surface. Replaces the SQL-paste recommendation from earlier (which Charlotte correctly flagged as patchwork).
 
-Renamed page, restructured into two clear sections:
+### 7. _shared/brevo.ts extension (deployed)
 
-- **DB reconciliation** (always visible, top): plain-English headline, "Match" / "Drift, investigate" badge, explanatory paragraph naming the breakdown in plain words. Today reads: "94 sends = 89 unique people + 5 known duplicates."
-- **Errors** (below): when 0 unresolved (current state), shows "No errors. Every webhook, sheet append, and ingestion ran cleanly." When >0, the existing per-source plain-English breakdown.
+Added BrevoBrand type, brand-aware sender selection in `sendBrevoEmail` (defaults to switchleads for backward compatibility), `upsertBrevoContact(email, attributes, listIds)`, `addBrevoContactToList(email, listId)`. Existing transactional callers (netlify-lead-router, netlify-leads-reconcile, routing-confirm) unchanged.
 
-### 5. Manual ad-spend paste form at `/admin/ads` (commit `e8303a7`)
+### 8. _shared/route-lead.ts extension + routing-confirm refactor (deployed)
 
-Interim before Meta API ingestion. Owner blocked on Meta developer portal device-trust check (account-flagged, mobile + laptop both bounced). Form takes date + spend + leads (impressions/clicks optional), upserts into `ads_switchable.meta_daily` with `ad_account_id='manual_paste'`. Manual rows distinguishable from API rows once API lands. Page shows 30-day blended tiles, paste form, audit table. Sidebar gains "Ad spend" under Tools.
+Brevo learner upsert + matrix.json fetch helpers added to `_shared/route-lead.ts`. Both auto-route and manual-confirm paths now fire the Switchable utility/marketing automations identically. Originally placed in routing-confirm only — caught by Thea's memory note that hooks belong in the shared helper. Refactored routing-confirm from 878 lines to 210 by replacing the duplicate routing pipeline with a `routeLead("owner_confirm")` call. Picks up audit logging + re-application-note features the inline version lacked.
 
-### 6. `/admin/analytics` page (commits `e50ee7b`, `c082ad1`, `66504cc`)
+### 9. Course attribute resolution via matrix.json fetch
 
-Big build. Single scrollable page with 7 sections + a Notable strip at top:
+`COURSE_NAME` and `COURSE_START_DATE` Brevo attributes resolve via fetch from `https://switchable.org.uk/data/matrix.json` (5-min cache, 3-second timeout, slug fallback on any failure). SECTOR deferred entirely. Email project signed off this approach as the proper architecture (vs another DB migration).
 
-- **Notable strip**: deterministic flags worth acting on. Rules: DQ leakage (any reason >=25% of DQs with sample >=5), demand without supply (course with >=3 leads, 0 providers), top source with qualified %, lifetime conversion green/red.
-- **Section 1**: Lead source quality (UTM source x medium x campaign with leads / qualified / routed / enrolled / conv %).
-- **Section 2**: Demographics (age band, employment, course interest, qualification goal, prior L3+) deduped by email.
-- **Section 3**: Funnel drop-off (per-step bars from `leads.partials` with completed/abandoned split, plain-English step labels).
-- **Section 4**: Course demand vs supply (course_id with leads, routed %, enrolled, provider count; flags "Demand without supply" rows).
-- **Section 5**: DQ pattern analysis (deduped by email).
-- **Section 6**: Geographic distribution (LA for funded, postcode outward code for self-funded).
-- **Section 7**: Time patterns (DOW + hour of day).
+### 10. Brevo SW_/SL_ namespacing + AGE_BAND defer + list consolidation (deployed)
 
-Period pills drive everything. Single big SELECT against submissions, single SELECT against partials, all bucketing in TypeScript. No Recharts/Tremor dependency.
+Three coordinated email-side changes landed mid-session:
+- All Switchable-specific Brevo attributes prefix with `SW_`. FIRSTNAME/LASTNAME stay unprefixed (Brevo defaults). Reserves `SL_` for future SwitchLeads attributes.
+- `SW_AGE_BAND` deferred to v2 — form age question is being redesigned (under 19 / 19-23 / 24-34 / 35+). Better to not push deprecated values now.
+- Switchable Nurture + Switchable Monthly lists consolidated into a single Switchable Marketing list. Cadence/branching is Brevo Automation logic, not list-membership.
 
-Dedup rule applied (commit `c082ad1`): demographics, DQ patterns, geographic count distinct people; sources, funnel, time keep event-grain. Page header subtitle calls out the rule explicitly.
+Live attribute count: 14 (FIRSTNAME, LASTNAME unprefixed + 12 SW_-prefixed). Three Brevo env vars set on Supabase (`BREVO_SENDER_EMAIL_SWITCHABLE`, `BREVO_LIST_ID_SWITCHABLE_UTILITY`, `BREVO_LIST_ID_SWITCHABLE_MARKETING`).
 
-### 7. Roadmap refresh (commit `c62ddcf`)
+### 11. Migration 0041 — cohort intake capture (deployed)
 
-`platform/docs/platform-vision-2026.md` was 3 days stale. Refreshed:
+`leads.submissions` gains `preferred_intake_id TEXT` and `acceptable_intake_ids TEXT[]`. Form schema bumped 1.0 → 1.2 by site session. ingest.ts extracts the new fields; route-lead.ts surfaces them on provider sheets via Apps Script v2 header mapping ("Preferred intake" / "Acceptable intakes"). Supports the two multi-cohort pages site is launching (Counselling Tees Valley 6 May + 2 Jun, SMM Tees Valley 21 May + 26 May).
 
-- Added "Shipped since 2026-04-25" table (14 entries covering Sessions 10-14).
-- Added "Core principles (locked 2026-04-28)" section with 11 rules. Treat as constraints when scoping any new feature.
-- Rebuilt the build queue: items 1-3 marked shipped; Meta ad spend ingestion promoted to **#1** (unlocks half the dashboard's value); weekly report email added as new #7; Session G.5 dropped to #21.
+Deferred: `leads.routing_log.confirmed_intake_id` and `crm.enrolments.intake_id`. Both flagged in data-architecture.md.
 
-This is now the canonical roadmap document. Next session should refresh it again from the bottom of the build queue.
+### 12. LinkedIn submission scope correction
 
-### 8. Marty disregard email sent
+Verified against current LinkedIn Community Management API docs. `r_member_social` is currently a CLOSED scope per LinkedIn FAQ #6. Charlotte's existing app carries only `openid`, `profile`, `email`, `w_member_social` (no analytics scope). Submission doc rewritten to request `r_member_postAnalytics` (the correct scope for member post analytics). Thea's CLAUDE.md and current-handoff updated to remove the false "already-granted r_member_social" premise. Analytics-sync cron stays paused.
 
-Owner sent the disregard email today. ClickUp ticket 869d2vpcj closed.
+### 13. Cross-project audit between platform / email / site
 
-### 9. Post 2 verified published
-
-Autonomous publish ran at 2026-04-28 09:00 BST, 4-second lag, status `published`, URN `urn:li:share:7454801595067686912`. Session G publish path proven for the second time.
+Three projects ran in parallel today; surfaced two crossed wires:
+- Tuesday's Path 4 decision (YAML-native trust content) was reversed once Edge Function filesystem-access constraint surfaced.
+- Earlier recommendation that `/new-course-page` skill should generate paste-able SQL was flagged as patchwork; rebuilt as proper admin form route.
+Both crossed wires resolved within the same session.
 
 ---
 
 ## Current state
 
-The platform now reads cleanly end to end:
+Email launch infrastructure is **end-to-end ready**. Every routed lead now upserts to Brevo with 14 attributes and adds to the Switchable Utility list (always) plus Marketing list (if opted in). Both auto-route and manual-confirm paths trigger identically. Three pilot providers' trust content is live in `crm.providers` and powers the upsert. Course context (title + start date) resolves from matrix.json with slug fallback. Three Brevo env vars are set; Brevo dashboard config is the remaining owner-side blocker.
 
-- Overview is pure business-health. Pace tiles + Money tiles + provider scoreboard + attention surfaces. Period selector. Confirmed vs potential everywhere.
-- `/admin/leads` has lifecycle pills. `/admin/providers` shows per-provider scoreboard with revenue.
-- `/admin/analytics` answers seven distinct business questions with a Notable callout strip on top.
-- `/admin/ads` lets the owner paste daily Meta totals manually until API ingestion unblocks.
-- `/admin/errors` (Data health) keeps reconciliation as a permanent always-visible card. 0 unresolved errors today.
-- Database tidy. 94 routing-log rows reconcile cleanly with 89 unique people. No orphan rows. No unresolved dead_letter.
+Multi-cohort intake capture is live end-to-end (form 1.2 → ingest → DB → sheet), waiting on site to push their template + simulator changes and on owner to add two columns to multi-cohort provider sheets.
 
-11 commits today on the platform repo (b13b6cb through c62ddcf actually 12 if I count yesterday's late ones).
+Cross-project communication is clean. No conflicts between platform/email/site. Thea's notes corrected. LinkedIn submission doc ready for Stage 2 once Session G `/social` module is presentable to LinkedIn reviewers.
 
 ---
 
 ## Next steps
 
-In priority order:
+In priority order for the next platform session:
 
-1. **Meta ad spend ingestion** (build queue #1). Owner's FB developer portal account-trust is flagging "use this device for a while" on both laptop and phone. Could clear in 24-72h. The moment it does: System User created (`switchable-readonly` ID 61589037205840), needs `ads_read` on the two ad account IDs assigned + a Meta app linked. Then I build `meta-spend-sync` Edge Function + cron + Vault entry + settings UI. ~half day to 1 day. Manual paste form at `/admin/ads` is the interim.
-2. **Bulk operations** (#2). Multi-select on `/admin/leads`. Archive / mark / route in batches.
-3. **Anomaly detection / Sasha extension** (#3). Daily pattern-watch on top of Sasha's Monday checks. Now that the analytics page exists the rules to watch are concrete and writeable.
-4. **Weekly report email** (new, #7 in queue). Edge Function emails the owner Monday at 06:00 UK with analytics highlights + Notable callouts + week-over-week deltas.
-5. **Mira's top priority for the week is in `switchleads/outreach/` (Rosa pipeline reset)**, not platform. We have not touched it today. Worth flagging next session opening: stay platform or pivot to Rosa.
+1. **No-match Brevo upsert in `netlify-lead-router`.** Currently a learner who submits and has no candidate provider gets zero email — no utility, no marketing. Should fire `SW_MATCH_STATUS=no_match` upsert with course interest, region, funding category attributes. Small piece of work (~30 min). Email project flagged this as required before email launch goes live.
+2. **`leads.routing_log.confirmed_intake_id` + UI surface.** Owner override of learner's preferred cohort at confirm time. Migration + small UI on `/admin/providers/[id]/catch-up` to slot the learner into a specific cohort. Site project flagged as deferred from migration 0041.
+3. **`crm.enrolments.intake_id` + reporting.** Per-cohort enrolment tracking so we can see "of the 8 leads who picked the May 6 counselling cohort, how many enrolled?" Slot in once cohort routing has been live for 2-4 weeks.
+4. **Three platform secrets overdue rotation** (BREVO_API_KEY, SHEETS_APPEND_TOKEN, ROUTING_CONFIRM_SHARED_SECRET). Ticket `869d0a9q7`. Carrying since 22 Apr.
+5. **Quarterly backup restore test** (data-infrastructure rule). Not done this quarter.
+6. **Continue platform queue:** Meta ad spend ingestion (#1, blocked on FB device-trust), bulk operations on /admin/leads (#2), anomaly detection / Sasha extension (#3).
 
-Open carry-forwards from earlier sessions:
-- 3 platform secrets overdue rotation (BREVO_API_KEY, SHEETS_APPEND_TOKEN, ROUTING_CONFIRM_SHARED_SECRET). Ticket 869d0a9q7.
-- Quarterly backup restore test (data-infra rule). Not done this quarter.
-- `/ultrareview` unavailable in owner's CLI build. Ticket 869d2cp0m.
+Carry-forward issues unchanged from Session 15 close:
+- 2 unresolved sheet-append rows from 23 April (id 89, 90) at the 7-day flag line — need owner triage.
+- Mira's THE priority for the week is Rosa pipeline reset in `switchleads/outreach/` — not platform — and was not actioned today.
 
 ---
 
 ## Decisions / open questions
 
-- **Decision (this session):** the 11 core principles in `platform/docs/platform-vision-2026.md`. Most consequential: "one email = one person", "reconciliation lives on Data health, not overview", "tidy DB before features", "manual fallback before automation".
-- **Decision (this session):** the routing log is append-only audit history with a documented exception for archived test rows + fully-corrected misroutes via dedicated `data-ops/` scripts. Precedent: data-ops 011.
-- **Decision (this session):** period-aware conversion is misleading. Conversion + revenue + provider state stay lifetime. Pace + ad spend respect the period selector.
-- **Decision (this session):** the platform-vision doc is the canonical roadmap going forward. Refresh from the bottom of the build queue when items ship.
-- **Open:** owner's FB developer portal account-trust block. No action required, just wait.
-- **Open:** whether to ship the weekly report email before or after Meta ingestion. Currently sequenced as #7 (after attribution wiring) but could pull forward to #2 (independent of Meta data).
+### Decisions made this session
+
+- **Provider trust content lives in `crm.providers`, not in YAML.** Reverses the Tuesday Path 4 decision. YAML files retained as version-controlled mirrors / audit history; not read at runtime by any system. Migration 0038 + WHERE-guarded backfill.
+- **`/new-course-page` skill writes via the new admin form, not via raw SQL.** Replaces the patchwork SQL-paste recommendation. Form lives at `/admin/providers/[id]/trust`.
+- **Brevo SW_/SL_ namespace convention.** Switchable attributes prefix `SW_`, future SwitchLeads attributes prefix `SL_`, Brevo built-ins (FIRSTNAME, LASTNAME, EMAIL) stay unprefixed. One email = one Brevo contact across both brands; namespacing prevents collisions.
+- **Switchable Nurture + Monthly collapsed into single Marketing list.** Cadence/branching belongs to Brevo Automations, not list membership.
+- **`SW_AGE_BAND` and `SECTOR` deferred to v2.** Age form-question being redesigned; SECTOR only used by post-launch nurture deep-dives.
+- **Routing-confirm and netlify-lead-router converge through `_shared/route-lead.ts`.** All routing-time hooks (Brevo, future analytics, future audit additions) belong in the shared helper, not the caller. Refactored routing-confirm to call `routeLead("owner_confirm")` instead of duplicating the pipeline.
+- **Auto-routing v1 is the default flow.** All three pilot providers have `auto_route_enabled=true`. Manual-confirm fires only on multi-candidate, auto-route-disabled providers, or fallback paths. Memory `feedback_owner_routes_leads.md` updated to reflect this.
+
+### Open questions
+
+- **No-match Brevo path scope.** Should `netlify-lead-router` upsert with empty PROVIDER_NAME / PROVIDER_TRUST_LINE and `SW_MATCH_STATUS=no_match`, or skip the upsert entirely until a match is found later? Email project's preference unclear.
+- **Stage 2 LinkedIn submission timing.** Submission doc is ready. Needs Charlotte to submit via developer.linkedin.com once Session G `/social` module is fully presentable to LinkedIn reviewers. Approval timeline 2-8 weeks once submitted.
+- **Email side-flow drafts** (12 emails: chase, post-call feedback, decline recirc, course lifecycle, testimonial ask, etc.) NOT yet drafted. Email project's job; non-blocking for utility + marketing v1 launch.
 
 ---
 
 ## Next session
 
-- **Currently in:** `platform/`.
-- **Next recommended:** if FB has unblocked, jump on Meta ad spend ingestion (build queue #1) since it's the single highest-leverage outstanding task. If FB still blocked, bulk operations (#2) or weekly report email (#7) are next-best platform items. If owner wants to switch folders, Rosa pipeline reset in `switchleads/outreach/` is Mira's top weekly priority and hasn't been touched.
-- **First task tomorrow:** ask the owner whether Meta dev portal has unblocked. If yes, walk through System User + app assignment + token generation. If no, pick the next platform item from the queue.
+- **Currently in:** `platform/` — email launch infra + cohort capture deployed; awaiting owner Brevo dashboard config + site push.
+- **Next recommended:** **`switchleads/outreach/`** — Mira's THE priority for the week (Rosa pipeline reset). Front-of-funnel for new providers has gone dry while back-end delivery is at peak. To-contact queue at 0, six connection-sent stale, five chase DMs overdue. Hasn't been touched today.
+- **If platform is the focus instead:** the no-match Brevo path is the highest-leverage next platform item. Email project flagged as required before launch goes live; ~30 min of work.
+- **First task tomorrow:** ask the owner whether email Brevo dashboard config has progressed (sender verified, attributes created, lists created with IDs noted, suppression rule, branding). If yes, do a synthetic submission test end-to-end. If no, switch to switchleads/outreach for Rosa pipeline reset.

@@ -16,6 +16,15 @@ Site shipped the form template + matrix.json + page YAML changes for two multi-c
 
 **Owner action:** add "Preferred intake" and "Acceptable intakes" columns to each provider sheet that runs multi-cohort courses. Apps Script v2 reads the header row, so existing Apps Script deploys don't need redeployment.
 
+**Correction (2026-04-29 later):** the "no redeploy needed" line above is wrong on two counts. Caught when a test lead `email@ignoreem.com` landed on the EMS sheet with the two new columns blank.
+
+1. **FIELD_MAP gap.** `platform/apps-scripts/provider-sheet-appender-v2.gs` had no entries for `preferred_intake_id` or `acceptable_intake_ids`. Two new keys added (`preferredintake` → `preferred_intake_id`, `acceptableintakes` → `acceptable_intake_ids`). Every v2 deployment needs a New Version push (NOT New Deployment — see playbook step 3.8).
+2. **Worse: EMS is still on v1.** The original session that shipped the multi-cohort form changes never checked that the EMS sheet (the only provider currently running multi-cohort courses) is on v1 hardcoded, not v2 header-driven. v1 has no FIELD_MAP and no notion of dynamic columns — it appends to fixed positions 1-17. Per `infrastructure-manifest.md` line 125, EMS migration to v2 was previously labelled "optional"; cohort fields make it necessary. Action: migrate EMS sheet to v2 in lockstep with confirming row 1 headers match FIELD_MAP-recognised names.
+
+WYK Digital and Courses Direct are on v2 already; FIELD_MAP update + redeploy applies to them too (harmless until they have multi-cohort columns, but keeps the canonical script in lockstep with git).
+
+**Lesson:** any time a new header is added to provider sheets, (a) the FIELD_MAP entry ships in the same change, (b) every sheet running v2 redeploys, AND (c) every sheet still on v1 either gets a hardcoded patch OR migrates to v2. Pre-flight should always check `infrastructure-manifest.md` Apps Script deployments table for the version each sheet runs.
+
 ---
 
 ## 2026-04-29: Migrations 0037-0040 + email + agents page + LinkedIn scope correction + trust-edit dashboard surface

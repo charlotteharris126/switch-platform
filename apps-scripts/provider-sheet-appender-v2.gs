@@ -122,6 +122,11 @@ const FIELD_MAP = {
   'budget':            'budget',
   'coursesselected':   'courses_selected',
   'courses':           'courses_selected',
+
+  // Cohort intake fields (lead payload schema 1.2, migration 0041).
+  // NULL on single-cohort / rolling-intake leads → empty cell.
+  'preferredintake':   'preferred_intake_id',
+  'acceptableintakes': 'acceptable_intake_ids',
 };
 
 function doPost(e) {
