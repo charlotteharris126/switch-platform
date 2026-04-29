@@ -1,149 +1,88 @@
-# Platform: Current Handoff: 2026-04-29 (Session 17 closed): Brevo learner enrichment fix
+# Platform: Current Handoff: 2026-04-29 (Session 18 closed): EMS sheet v1→v2 migration + cohort intake FIELD_MAP fix
 
-**Session type:** Targeted bug-fix session triggered by a synthetic test against the Brevo learner upsert flow. Email project (Switchable) ran the test and surfaced 7 defects on the same submission (lead 205, SMM Tees Valley, EMS). Six were one root cause; one was independent.
+**Session type:** Targeted bug-fix session triggered by a real test lead (`email@ignoreem.com`) landing on the EMS sheet with the two new cohort intake columns blank. Surfaced two pre-flight gaps from Session 16's Migration 0041 multi-cohort capture work.
 
-**Session opened:** 2026-04-29 evening
-**Session closed:** 2026-04-29 evening
+**Session opened:** 2026-04-29 (afternoon, post-Session-17)
+**Session closed:** 2026-04-29 (afternoon)
 
----
-
-## What we worked on (Session 17)
-
-### 1. Brevo enrichment fix — `_shared/route-lead.ts`
-
-Root cause for six of seven defects: `getCourseFromMatrix` indexed matrix.json route entries by `entry.courseId`, which doesn't exist in the published JSON. Routes use `slug`. Lookup has been silently failing for every routed lead since the helper shipped in Session 16. Every matrix-derived attribute fell through to the page-slug fallback (or was empty).
-
-Renamed helper to `getMatrixContext`, indexed by `slug`, expanded return shape to cover course-only slug + course title + region name + intake (id + formatted date) + both interest tags. Intake resolution: prefer `submission.preferred_intake_id` matched in `route.intakes[]`, else first intake, else legacy `nextIntake`.
-
-Brevo attribute composition rewritten:
-- `SW_COURSE_NAME` → `matrix.courseTitle` (was page slug)
-- `SW_COURSE_SLUG` → `matrix.courseId` (course-only slug; new field)
-- `SW_COURSE_INTAKE_ID` → resolved intake id (was missing)
-- `SW_COURSE_INTAKE_DATE` → resolved intake `dateFormatted` (renamed from `SW_COURSE_START_DATE`)
-- `SW_REGION_NAME` → `matrix.regionName` (was `submission.la`)
-- `SW_SECTOR` → `ffInterest` for funded leads, `cfInterest` otherwise (was missing)
-
-Seventh defect (independent): marketing list-add raced against Brevo's backend on a separate `addBrevoContactToList` call, surfacing a misleading 400. Collapsed into a single `upsertBrevoContact({listIds: [utility, marketing]})` call. Atomic, no race.
-
-### 2. Site change — `courseId` field in matrix.json
-
-`switchable/site/deploy/scripts/build-funded-pages.js` now emits `courseId: page.course` on every route. Purely additive; simulator and live pages key by `slug` and are unaffected. Site rebuild + push lands ahead of the Edge Function deploy so live matrix.json has the field before the helper reads it.
-
----
-
-## Deploy + verify
-
-1. Site committed + pushed (Netlify auto-deploys, ~2 min).
-2. Platform: `supabase functions deploy netlify-lead-router routing-confirm` — both share `_shared/route-lead.ts`. `verify_jwt = false` is already in `config.toml` for both.
-3. Owner action: confirm `BREVO_LIST_ID_SWITCHABLE_MARKETING` is set in Supabase secrets. The env var was renamed from `BREVO_LIST_ID_SWITCHABLE_NURTURE` in Session 16; if the rename didn't pick up, marketing list-add no-ops silently.
-4. Owner re-test: fresh non-owner email on SMM Tees Valley → verify 13 attributes correct + both list memberships in Brevo.
-
----
-
-## Carry: prior session (Session 16) detail below
-
-The full Session 16 close-out follows. Kept in this file because the Session 17 fix landed against Session 16 code without any further session running between the two. When the next platform session opens, replace this entire file with that session's handoff.
-
----
-
-# Platform: Session 16 (closed earlier 2026-04-29): email launch infra + cohort capture + agents page + cross-project audit
-
-**Session type:** Continuation of Session 15 (closed early hours today). Wide cross-project session covering platform, switchable/email, switchable/site, and switchleads/social. Owner direction shifted multiple times; no-patchwork rule invoked once and the recommendation was reversed accordingly.
-
-**Session opened:** 2026-04-29 morning (07:06 BST start, post-Mira-review)
-**Session closed:** 2026-04-29 evening
+**Original ask:** owner said "put me in switchable site". Actual work was entirely platform — switchable/site untouched.
 
 ---
 
 ## What we worked on
 
-### 1. /admin/agents page under Tools sidebar (deployed)
+### 1. Root cause of empty cohort columns on EMS sheet
 
-New static directory of every agent: name, role, project folder, cadence, automations. Live cron status per automation via `public.admin_cron_status()` (migration 0039 — SECURITY DEFINER, gated by `admin.is_admin()`). Green dot = scheduled and active, rose dot = scheduled but disabled, red dot = expected but missing from cron.job. Static roster + live cron query, hybrid surface.
+Session 16 shipped Migration 0041 + form schema 1.2 + `_shared/route-lead.ts` payload changes for `preferred_intake_id` and `acceptable_intake_ids`. Changelog instruction said "add Preferred intake / Acceptable intakes columns to provider sheets — no redeploy needed."
 
-### 2. Migration 0037 — `social` schema reads for `readonly_analytics` (deployed)
+Wrong on two counts:
 
-Thea's MCP queries against `social.*` were failing with "permission denied for schema social". Migration grants USAGE on schema + SELECT on five tables (drafts, engagement_targets, engagement_queue, post_analytics, engagement_log) and six views, plus matching SELECT-only RLS policies for the role. Excluded sensitive tables (oauth_tokens, push_subscriptions).
+1. **FIELD_MAP gap.** `provider-sheet-appender-v2.gs` had no entries for `preferred_intake_id` or `acceptable_intake_ids`. Even on v2 sheets, the cells stayed blank because the lookup table didn't know which payload key to fetch.
+2. **EMS still on v1.** Per `infrastructure-manifest.md` line 125 (pre-this-session), EMS ran `provider-sheet-appender.gs` (v1, hardcoded `appendRow` array), not v2. v1 has no FIELD_MAP at all — it appends to fixed positions 1-17 and ignores any header beyond that. Adding cohort columns to row 1 of an EMS-on-v1 sheet did nothing.
 
-### 3. Migration 0038 — provider trust content on `crm.providers` (deployed)
+### 2. FIELD_MAP fix in canonical script
 
-Added `trust_line TEXT`, `funding_types TEXT[]`, `regions TEXT[]`, `voice_notes TEXT` to `crm.providers`. Backfilled three signed providers verbatim from existing YAML files. WHERE-guarded backfill (`WHERE trust_line IS NULL`) to prevent re-run from overwriting owner edits. Tuesday's Path 4 (YAML-native) decision reversed — Edge Functions can't read switchable/site repo at runtime, so DB is canonical.
+Two entries added to `platform/apps-scripts/provider-sheet-appender-v2.gs`:
+- `'preferredintake':   'preferred_intake_id'`
+- `'acceptableintakes': 'acceptable_intake_ids'`
 
-### 4. Migration 0039 — `public.admin_cron_status()` (deployed)
+Header lookup is case- and punctuation-insensitive so "Preferred intake" / "Acceptable intakes" match.
 
-SECURITY DEFINER function returning jobname, schedule, active. Powers the agents page live status. Function lives in `public` so PostgREST exposes it via default Data API schemas; admin gating happens at function body via `admin.is_admin()`.
+### 3. EMS sheet migration v1 → v2
 
-### 5. Migration 0040 — `crm.update_provider_trust()` RPC (deployed)
+Owner walked through the migration in-session:
+- Confirmed EMS row 1 headers (19 columns) all map cleanly to v2 FIELD_MAP entries (14 auto-fill, 3 manual blanks for Enrolment date / Charge / Notes, 2 new cohort columns)
+- Owner replaced v1 script with v2 contents in EMS Apps Script editor, preserving the deployed TOKEN value
+- Used Deploy → Manage deployments → pencil → New version (NOT New deployment, per playbook step 3.8 / 2026-04-22 WYK incident)
+- Web app URL preserved unchanged (verified against `crm.providers.sheet_webhook_url`)
+- WYK Digital and Courses Direct sheets received the FIELD_MAP update + redeploy in lockstep (already on v2; harmless until they have multi-cohort columns, but keeps canonical script in sync)
 
-SECURITY DEFINER, gated by `admin.is_admin()`, validates `funding_types` against `gov`/`self`/`loan`, writes audit row via `audit.log_action('edit_provider_trust', ...)`. Powers the new `/admin/providers/[id]/trust` form.
+### 4. End-to-end verification
 
-### 6. /admin/providers/[id]/trust form (deployed)
+A real organic learner submission landed on EMS sheet with all 14 auto-columns populated AND both new cohort intake cells correctly filled. No synthetic test needed.
 
-Third tab on provider detail page. Form fields: trust line textarea, funding types multi-select pill buttons, regions comma-separated input, voice notes textarea. Pre-fills from existing values; doubles as initial-set + ongoing-edit surface. Replaces the SQL-paste recommendation from earlier (which Charlotte correctly flagged as patchwork).
+### 5. Documentation updates
 
-### 7. _shared/brevo.ts extension (deployed)
+- `platform/docs/changelog.md` 2026-04-29 Migration 0041 entry: "Correction (2026-04-29 later)" appended with full root-cause + lesson
+- `platform/docs/infrastructure-manifest.md`: line 125 EMS row flipped v1 → v2, summary text rewritten ("All three pilot sheets now run v2"), manifest changelog row added for 2026-04-29 migration
+- `platform/docs/provider-onboarding-playbook.md`: v1 reference reworded from "kept until all sheets are migrated to v2" → "historical reference, no live deployments since 2026-04-29 EMS migration"
 
-Added BrevoBrand type, brand-aware sender selection in `sendBrevoEmail` (defaults to switchleads for backward compatibility), `upsertBrevoContact(email, attributes, listIds)`, `addBrevoContactToList(email, listId)`. Existing transactional callers (netlify-lead-router, netlify-leads-reconcile, routing-confirm) unchanged.
+### 6. Test row archived
 
-### 8. _shared/route-lead.ts extension + routing-confirm refactor (deployed)
+Two test rows archived in `leads.submissions` via Supabase SQL editor (no admin dashboard archive button exists yet — see Open question 1):
+- `email@ignoreem.com` — original test row that surfaced the bug
+- `email2@ignoreem.com` — second test row from owner
 
-Brevo learner upsert + matrix.json fetch helpers added to `_shared/route-lead.ts`. Both auto-route and manual-confirm paths now fire the Switchable utility/marketing automations identically. Originally placed in routing-confirm only — caught by Thea's memory note that hooks belong in the shared helper. Refactored routing-confirm from 878 lines to 210 by replacing the duplicate routing pipeline with a `routeLead("owner_confirm")` call. Picks up audit logging + re-application-note features the inline version lacked.
+Pattern (mirrors data-ops/009 from 2026-04-25): `is_dq=true`, `dq_reason='owner_test_submission'`, `primary_routed_to=NULL`, `routed_at=NULL`, `provider_ids='{}'`, `archived_at=now()`. `leads.routing_log` rows preserved as audit history. Both deleted from EMS sheet manually afterwards.
 
-### 9. Course attribute resolution via matrix.json fetch
+### 7. Memory saved
 
-`COURSE_NAME` and `COURSE_START_DATE` Brevo attributes resolve via fetch from `https://switchable.org.uk/data/matrix.json` (5-min cache, 3-second timeout, slug fallback on any failure). SECTOR deferred entirely. Email project signed off this approach as the proper architecture (vs another DB migration).
-
-### 10. Brevo SW_/SL_ namespacing + AGE_BAND defer + list consolidation (deployed)
-
-Three coordinated email-side changes landed mid-session:
-- All Switchable-specific Brevo attributes prefix with `SW_`. FIRSTNAME/LASTNAME stay unprefixed (Brevo defaults). Reserves `SL_` for future SwitchLeads attributes.
-- `SW_AGE_BAND` deferred to v2 — form age question is being redesigned (under 19 / 19-23 / 24-34 / 35+). Better to not push deprecated values now.
-- Switchable Nurture + Switchable Monthly lists consolidated into a single Switchable Marketing list. Cadence/branching is Brevo Automation logic, not list-membership.
-
-Live attribute count: 14 (FIRSTNAME, LASTNAME unprefixed + 12 SW_-prefixed). Three Brevo env vars set on Supabase (`BREVO_SENDER_EMAIL_SWITCHABLE`, `BREVO_LIST_ID_SWITCHABLE_UTILITY`, `BREVO_LIST_ID_SWITCHABLE_MARKETING`).
-
-### 11. Migration 0041 — cohort intake capture (deployed)
-
-`leads.submissions` gains `preferred_intake_id TEXT` and `acceptable_intake_ids TEXT[]`. Form schema bumped 1.0 → 1.2 by site session. ingest.ts extracts the new fields; route-lead.ts surfaces them on provider sheets via Apps Script v2 header mapping ("Preferred intake" / "Acceptable intakes"). Supports the two multi-cohort pages site is launching (Counselling Tees Valley 6 May + 2 Jun, SMM Tees Valley 21 May + 26 May).
-
-Deferred: `leads.routing_log.confirmed_intake_id` and `crm.enrolments.intake_id`. Both flagged in data-architecture.md.
-
-### 12. LinkedIn submission scope correction
-
-Verified against current LinkedIn Community Management API docs. `r_member_social` is currently a CLOSED scope per LinkedIn FAQ #6. Charlotte's existing app carries only `openid`, `profile`, `email`, `w_member_social` (no analytics scope). Submission doc rewritten to request `r_member_postAnalytics` (the correct scope for member post analytics). Thea's CLAUDE.md and current-handoff updated to remove the false "already-granted r_member_social" premise. Analytics-sync cron stays paused.
-
-### 13. Cross-project audit between platform / email / site
-
-Three projects ran in parallel today; surfaced two crossed wires:
-- Tuesday's Path 4 decision (YAML-native trust content) was reversed once Edge Function filesystem-access constraint surfaced.
-- Earlier recommendation that `/new-course-page` skill should generate paste-able SQL was flagged as patchwork; rebuilt as proper admin form route.
-Both crossed wires resolved within the same session.
+`feedback_appender_version_preflight.md` — pre-flight rule: before instructing owner to add new columns to provider sheets, check `infrastructure-manifest.md` Apps Script deployments table for the version each sheet runs. v1 hardcoded → patch or migrate; v2 → ship FIELD_MAP entry in same change + redeploy every v2 sheet.
 
 ---
 
 ## Current state
 
-Email launch infrastructure is **end-to-end ready**. Every routed lead now upserts to Brevo with 14 attributes and adds to the Switchable Utility list (always) plus Marketing list (if opted in). Both auto-route and manual-confirm paths trigger identically. Three pilot providers' trust content is live in `crm.providers` and powers the upsert. Course context (title + start date) resolves from matrix.json with slug fallback. Three Brevo env vars are set; Brevo dashboard config is the remaining owner-side blocker.
+EMS sheet integration is now on v2 across all three pilot providers, end-to-end verified with a real lead. Cohort intake fields surface correctly on multi-cohort EMS sheets. Three changelog and manifest correction entries make the original Session 16 instruction permanent record.
 
-Multi-cohort intake capture is live end-to-end (form 1.2 → ingest → DB → sheet), waiting on site to push their template + simulator changes and on owner to add two columns to multi-cohort provider sheets.
-
-Cross-project communication is clean. No conflicts between platform/email/site. Thea's notes corrected. LinkedIn submission doc ready for Stage 2 once Session G `/social` module is presentable to LinkedIn reviewers.
+Two test rows fully archived. Owner-test allowlist (`OWNER_TEST_DOMAINS` in `_shared/ingest.ts`) does NOT cover `ignoreem.com`-style synthetic emails — they flow through normal routing and require manual archive. Consider extending the allowlist or adding `ignoreem.com` if owner uses it routinely.
 
 ---
 
 ## Next steps
 
-In priority order for the next platform session:
+In priority order:
 
-1. **No-match Brevo upsert in `netlify-lead-router`.** Currently a learner who submits and has no candidate provider gets zero email — no utility, no marketing. Should fire `SW_MATCH_STATUS=no_match` upsert with course interest, region, funding category attributes. Small piece of work (~30 min). Email project flagged this as required before email launch goes live.
-2. **`leads.routing_log.confirmed_intake_id` + UI surface.** Owner override of learner's preferred cohort at confirm time. Migration + small UI on `/admin/providers/[id]/catch-up` to slot the learner into a specific cohort. Site project flagged as deferred from migration 0041.
-3. **`crm.enrolments.intake_id` + reporting.** Per-cohort enrolment tracking so we can see "of the 8 leads who picked the May 6 counselling cohort, how many enrolled?" Slot in once cohort routing has been live for 2-4 weeks.
-4. **Three platform secrets overdue rotation** (BREVO_API_KEY, SHEETS_APPEND_TOKEN, ROUTING_CONFIRM_SHARED_SECRET). Ticket `869d0a9q7`. Carrying since 22 Apr.
-5. **Quarterly backup restore test** (data-infrastructure rule). Not done this quarter.
-6. **Continue platform queue:** Meta ad spend ingestion (#1, blocked on FB device-trust), bulk operations on /admin/leads (#2), anomaly detection / Sasha extension (#3).
+1. **Build archive/unarchive lead action on `/admin/leads/[id]`.** Real defect: `archived_at` column exists, leads-list filter has "Archived" tab, `app/lib/audit.ts` already names `archive_lead` / `unarchive_lead` action types, but no Server Action and no UI button. Owner forced into raw SQL with column-by-column risk every time. Owner has flagged this to platform; no ClickUp ticket created (per owner instruction).
+2. **No-match Brevo upsert in `netlify-lead-router`** (carried from Session 17). Learner with no candidate provider gets zero email. Should fire `SW_MATCH_STATUS=no_match` upsert. Required before email launch goes live.
+3. **`leads.routing_log.confirmed_intake_id` + UI surface** (carried from Session 16). Owner override of learner's preferred cohort at confirm time.
+4. **`crm.enrolments.intake_id` + reporting** (carried from Session 16). Per-cohort enrolment tracking. Slot in once cohort routing has been live 2-4 weeks.
+5. **Three platform secrets overdue rotation** (`BREVO_API_KEY`, `SHEETS_APPEND_TOKEN`, `ROUTING_CONFIRM_SHARED_SECRET`). Ticket `869d0a9q7`. Carrying since 22 Apr.
+6. **Quarterly backup restore test** (data-infrastructure rule). Not done this quarter.
+7. **Continue platform queue:** Meta ad spend ingestion (#1, blocked on FB device-trust), bulk operations on /admin/leads (#2), anomaly detection / Sasha extension (#3).
 
-Carry-forward issues unchanged from Session 15 close:
-- 2 unresolved sheet-append rows from 23 April (id 89, 90) at the 7-day flag line — need owner triage.
+Carry-forward unchanged from Session 17:
+- 2 unresolved sheet-append rows from 23 April (id 89, 90) at the 7-day flag line — owner triage still pending.
 - Mira's THE priority for the week is Rosa pipeline reset in `switchleads/outreach/` — not platform — and was not actioned today.
 
 ---
@@ -152,25 +91,26 @@ Carry-forward issues unchanged from Session 15 close:
 
 ### Decisions made this session
 
-- **Provider trust content lives in `crm.providers`, not in YAML.** Reverses the Tuesday Path 4 decision. YAML files retained as version-controlled mirrors / audit history; not read at runtime by any system. Migration 0038 + WHERE-guarded backfill.
-- **`/new-course-page` skill writes via the new admin form, not via raw SQL.** Replaces the patchwork SQL-paste recommendation. Form lives at `/admin/providers/[id]/trust`.
-- **Brevo SW_/SL_ namespace convention.** Switchable attributes prefix `SW_`, future SwitchLeads attributes prefix `SL_`, Brevo built-ins (FIRSTNAME, LASTNAME, EMAIL) stay unprefixed. One email = one Brevo contact across both brands; namespacing prevents collisions.
-- **Switchable Nurture + Monthly collapsed into single Marketing list.** Cadence/branching belongs to Brevo Automations, not list membership.
-- **`SW_AGE_BAND` and `SECTOR` deferred to v2.** Age form-question being redesigned; SECTOR only used by post-launch nurture deep-dives.
-- **Routing-confirm and netlify-lead-router converge through `_shared/route-lead.ts`.** All routing-time hooks (Brevo, future analytics, future audit additions) belong in the shared helper, not the caller. Refactored routing-confirm to call `routeLead("owner_confirm")` instead of duplicating the pipeline.
-- **Auto-routing v1 is the default flow.** All three pilot providers have `auto_route_enabled=true`. Manual-confirm fires only on multi-candidate, auto-route-disabled providers, or fallback paths. Memory `feedback_owner_routes_leads.md` updated to reflect this.
+- **EMS migrated v1 → v2.** No more v1 deployments live in production. v1 file in repo is now historical reference only.
+- **FIELD_MAP changes ship as a New version on every v2 sheet, in lockstep with git.** Even sheets that don't immediately use the new field get the redeploy, to keep the canonical script identical across deployments.
+- **No ClickUp ticket for the dashboard archive button gap.** Per owner: already flagged to platform via other channel.
 
 ### Open questions
 
-- **No-match Brevo path scope.** Should `netlify-lead-router` upsert with empty PROVIDER_NAME / PROVIDER_TRUST_LINE and `SW_MATCH_STATUS=no_match`, or skip the upsert entirely until a match is found later? Email project's preference unclear.
-- **Stage 2 LinkedIn submission timing.** Submission doc is ready. Needs Charlotte to submit via developer.linkedin.com once Session G `/social` module is fully presentable to LinkedIn reviewers. Approval timeline 2-8 weeks once submitted.
-- **Email side-flow drafts** (12 emails: chase, post-call feedback, decline recirc, course lifecycle, testimonial ask, etc.) NOT yet drafted. Email project's job; non-blocking for utility + marketing v1 launch.
+- **Does `OWNER_TEST_DOMAINS` need to cover `ignoreem.com`?** Or is owner happy to manually archive each synthetic test row? Decision affects whether to ship a tiny `_shared/ingest.ts` constant update + redeploy.
+- **Carry-forward open question from Session 17:** No-match Brevo path scope — upsert with empty PROVIDER_NAME / `SW_MATCH_STATUS=no_match` or skip upsert until match found?
 
 ---
 
 ## Next session
 
-- **Currently in:** `platform/` — email launch infra + cohort capture deployed; awaiting owner Brevo dashboard config + site push.
-- **Next recommended:** **`switchleads/outreach/`** — Mira's THE priority for the week (Rosa pipeline reset). Front-of-funnel for new providers has gone dry while back-end delivery is at peak. To-contact queue at 0, six connection-sent stale, five chase DMs overdue. Hasn't been touched today.
-- **If platform is the focus instead:** the no-match Brevo path is the highest-leverage next platform item. Email project flagged as required before launch goes live; ~30 min of work.
-- **First task tomorrow:** ask the owner whether email Brevo dashboard config has progressed (sender verified, attributes created, lists created with IDs noted, suppression rule, branding). If yes, do a synthetic submission test end-to-end. If no, switch to switchleads/outreach for Rosa pipeline reset.
+- **Currently in:** `platform/` — EMS migration closed; one new gap surfaced (admin dashboard archive button).
+- **Next recommended:** **`switchleads/outreach/`** — Mira's THE priority for the week (Rosa pipeline reset). Front-of-funnel for new providers has gone dry while back-end delivery is at peak. To-contact queue at 0, six connection-sent stale, five chase DMs overdue. Hasn't been touched today (carried from Session 17).
+- **If platform is the focus instead:** highest-leverage next platform items remain (a) the no-match Brevo path (Session 17 carry, ~30 min, blocks email launch), or (b) the archive/unarchive lead button (this session's surfaced gap, ~1h).
+- **Switchable/site work was the original ask but wasn't started.** If owner wants to restart there next session, ask what the actual switchable/site task is — original ask was generic ("put me in switchable site") with no specific work named before the EMS bug took the session.
+
+---
+
+## Carry: prior session (Session 17) summary
+
+Session 17 (2026-04-29 evening) was a Brevo learner enrichment fix triggered by a synthetic test from Email project. `getCourseFromMatrix` indexed matrix.json by `entry.courseId` which doesn't exist in the published JSON; fixed by indexing on `slug` and renaming to `getMatrixContext`. Six attribute defects collapsed; seventh (marketing list-add race) collapsed into single `upsertBrevoContact({listIds: [utility, marketing]})` call. Site shipped `courseId` field in matrix.json build. Both share `_shared/route-lead.ts`. Full detail in [changelog.md](changelog.md) under 2026-04-29 entries.
