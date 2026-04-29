@@ -20,12 +20,19 @@
 //
 // On Brevo Automations triggers: this helper deliberately does not implement
 // a generic "fire event" path. Brevo Automations can be triggered cleanly by
-// attribute updates on a contact (e.g. MATCH_STATUS=matched), which is what
+// attribute updates on a contact (e.g. SW_MATCH_STATUS=matched), which is what
 // upsertBrevoContact does. Using attribute-driven triggers keeps the integration
 // inside the standard Contacts API (BREVO_API_KEY, api.brevo.com/v3) and avoids
 // the separate Marketing Automation Track endpoint which needs its own ma-key
 // and tracker ID. If a future automation genuinely needs an event-stream model
 // rather than an attribute model, add fireBrevoEvent then — not before.
+//
+// Attribute namespacing convention (decided 2026-04-29):
+//   - FIRSTNAME / LASTNAME stay as unprefixed Brevo defaults.
+//   - Switchable-brand attributes prefix with SW_ (e.g. SW_COURSE_NAME).
+//   - SwitchLeads-brand attributes prefix with SL_ (e.g. SL_PILOT_STATUS).
+// One email = one Brevo contact across both brands; namespacing prevents
+// brand-specific fields colliding on shared records.
 
 const BREVO_TRANSACTIONAL_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
 const BREVO_CONTACTS_ENDPOINT = "https://api.brevo.com/v3/contacts";

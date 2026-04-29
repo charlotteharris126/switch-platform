@@ -388,24 +388,29 @@ async function upsertLearnerInBrevo(
   const course = await getCourseFromMatrix(submission.course_id);
   const courseName = course.title ?? submission.course_id ?? "";
 
+  // Attribute namespacing: FIRSTNAME / LASTNAME stay as unprefixed Brevo
+  // defaults (built-in fields). Everything Switchable-specific carries an
+  // SW_ prefix so it doesn't collide with future SwitchLeads SL_-prefixed
+  // attributes on the same Brevo contact (one email = one Brevo contact
+  // across both brands). Decision 2026-04-29.
   const attributes: BrevoAttributes = {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
-    COURSE_NAME: courseName,
-    COURSE_SLUG: submission.course_id ?? "",
-    COURSE_START_DATE: course.startDate ?? "",
-    REGION_NAME: regionSlug ?? "",
-    PROVIDER_NAME: provider.company_name,
-    PROVIDER_TRUST_LINE: provider.trust_line ?? "",
-    FUNDING_CATEGORY: submission.funding_category ?? "",
-    FUNDING_ROUTE: submission.funding_route ?? "",
-    AGE_BAND: submission.age_band ?? "",
-    EMPLOYMENT_STATUS: submission.employment_status ?? "",
-    OUTCOME_INTEREST: submission.outcome_interest ?? "",
-    CONSENT_MARKETING: submission.marketing_opt_in,
-    // MATCH_STATUS lets Brevo Automations trigger off attribute updates
+    SW_COURSE_NAME: courseName,
+    SW_COURSE_SLUG: submission.course_id ?? "",
+    SW_COURSE_START_DATE: course.startDate ?? "",
+    SW_REGION_NAME: regionSlug ?? "",
+    SW_PROVIDER_NAME: provider.company_name,
+    SW_PROVIDER_TRUST_LINE: provider.trust_line ?? "",
+    SW_FUNDING_CATEGORY: submission.funding_category ?? "",
+    SW_FUNDING_ROUTE: submission.funding_route ?? "",
+    SW_AGE_BAND: submission.age_band ?? "",
+    SW_EMPLOYMENT_STATUS: submission.employment_status ?? "",
+    SW_OUTCOME_INTEREST: submission.outcome_interest ?? "",
+    SW_CONSENT_MARKETING: submission.marketing_opt_in,
+    // SW_MATCH_STATUS lets Brevo Automations trigger off attribute updates
     // without needing a separate event API. See _shared/brevo.ts comment.
-    MATCH_STATUS: "matched",
+    SW_MATCH_STATUS: "matched",
   };
 
   const upsertResult = await upsertBrevoContact({
