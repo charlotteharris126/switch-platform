@@ -145,6 +145,28 @@ Email + password + TOTP code. Allowlist of internal user emails. Sessions via Su
 
 ---
 
+## Post-MVP small enhancements
+
+Single-action additions that the dashboard needs in production but don't justify a session of their own. Each item is small enough to ship inside another session (or in a quick standalone pass) once raised. Most recent first.
+
+### Archive / unarchive lead action on `/admin/leads/[id]`
+
+**Why:** every test row Charlotte archives currently forces raw SQL with column-by-column risk. Real defect, not a one-off — surfaced 2026-04-29 during the Brevo enrichment fix test cycle (Session 17). Same friction will hit production-lead correction flows (DQ overrides, accidental submissions, GDPR-adjacent removals).
+
+**What to build:**
+- Archive button on the lead detail page. Sets `archived_at = now()` on `leads.submissions`.
+- Unarchive button (only visible when `archived_at IS NOT NULL`). Sets `archived_at = NULL`.
+- Both write `audit.actions` rows via `audit.log_action` — action types `archive_lead` and `unarchive_lead` already used by the precedent set at sid 184 and the Session 15 test cleanup.
+- RPC pattern: `crm.archive_lead(submission_id)` / `crm.unarchive_lead(submission_id)`, SECURITY DEFINER, gated by `admin.is_admin()`. Matches the `crm.update_provider_trust` shape from migration 0040.
+- Confirm dialog on archive (irreversible-feeling action even though unarchive exists). No confirm on unarchive.
+- Visual: archived leads render with a muted treatment + "Archived YYYY-MM-DD" badge at the top of the detail page.
+
+**Spec already in code:** the SQL pattern is the routine `UPDATE leads.submissions SET archived_at = now()` + `INSERT audit.actions` shape used in earlier sessions. Migration adds two RPCs and an audit type addition (no schema change otherwise).
+
+**Surfaced from:** Session 17 (Brevo enrichment fix) test cycle on switchable/email side. Tagged `platform`.
+
+---
+
 ## Future architecture awareness (not MVP work, but constrains MVP design)
 
 ### Charts module replacing Metabase (Phase 2-3)
