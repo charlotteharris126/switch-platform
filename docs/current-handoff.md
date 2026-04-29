@@ -1,4 +1,14 @@
-# Platform: Current Handoff: 2026-04-29 (Session 19 closed): Brevo enrichment fix end-to-end + admin-brevo-resync tool + no-match build spec
+# Platform: Current Handoff: 2026-04-29 (Session 19 closed, late-evening doc-mirror append from switchable/site Session 45): Brevo enrichment fix end-to-end + admin-brevo-resync tool + no-match build spec
+
+## Late-evening doc-mirror append (2026-04-29, from switchable/site Session 45)
+
+The funding-category branching + 3-state `SW_MATCH_STATUS` + `SW_DQ_REASON` design (locked in this evening, full build spec at `platform/docs/no-match-brevo-build.md`, tracking ticket [869d3p127](https://app.clickup.com/t/869d3p127)) is now mirrored as an architectural record in **`platform/docs/data-architecture.md`** under a new section "Brevo learner upsert: funding-category branching and 3-state match" inserted after the provider trust content section.
+
+The data-architecture entry covers: design principle (self-funded nurture is sector-led, not course-led), branching table (`gov`/`loan` = matrix.json lookup; `self` = skip, `SW_SECTOR` from `submission.interest`), 3-state behaviour, `SW_DQ_REASON` 15th attribute, four forms covered, and an impact assessment noting no DB changes are required (this is Edge Function behaviour governed by the existing `leads.submissions` contract).
+
+No code changes from this append, just the design-doc update. Tomorrow's first-job build per ticket 869d3p127 is unaffected.
+
+---
 
 **Session type:** Bug-fix + tooling + scoping. Triggered by switchable/email's synthetic test 1 surfacing 7 defects in the Brevo learner upsert flow. Closed with the matched-lead path fully operational, a permanent operational tool for backfilling stale Brevo contacts, and a complete spec ready for tomorrow's first session.
 

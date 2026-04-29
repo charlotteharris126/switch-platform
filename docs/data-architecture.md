@@ -64,6 +64,53 @@ These appear in design only except `reference`, which is scoped to ship in Sessi
 
 **Impact assessment for migration 0038:** schema additions (4 columns, all nullable), backfill of 3 rows. Consumers: `routing-confirm` (now reads new columns), `/new-course-page` skill (writes new columns going forward). Reversible via DOWN section in the migration. Sign-off: owner approval in handoff order 2026-04-29.
 
+## Brevo learner upsert: funding-category branching and 3-state match (2026-04-29 evening, Session 19 revised)
+
+**Decision:** the Brevo learner upsert (`_shared/route-lead.ts`) branches top-level on `leads.submissions.funding_category` and writes a 3-state `SW_MATCH_STATUS` for every contact. No schema change required; this is Edge Function behaviour governed by the data contract already in `leads.submissions`.
+
+**Design principle (locks the architecture for downstream nurture):** self-funded nurture is sector-led, not course-led. Self-funded courses (Courses Direct etc.) are self-paced and rolling-start, with no intake date or region to anchor on, and the provider runs course-specific outreach themselves. Funded (`gov` / `loan`) learners stay course-led + cohort-led, anchored on `course_id` lookups against `matrix.json` published by the Switchable site.
+
+### Branching by `funding_category`
+
+| `funding_category` | Matrix lookup | `SW_SECTOR` source | Course / intake / region attributes |
+|---|---|---|---|
+| `gov`, `loan` | yes (by `course_id`) | `matrix.ffInterest` | populated from matched route |
+| `self` | skipped | `submission.interest` directly | left blank (no course/intake/region for self-funded) |
+
+Self-funded sector taxonomy = the values `/find-your-course/` already submits in `submission.interest`: `animals`, `business`, `construction`, `gardening`, `health`, `it`, `psychology`, `science`, `writing`, `personal-development`. No mapping table required; raw values pass through to `SW_SECTOR` and Brevo Automations branch on them.
+
+### 3-state `SW_MATCH_STATUS`
+
+| State | Trigger | Behaviour |
+|---|---|---|
+| `matched` | 1 candidate, auto-route fires | full upsert with provider attrs populated; funded path enters N1-N7 spine via Brevo Automations |
+| `pending` | 2+ candidates, awaiting owner confirm | upsert at submission time with provider attrs blank; owner confirm flips to `matched` via existing `routeLead` |
+| `no_match` | 0 candidates OR `is_dq=true` | upsert at submission time with provider attrs blank; `SW_DQ_REASON` populated when applicable |
+
+**Why upsert at submit time for `pending` and `no_match`:** so the contact still nurtures (utility + recirculation tracks) while the routing question resolves or the DQ path plays out. Without this, unmatched and pending learners would never reach Brevo at all, breaking the recirculation funnel.
+
+### `SW_DQ_REASON` (15th attribute)
+
+Pushed when `submission.is_dq=true`. Raw value from `submission.dq_reason` (no mapping). Brevo Automations branch on the raw values: `qual`, `budget`, `no-match`, `waitlist`, `waitlist_enrichment`. Configured in Brevo as the 15th `SW_`-namespaced contact attribute.
+
+### Forms covered
+
+All four flow through `netlify-lead-router` and the same upsert path:
+
+- `switchable-funded` (regional funded pages)
+- `switchable-self-funded` (`/find-your-course/`)
+- `switchable-waitlist` (DQ submit destination)
+- `switchable-waitlist-enrichment` (post-waitlist form on `/waitlist/?ref=<email>`; overwrites the existing Brevo contact with richer data, `SW_MATCH_STATUS` stays `no_match`)
+
+### Impact assessment
+
+- **Schema:** no DB changes. `funding_category`, `interest`, `dq_reason`, `is_dq` already on `leads.submissions`.
+- **Producers:** the four forms above.
+- **Consumers:** `_shared/route-lead.ts` (upsert), `netlify-lead-router/index.ts` (state branching), Brevo Automations on the email side. Brevo entry filter for the funded N1-N7 nurture spine: `SW_MATCH_STATUS=matched AND SW_FUNDING_CATEGORY IN (gov, loan)`. Self-funded `matched` contacts get the U-track utility automation only; sector-led self-funded nurture is a future workstream after funded N1-N7 is bedded in.
+- **Build spec:** `platform/docs/no-match-brevo-build.md` (locked 2026-04-29 evening, Session 19 revised). Tracking ticket: [869d3p127](https://app.clickup.com/t/869d3p127).
+- **Out of scope (deferred):** `SW_AGE_BAND` push (form age-question redesign needed first), Brevo email metrics ingestion into Supabase (Phase 2-3 trigger), per-state nurture content variation in N1-N7, sector-led self-funded sequence build.
+- **Sign-off:** owner decision in 29 Apr session; mirrored in `switchable/email/CLAUDE.md` as the canonical email-side reference.
+
 ### Planned: `reference.postcodes` (Session 5.1)
 
 Local postcode → region lookup loaded from the ONS Postcode Directory (quarterly refresh). Removes the dependency on any external postcode API; serves the router's region-derivation at capture time, and Iris / Mira regional analytics. Deferred from Session 5 because the ONS CSV is ~200MB and needs an owner download + apply step. Until it ships, `leads.submissions.region` stays NULL for self-funded submissions; the column exists but is not populated.
