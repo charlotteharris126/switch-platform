@@ -23,7 +23,12 @@
 // later from the owner-fallback email).
 
 import type { Sql } from "npm:postgres@3";
-import { sendBrevoEmail } from "./brevo.ts";
+import {
+  addBrevoContactToList,
+  type BrevoAttributes,
+  sendBrevoEmail,
+  upsertBrevoContact,
+} from "./brevo.ts";
 
 // -------- Types --------
 
@@ -38,6 +43,8 @@ export interface ProviderRow {
   active: boolean;
   archived_at: string | null;
   auto_route_enabled: boolean;
+  trust_line: string | null;
+  regions: string[] | null;
 }
 
 export interface SubmissionRow {
@@ -70,6 +77,7 @@ export interface SubmissionRow {
   is_dq: boolean;
   primary_routed_to: string | null;
   archived_at: string | null;
+  marketing_opt_in: boolean;
 }
 
 export type RouteTrigger = "owner_confirm" | "auto_route" | "re_application";
@@ -111,7 +119,8 @@ export async function routeLead(
     const [providerRow] = await sql<ProviderRow[]>`
       SELECT provider_id, company_name, contact_email, contact_name,
              sheet_id, sheet_webhook_url, cc_emails,
-             active, archived_at, auto_route_enabled
+             active, archived_at, auto_route_enabled,
+             trust_line, regions
         FROM crm.providers
        WHERE provider_id = ${providerId}
     `;
@@ -129,7 +138,8 @@ export async function routeLead(
              outcome_interest, why_this_course,
              postcode, region, reason, interest, situation,
              qualification, start_when, budget, courses_selected,
-             is_dq, primary_routed_to, archived_at
+             is_dq, primary_routed_to, archived_at,
+             marketing_opt_in
         FROM leads.submissions
        WHERE id = ${submissionId}
     `;
@@ -173,6 +183,14 @@ export async function routeLead(
     console.error("routeLead write phase failed:", err);
     return { kind: "db_error", error: describeError(err) };
   }
+
+  // Brevo learner upsert (best-effort; failure logs dead_letter, doesn't unwind
+  // routing). Fires here so both auto-route and manual-confirm paths trigger
+  // the Switchable utility + nurture email automations identically. Skips
+  // silently if BREVO_LIST_ID_SWITCHABLE_UTILITY isn't set (i.e. before the
+  // owner finishes the Brevo dashboard wiring) — no error, no dead_letter
+  // spam, just a no-op until the env vars land.
+  await upsertLearnerInBrevo(sql, provider, submission);
 
   // Side effects (best-effort): sheet append + provider notification.
   //
@@ -242,6 +260,185 @@ export async function routeLead(
     sheetAppended: true,
     providerNotified: true,
   };
+}
+
+// -------- Brevo learner upsert + course context fetch --------
+
+// Switchable site publishes matrix.json on every deploy. Same file the
+// /tools/form-matrix simulator and the funded course pages already use.
+// We fetch + cache it here so route-lead can resolve a course slug to its
+// display title and next-intake date for Brevo email attributes.
+//
+// Fail-safe: any error returns nulls. The Brevo upsert falls back to using
+// the slug as COURSE_NAME and omits COURSE_START_DATE entirely. Email still
+// ships, lead still nurtures, copy degrades slightly. Same best-effort
+// pattern as sheet append + provider notification.
+//
+// Cache: 5 minutes in-module. Edge Function instances are recycled between
+// cold starts so this is naturally bounded; fresh deploys see fresh data
+// within 5 minutes of the site rebuild.
+
+const MATRIX_URL = "https://switchable.org.uk/data/matrix.json";
+const MATRIX_CACHE_MS = 5 * 60 * 1000;
+const MATRIX_TIMEOUT_MS = 3000;
+
+interface MatrixRoute {
+  courseId?: string;
+  courseTitle?: string;
+  nextIntakeFormatted?: string;
+}
+
+interface MatrixCache {
+  loadedAt: number;
+  routes: Map<string, MatrixRoute>;
+}
+
+let matrixCache: MatrixCache | null = null;
+
+async function getCourseFromMatrix(courseId: string | null): Promise<{ title: string | null; startDate: string | null }> {
+  if (!courseId) return { title: null, startDate: null };
+
+  const now = Date.now();
+  if (matrixCache && now - matrixCache.loadedAt < MATRIX_CACHE_MS) {
+    return readCourse(matrixCache.routes, courseId);
+  }
+
+  // Single AbortController covers both the fetch handshake and the body read.
+  // Brevo got bitten in Session 3.3 by a slow body read after the timeout
+  // had cleared; same pattern would hang routing-confirm here. Keep the
+  // controller live until the JSON is fully read, then clear.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MATRIX_TIMEOUT_MS);
+  let res: Response;
+  let payload: unknown;
+  try {
+    res = await fetch(MATRIX_URL, { signal: controller.signal });
+    if (!res.ok) {
+      console.error(`matrix.json fetch ${res.status}`);
+      return { title: null, startDate: null };
+    }
+    payload = await res.json();
+  } catch (err) {
+    console.error("matrix.json fetch/parse failed:", String(err));
+    return { title: null, startDate: null };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const routes = new Map<string, MatrixRoute>();
+  if (Array.isArray(payload)) {
+    for (const entry of payload as MatrixRoute[]) {
+      if (entry && typeof entry.courseId === "string") {
+        routes.set(entry.courseId, entry);
+      }
+    }
+  } else if (payload && typeof payload === "object") {
+    const inner = (payload as { routes?: unknown }).routes;
+    if (Array.isArray(inner)) {
+      for (const entry of inner as MatrixRoute[]) {
+        if (entry && typeof entry.courseId === "string") {
+          routes.set(entry.courseId, entry);
+        }
+      }
+    }
+  }
+
+  matrixCache = { loadedAt: now, routes };
+  return readCourse(routes, courseId);
+}
+
+function readCourse(routes: Map<string, MatrixRoute>, courseId: string): { title: string | null; startDate: string | null } {
+  const route = routes.get(courseId);
+  if (!route) {
+    console.error(`matrix.json: course not found for id '${courseId}'`);
+    return { title: null, startDate: null };
+  }
+  return {
+    title: route.courseTitle ?? null,
+    startDate: route.nextIntakeFormatted ?? null,
+  };
+}
+
+// Composes the learner's Brevo contact from the submission + provider rows
+// and upserts it into the Switchable utility list (contract basis, every
+// matched lead) plus the nurture list if marketing_opt_in=true (consent
+// basis). Brevo Automations watch list membership + attribute updates to
+// trigger the utility and nurture sequences described in switchable/email/.
+//
+// Best-effort: failure logs a leads.dead_letter row and returns. Routing is
+// already committed by the time we get here; Brevo is a downstream side-
+// effect on the same footing as sheet append + provider notification.
+async function upsertLearnerInBrevo(
+  sql: Sql,
+  provider: ProviderRow,
+  submission: SubmissionRow,
+): Promise<void> {
+  if (!submission.email) return;
+
+  const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
+  const nurtureListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_NURTURE");
+
+  if (utilityListId == null) {
+    // Email launch hasn't been wired yet — silently skip rather than spam
+    // dead_letter. Owner sets the list IDs once Brevo dashboard is configured.
+    return;
+  }
+
+  const regionSlug = submission.la ?? submission.region ?? null;
+  const course = await getCourseFromMatrix(submission.course_id);
+  const courseName = course.title ?? submission.course_id ?? "";
+
+  const attributes: BrevoAttributes = {
+    FIRSTNAME: submission.first_name ?? "",
+    LASTNAME: submission.last_name ?? "",
+    COURSE_NAME: courseName,
+    COURSE_SLUG: submission.course_id ?? "",
+    COURSE_START_DATE: course.startDate ?? "",
+    REGION_NAME: regionSlug ?? "",
+    PROVIDER_NAME: provider.company_name,
+    PROVIDER_TRUST_LINE: provider.trust_line ?? "",
+    FUNDING_CATEGORY: submission.funding_category ?? "",
+    FUNDING_ROUTE: submission.funding_route ?? "",
+    AGE_BAND: submission.age_band ?? "",
+    EMPLOYMENT_STATUS: submission.employment_status ?? "",
+    OUTCOME_INTEREST: submission.outcome_interest ?? "",
+    CONSENT_MARKETING: submission.marketing_opt_in,
+    // MATCH_STATUS lets Brevo Automations trigger off attribute updates
+    // without needing a separate event API. See _shared/brevo.ts comment.
+    MATCH_STATUS: "matched",
+  };
+
+  const upsertResult = await upsertBrevoContact({
+    email: submission.email,
+    attributes,
+    listIds: [utilityListId],
+  });
+
+  if (!upsertResult.ok) {
+    await persistDeadLetter(sql, "edge_function_brevo_upsert",
+      { provider_id: provider.provider_id, submission_id: submission.id },
+      `Brevo learner upsert failed: ${upsertResult.error ?? "unknown"}`);
+    return;
+  }
+
+  if (submission.marketing_opt_in && nurtureListId != null) {
+    const addResult = await addBrevoContactToList({
+      email: submission.email,
+      listId: nurtureListId,
+    });
+    if (!addResult.ok) {
+      await persistDeadLetter(sql, "edge_function_brevo_upsert",
+        { provider_id: provider.provider_id, submission_id: submission.id },
+        `Brevo nurture-add failed: ${addResult.error ?? "unknown"}`);
+    }
+  }
+}
+
+function parseEnvInt(name: string): number | null {
+  const raw = Deno.env.get(name);
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 // -------- Prior-submission lookup (for "previously applied" sheet note) --------

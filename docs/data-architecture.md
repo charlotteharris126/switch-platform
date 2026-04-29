@@ -1,7 +1,8 @@
 # Data Architecture - Switchable Ltd
 
 **Status:** Live in production. Pilot schemas implemented; Sessions 3 and 3.3 operational. Session 5 (2026-04-21 evening) extends `leads.submissions` for multi-provider self-funded routing and adds `crm.providers.cc_emails`.
-**Last updated:** 2026-04-21 (Session 5 - self-funded canonical columns + cc_emails)
+**Last updated:** 2026-04-29 - **planned (not yet applied):** cohort-aware intake fields added to `leads.submissions` (`preferred_intake_id`, `acceptable_intake_ids`), `leads.routing_log` (`confirmed_intake_id`), and `crm.enrolments` (`intake_id`) per the multi-cohort intake spec in `switchable/site/docs/funded-funnel-architecture.md`. All additive, all nullable, `can_start_on_intake_date` retained for one transition cycle. Migration file pending — site-side code being staged first; migration ships alongside edge function deploy.
+**Previous:** 2026-04-21 (Session 5 - self-funded canonical columns + cc_emails)
 **Schema versioning:** see `.claude/rules/schema-versioning.md` and Postgres addendum therein.
 
 ---
@@ -42,6 +43,26 @@ Single source of truth for the structure of the Switchable Ltd business database
 | `marketplace` | Provider self-serve, ad/sponsorship space | Phase 4-5 |
 
 These appear in design only except `reference`, which is scoped to ship in Session 5.1. Tables for the other schemas get designed when the income stream is triggered, not now.
+
+## Provider trust content (DB-backed, source of truth = `crm.providers`)
+
+**Decision (2026-04-29, reverses 2026-04-28):** marketing content used in Switchable's automated learner emails (provider trust line, funding types, regions, voice notes) lives in `crm.providers` table columns. Migration 0038 added `trust_line TEXT`, `funding_types TEXT[]`, `regions TEXT[]`, `voice_notes TEXT` and backfilled from the three existing provider YAMLs. The `routing-confirm` Edge Function reads these columns from the provider row at routing time and pushes the content into Brevo as contact attributes (PROVIDER_NAME, PROVIDER_TRUST_LINE, etc.).
+
+**Why the reversal:** the prior 2026-04-28 Path 4 (YAML-native) decision assumed Edge Functions could read `switchable/site/deploy/data/providers/*.yml` at runtime. They cannot — Edge Functions run on Supabase serverless with no filesystem access to the Switchable site repo on Netlify. The three options surfaced were (a) HTTP-fetch the YAMLs from the live site at routing time, (b) bundle YAML content into the Edge Function deploy, (c) move trust content into `crm.providers`. Option (c) chosen as cleanest: single source of truth, no cross-service runtime dependency, no sync problem.
+
+**The YAML files** in `switchable/site/deploy/data/providers/<id>.yml` remain in the repo as version-controlled mirrors / audit history. They are not read at runtime by any system. The `/new-course-page` skill should be updated to write `crm.providers` UPDATE statements as the canonical edit, with optional YAML mirror commit for git history.
+
+**What's in `crm.providers` now:**
+
+- Operational data: `contact_email`, `cc_emails`, `auto_route_enabled`, `billing_model`, sheet URLs, GoCardless mandate references.
+- Marketing content (added 0038): `trust_line`, `funding_types`, `regions`, `voice_notes`.
+
+**Future migration trigger** (consolidating all provider state — already happens here, but tracked for Phase 4 dashboard build):
+
+1. Provider dashboard (Phase 4) reads same row for both operational and marketing content. Already supported by current shape — no further migration needed for that trigger.
+2. Provider self-serve editing of trust content arrives. Already DB-backed; the dashboard work is the UI layer, not a schema change.
+
+**Impact assessment for migration 0038:** schema additions (4 columns, all nullable), backfill of 3 rows. Consumers: `routing-confirm` (now reads new columns), `/new-course-page` skill (writes new columns going forward). Reversible via DOWN section in the migration. Sign-off: owner approval in handoff order 2026-04-29.
 
 ### Planned: `reference.postcodes` (Session 5.1)
 
@@ -169,9 +190,20 @@ CREATE TABLE leads.submissions (
   age_band                   TEXT,
   employment_status          TEXT,
   prior_level_3_or_higher    BOOLEAN,
-  can_start_on_intake_date   BOOLEAN,
+  can_start_on_intake_date   BOOLEAN, -- legacy single-cohort yes/no. Schema v1.1; retained for one transition cycle alongside the v1.2 cohort-aware fields below.
   outcome_interest           TEXT,
   why_this_course            TEXT,
+
+  -- Cohort-aware intake fields (added in migration NNNN — pending; lead payload schema v1.2).
+  -- preferred_intake_id: the cohort the learner picked first when offered multiple
+  --   (e.g. "tv-may-06"). On single-cohort pages, equals the only available cohort id.
+  --   On rolling-start pages (schedule_type: rolling), NULL — those courses use
+  --   start_when on the self-funded shape instead.
+  -- acceptable_intake_ids: every cohort the learner said yes to. Single-entry array
+  --   on single-cohort pages; can hold N entries when learner ticks multiple. NULL on
+  --   rolling-start pages.
+  preferred_intake_id        TEXT,
+  acceptable_intake_ids      TEXT[],
 
   -- Learner details - self-funded shape (added Session 5, migration 0011; set for
   -- switchable-self-funded submissions; NULL for funded). Additive - no existing
@@ -247,6 +279,14 @@ CREATE TABLE leads.routing_log (
   error_message     TEXT,
 
   n8n_execution_id  TEXT, -- LEGACY name from when n8n was the chosen tool (decision reversed 2026-04-18). Populated with the Edge Function request_id for traceback. Column rename deferred to keep migration churn low while the column has no rows; cleanup ticket on ClickUp.
+
+  -- Cohort-aware routing (added in migration NNNN — pending; lead payload schema v1.2).
+  -- The cohort the owner actually slotted the learner into at confirm time. May
+  -- differ from leads.submissions.preferred_intake_id if the owner overrode the
+  -- learner's first choice (e.g. preferred cohort full). NULL on legacy rows and
+  -- on rolling-start routings.
+  confirmed_intake_id TEXT,
+
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -464,6 +504,14 @@ CREATE TABLE crm.enrolments (
   gocardless_payment_id TEXT,
 
   notes                 TEXT,
+
+  -- Cohort tracking (added in migration NNNN — pending; lead payload schema v1.2).
+  -- The cohort this enrolment is associated with. Mirrors leads.routing_log.confirmed_intake_id
+  -- so per-cohort enrolment reporting (places filled per cohort, conversion per cohort)
+  -- can join enrolments → cohort metadata sourced from page YAML. NULL on legacy rows
+  -- and on rolling-start enrolments.
+  intake_id             TEXT,
+
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );

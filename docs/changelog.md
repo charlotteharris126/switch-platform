@@ -4,6 +4,89 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-29: Migrations 0037-0040 + email + agents page + LinkedIn scope correction + trust-edit dashboard surface
+
+**Type:** Three migrations, Edge Function extension, dashboard addition, doc corrections.
+
+### Migration 0037 — `social` schema reads for `readonly_analytics`
+
+Grants USAGE on `social` and SELECT on five tables (`drafts`, `engagement_targets`, `engagement_queue`, `post_analytics`, `engagement_log`) plus six views (`vw_pending_drafts`, `vw_post_performance`, `vw_engagement_queue_active`, `vw_targets_due_review`, `vw_rejection_patterns`, `vw_channel_status`) to `readonly_analytics`. Adds matching SELECT-only RLS policies because the existing `social.*` policies are scoped `FOR ALL TO authenticated USING admin.is_admin()` and would otherwise block the analytics role at the row filter.
+
+**Excluded:** `social.oauth_tokens` (LinkedIn refresh tokens) and `social.push_subscriptions` (per-user push endpoint URLs). Both stay locked to authenticated/admin only.
+
+**Why:** Thea's MCP queries against `social.*` were failing with "permission denied for schema social" — migration 0029 only granted privileges to `authenticated`. Sasha's and Mira's queries via the same role were also blocked.
+
+### Migration 0038 — provider trust content columns on `crm.providers`
+
+Adds `trust_line TEXT`, `funding_types TEXT[]`, `regions TEXT[]`, `voice_notes TEXT` to `crm.providers` and backfills the three signed providers verbatim from the existing YAML files (EMS, WYK Digital, Courses Direct).
+
+**Why:** reverses the 2026-04-28 Path 4 (YAML-native) decision. That decision assumed Edge Functions could read `switchable/site/deploy/data/providers/*.yml` at runtime. They cannot — Edge Functions run on Supabase serverless with no filesystem access to the Switchable site repo on Netlify. The three options surfaced in the cross-project session were (a) HTTP-fetch the YAMLs, (b) bundle into Edge Function deploy, (c) move into `crm.providers`. Option (c) chosen as cleanest single source of truth.
+
+**Schema versioning:** additive change to `crm.providers` (new columns, all NULL-able). Per `.claude/rules/schema-versioning.md` additive changes are free — no `schema_version` bump required. The lead payload from the form is unchanged.
+
+**Consumers updated:** `routing-confirm` Edge Function (now reads new columns + composes Brevo attributes). `/new-course-page` skill needs an update to write DB rows as canonical (with optional YAML mirror for git history) — flagged for next session in skill scope, not implemented today.
+
+**Doc updates:** `platform/docs/data-architecture.md` "Provider trust content" section rewritten to reflect the reversal. `switchable/email/CLAUDE.md` "Provider trust content" section rewritten. Provider YAML files (`enterprise-made-simple.yml`, `wyk-digital.yml`, `courses-direct.yml`) remain in `switchable/site/deploy/data/providers/` as version-controlled mirrors / audit history; not read at runtime by any system.
+
+### Migration 0039 — `public.admin_cron_status()` for the dashboard
+
+SECURITY DEFINER function returning `(jobname TEXT, schedule TEXT, active BOOLEAN)`. Gates at function body via `admin.is_admin()`. EXECUTE granted to `authenticated`.
+
+**Why:** the new `/admin/agents` page (Tools sidebar) needs to show live cron health alongside each agent's listed automations. `public.vw_cron_jobs` was revoked from API roles in 0015 (Supabase security scanner false-positive). A SECURITY DEFINER function avoids re-triggering that warning while keeping access tight via the admin allowlist. Function lives in `public` so PostgREST exposes it via the default Data API schemas (admin schema is internal and not auto-exposed).
+
+**Command column omitted** deliberately — some legacy crons still have plaintext shared secrets in their command bodies (see migration 0008). Function returns name/schedule/active only.
+
+### Edge Function — `_shared/brevo.ts` extension
+
+Added: `BrevoBrand` type (`switchleads | switchable`), brand-aware sender selection in `sendBrevoEmail` (defaults to switchleads for backward compatibility), `upsertBrevoContact(email, attributes, listIds)`, `addBrevoContactToList(email, listId)`. Existing `sendBrevoEmail` callers (netlify-lead-router, netlify-leads-reconcile, routing-confirm) untouched.
+
+**Triggers via attribute updates, not events.** Brevo Automations watch `MATCH_STATUS` attribute (`matched` | `no_match`) plus list membership. Avoids the separate Marketing Automation Track API which needs its own `ma-key` and tracker ID. Documented in the helper's header comment.
+
+### Edge Function — `_shared/route-lead.ts` Brevo hook + `routing-confirm` consolidation
+
+After successful routing-log INSERT + submissions UPDATE (and before sheet append), `routeLead` now upserts the learner as a Brevo contact with 14 attributes (FIRSTNAME, LASTNAME, COURSE_NAME, COURSE_SLUG, COURSE_START_DATE, REGION_NAME, PROVIDER_NAME, PROVIDER_TRUST_LINE, FUNDING_CATEGORY, FUNDING_ROUTE, AGE_BAND, EMPLOYMENT_STATUS, OUTCOME_INTEREST, CONSENT_MARKETING, MATCH_STATUS) and adds them to the Switchable utility list (always). If `marketing_opt_in=true`, adds to nurture list as a separate call.
+
+**Hook lives in `_shared/route-lead.ts`, not in any single caller.** Auto-route (`netlify-lead-router`) and manual-confirm (`routing-confirm`) both go through `routeLead`, so the Brevo trigger fires identically on both paths. Earlier in this session the upsert was wrongly placed in `routing-confirm` only — that would have skipped Brevo on the default auto-route path (all three pilot providers have `auto_route_enabled=true`). Spotted via the cross-project audit memory `feedback_owner_routes_leads.md`. Fixed by moving to the shared helper.
+
+**Best-effort:** failure logs `leads.dead_letter` with source `edge_function_brevo_upsert` and continues. Routing is committed before this fires; Brevo is a downstream side-effect on the same footing as sheet append + provider notification.
+
+**`routing-confirm` consolidation (no-patchwork follow-up).** The audit also surfaced that `routing-confirm` had its own duplicate routing pipeline (sheet append + provider notification + dead-letter logging) that pre-dated `routeLead` and never converged with it. As a result the manual-confirm path lacked audit logging and the prior-submission "previously applied" sheet note that the auto-route path has had since data-ops 010. Refactored `routing-confirm` to call `routeLead("owner_confirm")` and removed ~670 lines of duplicate code. File now: token verify → small `submitted_at` lookup for HTML lead-id formatting → `routeLead` call → render HTML based on `RouteOutcome`. Behaviour parity verified against the existing outcome shapes; both paths now identical except for trigger label and HTML response surface.
+
+**Course attribute resolution:** COURSE_NAME and COURSE_START_DATE resolve via a matrix.json fetch from `https://switchable.org.uk/data/matrix.json` (the same file the Switchable form-matrix simulator and funded course pages already use). 5-minute in-module cache, 3-second timeout, slug-fallback on any failure. Per the email project's spec: COURSE_NAME is needed at launch (every utility email's opening line); COURSE_START_DATE is needed for cohort-based courses (FCFJ, LIFT) and absent on rolling-intake self-funded; SECTOR is deferred entirely (only used by v2 nurture sector deep-dives, post-launch). No `crm.courses` migration needed — course content stays in YAML where the site build authors it. Fail-safe: any matrix fetch error falls back to using `course_id` slug as COURSE_NAME and omits COURSE_START_DATE, mirroring the existing best-effort sheet/email patterns.
+
+**New env required for go-live:** `BREVO_SENDER_EMAIL_SWITCHABLE`, `BREVO_LIST_ID_SWITCHABLE_UTILITY`, `BREVO_LIST_ID_SWITCHABLE_NURTURE`. Until set, the function silently skips the upsert (no error, no dead_letter spam). Owner sets these once Brevo dashboard configuration is complete.
+
+### `/admin/agents` page (Tools sidebar)
+
+New static + live-cron-status directory at `/admin/agents`. Static columns: agent name, role, project folder, cadence. Live column: automations cross-referenced against `cron.job` via `public.admin_cron_status()`. Green dot = active, rose dot = scheduled but disabled, red dot = listed but missing from cron.
+
+**Why:** quick-glance health view for "are the agent automations actually firing?" without needing Sasha's Monday report. Sasha's report stays the deep dive (last-run, errors, drift); this page is the at-a-glance.
+
+### LinkedIn submission scope correction
+
+The Stage 2 Marketing Developer Platform submission doc at `switchleads/social/docs/linkedin-developer-app-submission.md` previously listed `r_member_social` as the scope for member-side post analytics. Per current LinkedIn Community Management API docs (verified 2026-04-29):
+
+- `r_member_social` is currently a **closed** scope. LinkedIn FAQ #6 on the Community Management overview page: "We're not accepting access requests at this time due to resource constraints."
+- The correct scope for member post analytics is `r_member_postAnalytics`, gating the `memberCreatorPostAnalytics` endpoint.
+
+**Fix applied:** removed `r_member_social` from the submission doc, added `r_member_postAnalytics` with full justification text. Charlotte's existing Stage 1 app verified (by owner via developer.linkedin.com) to carry only `openid`, `profile`, `email`, `w_member_social` — no analytics scope at all.
+
+**Knock-on:** the `social-analytics-sync-daily` cron was already paused in migration 0034 (2026-04-27) on the same basis. Thea's `CLAUDE.md` and current handoff still described an "already-granted r_member_social scope" partial-analytics fallback — both updated to reflect reality (no API analytics until Stage 2 approval lands; manual screenshots into `Debugging/Screenshots/` in the meantime).
+
+### Migration 0040 + trust-edit dashboard surface
+
+After the initial recommendation that `/new-course-page` skill should draft SQL UPDATE blocks for Charlotte to paste into Supabase SQL Editor was correctly flagged as patchwork, built the proper write path:
+
+- **Migration 0040** — `crm.update_provider_trust(p_provider_id, p_trust_line, p_funding_types, p_regions, p_voice_notes)`. SECURITY DEFINER, gated by `admin.is_admin()`, validates `funding_types` against the allowed set (`gov`, `self`, `loan`), writes audit row via `audit.log_action('edit_provider_trust', ...)`. Same pattern as `crm.update_provider` (migration 0024) but scoped to the four trust columns only.
+- **`/admin/providers/[id]/trust` route** — new tab on provider detail page ("Trust content"). Renders an `EditTrustForm` client component with: trust line textarea, funding types as multi-select pill buttons (gov/self/loan), regions comma-separated input, voice notes textarea. Server Action `editProviderTrust` calls the RPC; toast feedback on success/failure; revalidates `/providers` and `/providers/[id]` paths. Form pre-fills from the existing row so it doubles as edit + initial-set surface.
+- **`/new-course-page` skill flow becomes:** during the trust-content interview, after capturing the four fields, the skill outputs the dashboard URL (`https://admin.switchleads.co.uk/admin/providers/<id>/trust`) and tells Charlotte to open it, paste the values, save. No raw SQL paste, validation enforced at both the form and the DB function, audit row written automatically. Skill side-effect (writing the YAML mirror file in `switchable/site/deploy/data/providers/`) stays optional for git history.
+
+### Signed off
+
+Owner approval in handoff order ("ok option c it is" → corrected to no-patchwork: built admin endpoint properly) + LinkedIn scope fixes confirmed via developer.linkedin.com OAuth scopes panel.
+
+---
+
 ## 2026-04-28: data-ops 011 DB tidy
 
 **Type:** One-off data cleanup. No schema change.
