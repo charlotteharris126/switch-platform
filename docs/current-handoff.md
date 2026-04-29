@@ -1,4 +1,52 @@
-# Platform: Current Handoff: 2026-04-29 (Session 16 closed): email launch infra + cohort capture + agents page + cross-project audit
+# Platform: Current Handoff: 2026-04-29 (Session 17 closed): Brevo learner enrichment fix
+
+**Session type:** Targeted bug-fix session triggered by a synthetic test against the Brevo learner upsert flow. Email project (Switchable) ran the test and surfaced 7 defects on the same submission (lead 205, SMM Tees Valley, EMS). Six were one root cause; one was independent.
+
+**Session opened:** 2026-04-29 evening
+**Session closed:** 2026-04-29 evening
+
+---
+
+## What we worked on (Session 17)
+
+### 1. Brevo enrichment fix — `_shared/route-lead.ts`
+
+Root cause for six of seven defects: `getCourseFromMatrix` indexed matrix.json route entries by `entry.courseId`, which doesn't exist in the published JSON. Routes use `slug`. Lookup has been silently failing for every routed lead since the helper shipped in Session 16. Every matrix-derived attribute fell through to the page-slug fallback (or was empty).
+
+Renamed helper to `getMatrixContext`, indexed by `slug`, expanded return shape to cover course-only slug + course title + region name + intake (id + formatted date) + both interest tags. Intake resolution: prefer `submission.preferred_intake_id` matched in `route.intakes[]`, else first intake, else legacy `nextIntake`.
+
+Brevo attribute composition rewritten:
+- `SW_COURSE_NAME` → `matrix.courseTitle` (was page slug)
+- `SW_COURSE_SLUG` → `matrix.courseId` (course-only slug; new field)
+- `SW_COURSE_INTAKE_ID` → resolved intake id (was missing)
+- `SW_COURSE_INTAKE_DATE` → resolved intake `dateFormatted` (renamed from `SW_COURSE_START_DATE`)
+- `SW_REGION_NAME` → `matrix.regionName` (was `submission.la`)
+- `SW_SECTOR` → `ffInterest` for funded leads, `cfInterest` otherwise (was missing)
+
+Seventh defect (independent): marketing list-add raced against Brevo's backend on a separate `addBrevoContactToList` call, surfacing a misleading 400. Collapsed into a single `upsertBrevoContact({listIds: [utility, marketing]})` call. Atomic, no race.
+
+### 2. Site change — `courseId` field in matrix.json
+
+`switchable/site/deploy/scripts/build-funded-pages.js` now emits `courseId: page.course` on every route. Purely additive; simulator and live pages key by `slug` and are unaffected. Site rebuild + push lands ahead of the Edge Function deploy so live matrix.json has the field before the helper reads it.
+
+---
+
+## Deploy + verify
+
+1. Site committed + pushed (Netlify auto-deploys, ~2 min).
+2. Platform: `supabase functions deploy netlify-lead-router routing-confirm` — both share `_shared/route-lead.ts`. `verify_jwt = false` is already in `config.toml` for both.
+3. Owner action: confirm `BREVO_LIST_ID_SWITCHABLE_MARKETING` is set in Supabase secrets. The env var was renamed from `BREVO_LIST_ID_SWITCHABLE_NURTURE` in Session 16; if the rename didn't pick up, marketing list-add no-ops silently.
+4. Owner re-test: fresh non-owner email on SMM Tees Valley → verify 13 attributes correct + both list memberships in Brevo.
+
+---
+
+## Carry: prior session (Session 16) detail below
+
+The full Session 16 close-out follows. Kept in this file because the Session 17 fix landed against Session 16 code without any further session running between the two. When the next platform session opens, replace this entire file with that session's handoff.
+
+---
+
+# Platform: Session 16 (closed earlier 2026-04-29): email launch infra + cohort capture + agents page + cross-project audit
 
 **Session type:** Continuation of Session 15 (closed early hours today). Wide cross-project session covering platform, switchable/email, switchable/site, and switchleads/social. Owner direction shifted multiple times; no-patchwork rule invoked once and the recommendation was reversed accordingly.
 

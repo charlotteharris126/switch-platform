@@ -24,7 +24,6 @@
 
 import type { Sql } from "npm:postgres@3";
 import {
-  addBrevoContactToList,
   type BrevoAttributes,
   sendBrevoEmail,
   upsertBrevoContact,
@@ -285,10 +284,24 @@ const MATRIX_URL = "https://switchable.org.uk/data/matrix.json";
 const MATRIX_CACHE_MS = 5 * 60 * 1000;
 const MATRIX_TIMEOUT_MS = 3000;
 
+interface MatrixIntake {
+  id?: string;
+  date?: string;
+  dateFormatted?: string;
+}
+
 interface MatrixRoute {
+  // Page slug — matches submission.course_id. Index key.
+  slug?: string;
+  // Course-only slug (YAML id, e.g. "smm-for-ecommerce"). Added 2026-04-29.
   courseId?: string;
   courseTitle?: string;
+  regionName?: string;
+  cfInterest?: string | null;
+  ffInterest?: string | null;
+  nextIntake?: string;
   nextIntakeFormatted?: string;
+  intakes?: MatrixIntake[];
 }
 
 interface MatrixCache {
@@ -296,14 +309,41 @@ interface MatrixCache {
   routes: Map<string, MatrixRoute>;
 }
 
+interface MatrixContext {
+  courseId: string | null;       // course-only slug
+  courseTitle: string | null;
+  regionName: string | null;
+  intakeId: string | null;
+  intakeDate: string | null;     // dateFormatted
+  cfInterest: string | null;
+  ffInterest: string | null;
+}
+
+const EMPTY_MATRIX_CONTEXT: MatrixContext = {
+  courseId: null,
+  courseTitle: null,
+  regionName: null,
+  intakeId: null,
+  intakeDate: null,
+  cfInterest: null,
+  ffInterest: null,
+};
+
 let matrixCache: MatrixCache | null = null;
 
-async function getCourseFromMatrix(courseId: string | null): Promise<{ title: string | null; startDate: string | null }> {
-  if (!courseId) return { title: null, startDate: null };
+// Resolve a submission's page slug against matrix.json. Returns the
+// course-only slug, course title, region name, the matched intake, and the
+// course's interest tags so callers can compose Brevo attributes (or any
+// other downstream context) without re-deriving from page slugs.
+async function getMatrixContext(
+  pageSlug: string | null,
+  preferredIntakeId: string | null,
+): Promise<MatrixContext> {
+  if (!pageSlug) return EMPTY_MATRIX_CONTEXT;
 
   const now = Date.now();
   if (matrixCache && now - matrixCache.loadedAt < MATRIX_CACHE_MS) {
-    return readCourse(matrixCache.routes, courseId);
+    return readRoute(matrixCache.routes, pageSlug, preferredIntakeId);
   }
 
   // Single AbortController covers both the fetch handshake and the body read.
@@ -318,47 +358,72 @@ async function getCourseFromMatrix(courseId: string | null): Promise<{ title: st
     res = await fetch(MATRIX_URL, { signal: controller.signal });
     if (!res.ok) {
       console.error(`matrix.json fetch ${res.status}`);
-      return { title: null, startDate: null };
+      return EMPTY_MATRIX_CONTEXT;
     }
     payload = await res.json();
   } catch (err) {
     console.error("matrix.json fetch/parse failed:", String(err));
-    return { title: null, startDate: null };
+    return EMPTY_MATRIX_CONTEXT;
   } finally {
     clearTimeout(timeoutId);
   }
 
   const routes = new Map<string, MatrixRoute>();
-  if (Array.isArray(payload)) {
-    for (const entry of payload as MatrixRoute[]) {
-      if (entry && typeof entry.courseId === "string") {
-        routes.set(entry.courseId, entry);
-      }
-    }
-  } else if (payload && typeof payload === "object") {
-    const inner = (payload as { routes?: unknown }).routes;
-    if (Array.isArray(inner)) {
-      for (const entry of inner as MatrixRoute[]) {
-        if (entry && typeof entry.courseId === "string") {
-          routes.set(entry.courseId, entry);
-        }
+  const inner = (payload && typeof payload === "object")
+    ? (payload as { routes?: unknown }).routes
+    : payload;
+  if (Array.isArray(inner)) {
+    for (const entry of inner as MatrixRoute[]) {
+      if (entry && typeof entry.slug === "string") {
+        routes.set(entry.slug, entry);
       }
     }
   }
 
   matrixCache = { loadedAt: now, routes };
-  return readCourse(routes, courseId);
+  return readRoute(routes, pageSlug, preferredIntakeId);
 }
 
-function readCourse(routes: Map<string, MatrixRoute>, courseId: string): { title: string | null; startDate: string | null } {
-  const route = routes.get(courseId);
+function readRoute(
+  routes: Map<string, MatrixRoute>,
+  pageSlug: string,
+  preferredIntakeId: string | null,
+): MatrixContext {
+  const route = routes.get(pageSlug);
   if (!route) {
-    console.error(`matrix.json: course not found for id '${courseId}'`);
-    return { title: null, startDate: null };
+    console.error(`matrix.json: route not found for slug '${pageSlug}'`);
+    return EMPTY_MATRIX_CONTEXT;
   }
+
+  // Intake resolution: prefer the learner's chosen intake if present in the
+  // route's intakes[]. Otherwise fall back to the legacy single-cohort
+  // nextIntake fields. Rolling-intake routes (no intakes[] entries) end up
+  // with null intake fields, which is correct.
+  let intakeId: string | null = null;
+  let intakeDate: string | null = null;
+  if (preferredIntakeId && Array.isArray(route.intakes)) {
+    const match = route.intakes.find((i) => i?.id === preferredIntakeId);
+    if (match) {
+      intakeId = match.id ?? null;
+      intakeDate = match.dateFormatted ?? null;
+    }
+  }
+  if (!intakeId && Array.isArray(route.intakes) && route.intakes.length > 0) {
+    intakeId = route.intakes[0].id ?? null;
+    intakeDate = route.intakes[0].dateFormatted ?? null;
+  }
+  if (!intakeDate) {
+    intakeDate = route.nextIntakeFormatted ?? null;
+  }
+
   return {
-    title: route.courseTitle ?? null,
-    startDate: route.nextIntakeFormatted ?? null,
+    courseId: route.courseId ?? null,
+    courseTitle: route.courseTitle ?? null,
+    regionName: route.regionName ?? null,
+    intakeId,
+    intakeDate,
+    cfInterest: route.cfInterest ?? null,
+    ffInterest: route.ffInterest ?? null,
   };
 }
 
@@ -390,9 +455,16 @@ async function upsertLearnerInBrevo(
     return;
   }
 
-  const regionSlug = submission.la ?? submission.region ?? null;
-  const course = await getCourseFromMatrix(submission.course_id);
-  const courseName = course.title ?? submission.course_id ?? "";
+  const matrix = await getMatrixContext(submission.course_id, submission.preferred_intake_id);
+
+  // SW_SECTOR maps to the course's interest tag in the funding-appropriate
+  // taxonomy. Funded leads (gov funding_category) read ffInterest because
+  // that's what /find-funded-courses categorises by; self-funded and
+  // loan-funded leads read cfInterest because that's the course-finder
+  // taxonomy. Falls back to the other side if the primary is missing.
+  const sector = submission.funding_category === "gov"
+    ? (matrix.ffInterest ?? matrix.cfInterest)
+    : (matrix.cfInterest ?? matrix.ffInterest);
 
   // Attribute namespacing: FIRSTNAME / LASTNAME stay as unprefixed Brevo
   // defaults (built-in fields). Everything Switchable-specific carries an
@@ -402,10 +474,12 @@ async function upsertLearnerInBrevo(
   const attributes: BrevoAttributes = {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
-    SW_COURSE_NAME: courseName,
-    SW_COURSE_SLUG: submission.course_id ?? "",
-    SW_COURSE_START_DATE: course.startDate ?? "",
-    SW_REGION_NAME: regionSlug ?? "",
+    SW_COURSE_NAME: matrix.courseTitle ?? submission.course_id ?? "",
+    SW_COURSE_SLUG: matrix.courseId ?? "",
+    SW_COURSE_INTAKE_ID: matrix.intakeId ?? "",
+    SW_COURSE_INTAKE_DATE: matrix.intakeDate ?? "",
+    SW_REGION_NAME: matrix.regionName ?? "",
+    SW_SECTOR: sector ?? "",
     SW_PROVIDER_NAME: provider.company_name,
     SW_PROVIDER_TRUST_LINE: provider.trust_line ?? "",
     SW_FUNDING_CATEGORY: submission.funding_category ?? "",
@@ -422,29 +496,25 @@ async function upsertLearnerInBrevo(
     SW_MATCH_STATUS: "matched",
   };
 
+  // One upsert call adds the contact to both lists atomically. Previously
+  // this was a two-call sequence (upsert + addContactToList) which raced
+  // against Brevo's backend and surfaced the misleading "Contact already in
+  // list and/or does not exist" 400. Single call eliminates the race.
+  const listIds = [utilityListId];
+  if (submission.marketing_opt_in && marketingListId != null) {
+    listIds.push(marketingListId);
+  }
+
   const upsertResult = await upsertBrevoContact({
     email: submission.email,
     attributes,
-    listIds: [utilityListId],
+    listIds,
   });
 
   if (!upsertResult.ok) {
     await persistDeadLetter(sql, "edge_function_brevo_upsert",
       { provider_id: provider.provider_id, submission_id: submission.id },
       `Brevo learner upsert failed: ${upsertResult.error ?? "unknown"}`);
-    return;
-  }
-
-  if (submission.marketing_opt_in && marketingListId != null) {
-    const addResult = await addBrevoContactToList({
-      email: submission.email,
-      listId: marketingListId,
-    });
-    if (!addResult.ok) {
-      await persistDeadLetter(sql, "edge_function_brevo_upsert",
-        { provider_id: provider.provider_id, submission_id: submission.id },
-        `Brevo marketing-add failed: ${addResult.error ?? "unknown"}`);
-    }
   }
 }
 
