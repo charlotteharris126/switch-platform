@@ -314,7 +314,7 @@ interface MatrixContext {
   courseTitle: string | null;
   regionName: string | null;
   intakeId: string | null;
-  intakeDate: string | null;     // dateFormatted
+  intakeDate: string | null;     // ISO YYYY-MM-DD — Brevo Date attribute requires this format
   cfInterest: string | null;
   ffInterest: string | null;
 }
@@ -397,23 +397,27 @@ function readRoute(
 
   // Intake resolution: prefer the learner's chosen intake if present in the
   // route's intakes[]. Otherwise fall back to the legacy single-cohort
-  // nextIntake fields. Rolling-intake routes (no intakes[] entries) end up
+  // nextIntake field. Rolling-intake routes (no intakes[] entries) end up
   // with null intake fields, which is correct.
+  //
+  // Date format: Brevo's Date attribute type silently nulls anything that
+  // isn't ISO 8601 YYYY-MM-DD. Use intake.date / route.nextIntake (ISO),
+  // never dateFormatted / nextIntakeFormatted (human-readable).
   let intakeId: string | null = null;
   let intakeDate: string | null = null;
   if (preferredIntakeId && Array.isArray(route.intakes)) {
     const match = route.intakes.find((i) => i?.id === preferredIntakeId);
     if (match) {
       intakeId = match.id ?? null;
-      intakeDate = match.dateFormatted ?? null;
+      intakeDate = match.date ?? null;
     }
   }
   if (!intakeId && Array.isArray(route.intakes) && route.intakes.length > 0) {
     intakeId = route.intakes[0].id ?? null;
-    intakeDate = route.intakes[0].dateFormatted ?? null;
+    intakeDate = route.intakes[0].date ?? null;
   }
   if (!intakeDate) {
-    intakeDate = route.nextIntakeFormatted ?? null;
+    intakeDate = route.nextIntake ?? null;
   }
 
   return {

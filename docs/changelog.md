@@ -4,6 +4,18 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-29: SW_COURSE_INTAKE_DATE ISO format follow-up
+
+**Type:** Edge Function bug fix in `_shared/route-lead.ts` (no schema change). Follow-up to the Brevo enrichment fix below.
+
+Synthetic test 207 (post-deploy) confirmed 6 of 7 fixes landed clean. `SW_COURSE_INTAKE_DATE` was still empty in Brevo. `SW_COURSE_INTAKE_ID` resolved correctly to `tees-valley-2026-06-02`, so the helper found the matched intake — but Brevo's Date attribute type silently nulls anything that isn't ISO 8601 YYYY-MM-DD. The helper was reading `intake.dateFormatted` ("2 June 2026"), which Brevo rejected.
+
+**Fix:** `readRoute` now reads `intake.date` (ISO) instead of `intake.dateFormatted`, and falls back to `route.nextIntake` instead of `route.nextIntakeFormatted`. `MatrixContext.intakeDate` comment updated to call out the ISO-only constraint.
+
+Both `netlify-lead-router` and `routing-confirm` redeployed. Existing Brevo contacts created post-Session-17 with empty `SW_COURSE_INTAKE_DATE` will get corrected on their next routing event (upserts overwrite).
+
+---
+
 ## 2026-04-29: Brevo learner enrichment fix — matrix lookup + atomic list adds
 
 **Type:** Edge Function bug fix in `_shared/route-lead.ts` (no schema change). Triggered by a synthetic test that surfaced 7 separate defects on the same submission.
