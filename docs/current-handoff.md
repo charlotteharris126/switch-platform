@@ -41,16 +41,22 @@ Real production lead routed to EMS before today's enrichment fix. Contact held s
 
 Added a "Post-MVP small enhancements" section to `platform/docs/admin-dashboard-scoping.md` with a single entry: archive/unarchive button on `/admin/leads/[id]`. Spec sketched (RPC pattern matching `crm.update_provider_trust`, audit type names `archive_lead` / `unarchive_lead` already in `app/lib/audit.ts`, confirm dialog on archive, "Archived YYYY-MM-DD" badge). Surfaced from this session's test cycle — owner forced into raw SQL with column-by-column risk every time. No ClickUp ticket per owner.
 
-### 6. No-match Brevo build spec (commit f16dc16, c4f7e0f)
+### 6. No-match Brevo build spec (commit f16dc16, c4f7e0f, then revised same evening)
 
-Owner-locked scope: 3-state `SW_MATCH_STATUS` (matched / pending / no_match), self-funded option (b) (matrix.json `coursesById` secondary index), enrichment overwrite, all four switchable forms covered (`switchable-funded`, `switchable-self-funded`, `switchable-waitlist`, `switchable-waitlist-enrichment`).
+Owner-locked scope went through a revision the same evening. Final shape:
 
-Nurture differentiation handled email-side via Brevo automation entry filters, not by platform:
-- matched → N1-N7 spine + monthly newsletter
-- pending → SF13 "picking your provider, hear within 24h"; flip to matched starts spine
-- no_match → SF8 recirc utility immediately, monthly newsletter only (no spine)
+- 3-state `SW_MATCH_STATUS` (matched / pending / no_match)
+- Top-level branch on `funding_category` inside both Brevo upsert helpers
+- Self-funded skips matrix.json entirely; `SW_SECTOR` pulls from `submission.interest`. `SW_COURSE_NAME` / `SW_COURSE_INTAKE_ID` / `SW_COURSE_INTAKE_DATE` / `SW_REGION_NAME` stay blank for self-funded
+- New `SW_DQ_REASON` attribute pushed when `is_dq=true`, raw value from `submission.dq_reason`. Already configured in Brevo as 15th attribute
+- N1-N7 nurture spine is funded-only (Brevo automation entry filter: `SW_MATCH_STATUS=matched AND SW_FUNDING_CATEGORY in (gov, loan)`)
+- Self-funded routed leads get U-track utility only; sector-led self-funded nurture sequence is its own future workstream
+- All four switchable forms covered (`switchable-funded`, `switchable-self-funded`, `switchable-waitlist`, `switchable-waitlist-enrichment`)
+- Enrichment overwrite confirmed (same email, second submission overwrites with richer data, status stays `no_match`)
 
-Full implementation spec in `platform/docs/no-match-brevo-build.md`. ~2-hour single-session build covering site script + Edge Function helper + branching + 8-test verification matrix. **First job tomorrow per owner.**
+Earlier "option (b)" matrix-by-courseId secondary index DROPPED. Site session has no work. Edge Function only.
+
+Full revised spec in `platform/docs/no-match-brevo-build.md`. ~2-hour single-session build. **First job tomorrow per owner.**
 
 ---
 
@@ -66,7 +72,7 @@ Switchable email matched-lead path is fully operational and verified end-to-end.
 
 In priority order:
 
-1. **No-match Brevo upsert (3-state build) in `netlify-lead-router`. FIRST JOB TOMORROW per owner 2026-04-29 evening.** Scope locked: 3-state `SW_MATCH_STATUS`, self-funded matrix-by-courseId secondary index, enrichment overwrite. Full spec in [`platform/docs/no-match-brevo-build.md`](no-match-brevo-build.md). ~2-hour single-session build covering site script + Edge Function helper + branching + 8-test pass.
+1. **No-match Brevo upsert (3-state build) in `netlify-lead-router`. FIRST JOB TOMORROW per owner 2026-04-29 evening.** Scope revised same evening — site work dropped. Final shape: 3-state `SW_MATCH_STATUS` (matched / pending / no_match), top-level branch on `funding_category` inside the upsert helpers (self-funded skips matrix entirely; `SW_SECTOR` from `submission.interest`), new `SW_DQ_REASON` attribute pushed when `is_dq=true`, N1-N7 nurture spine funded-only (Brevo entry filter `SW_MATCH_STATUS=matched AND SW_FUNDING_CATEGORY in (gov, loan)`). Full revised spec in [`platform/docs/no-match-brevo-build.md`](no-match-brevo-build.md). ~2-hour single-session build, **Edge Function only, no site work**.
 2. **Build archive/unarchive lead action on `/admin/leads/[id]`.** Real defect: `archived_at` column exists, leads-list filter has "Archived" tab, `app/lib/audit.ts` already names `archive_lead` / `unarchive_lead` action types, but no Server Action and no UI button. Owner forced into raw SQL every time. No ClickUp ticket per owner.
 3. **`leads.routing_log.confirmed_intake_id` + UI surface** (carried from Session 16). Owner override of learner's preferred cohort at confirm time.
 4. **`crm.enrolments.intake_id` + reporting** (carried from Session 16). Per-cohort enrolment tracking. Slot in once cohort routing has been live 2-4 weeks.
@@ -85,7 +91,9 @@ Carry-forward unchanged from Session 18:
 ### Decisions made this session
 
 - **3-state `SW_MATCH_STATUS`** locked: matched / pending / no_match. Multi-candidate leads enter Brevo at submission time as `pending`; owner confirm flips to `matched`.
-- **Self-funded path: option (b)** — `coursesById` secondary index in matrix.json so self-funded course-only-slug lookups work. Region and intake stay empty for self-funded (don't apply).
+- **Self-funded path: branch on `funding_category` at upsert helper top.** Self-funded skips matrix entirely; `SW_SECTOR` from `submission.interest`; course/region/intake stay blank. Earlier "option (b)" matrix-by-courseId secondary index OFF.
+- **`SW_DQ_REASON` (15th attribute)** added — pushed when `is_dq=true`, raw value from `submission.dq_reason`. Already configured in Brevo.
+- **N1-N7 nurture spine is funded-only.** Brevo automation entry filter: `SW_MATCH_STATUS=matched AND SW_FUNDING_CATEGORY in (gov, loan)`. Self-funded routed leads get U-track utility only; sector-led self-funded nurture is a future workstream.
 - **Enrichment overwrite confirmed.** Same email already in Brevo from initial waitlist submission; enrichment upsert overwrites with richer data, `SW_MATCH_STATUS` stays `no_match`.
 - **No per-state nurture differentiation in platform code** in v1. Brevo automation entry filters handle the routing. Conditional content blocks for v2.
 - **`SW_AGE_BAND` deferred to v2.** Form age-question redesign needed first.
