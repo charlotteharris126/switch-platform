@@ -404,7 +404,10 @@ async function upsertLearnerInBrevo(
     SW_PROVIDER_TRUST_LINE: provider.trust_line ?? "",
     SW_FUNDING_CATEGORY: submission.funding_category ?? "",
     SW_FUNDING_ROUTE: submission.funding_route ?? "",
-    SW_AGE_BAND: submission.age_band ?? "",
+    // SW_AGE_BAND deferred to v2 — form age-question is being redesigned
+    // (under 19 / 19-23 / 24-34 / 35+) for nurture branching. Pushing the
+    // current age_band shape would mean migrating Brevo contact records
+    // when the new shape lands. Cleaner to not push it at all at v1.
     SW_EMPLOYMENT_STATUS: submission.employment_status ?? "",
     SW_OUTCOME_INTEREST: submission.outcome_interest ?? "",
     SW_CONSENT_MARKETING: submission.marketing_opt_in,
