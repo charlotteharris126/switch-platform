@@ -430,3 +430,6 @@ verify_jwt = false
 
 [functions.social-analytics-sync]
 verify_jwt = false
+
+[functions.admin-brevo-resync]
+verify_jwt = false

@@ -4,6 +4,20 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-29: admin-brevo-resync Edge Function
+
+**Type:** New Edge Function (operational tool, not a runtime dependency).
+
+POST endpoint at `/functions/v1/admin-brevo-resync` that re-fires `upsertLearnerInBrevo` for an arbitrary list of already-routed submission ids. Auth via `x-audit-key` header. Skips DQ leads, archived leads, never-routed leads. Does not touch `leads.routing_log` or `leads.submissions.primary_routed_to` — routing already committed, only the downstream Brevo side-effect is refreshed.
+
+Built triggered by a real need: lead 206 (Hilda Gething, real production lead) was routed to EMS before today's Brevo enrichment fix landed and its contact held stale attributes. `upsertLearnerInBrevo` is now exported from `_shared/route-lead.ts` so this tool reuses the canonical attribute composition.
+
+Permanent operational tool, not a one-off. Future use: any time Brevo attribute composition or matrix.json shape changes leave existing contacts stale (provider trust line edits, sector taxonomy changes, future schema additions).
+
+Registered in `infrastructure-manifest.md`. `verify_jwt = false` in `config.toml`. AUDIT_SHARED_SECRET in vault, same source as `netlify-leads-reconcile` and `netlify-forms-audit`.
+
+---
+
 ## 2026-04-29: SW_COURSE_INTAKE_DATE ISO format follow-up
 
 **Type:** Edge Function bug fix in `_shared/route-lead.ts` (no schema change). Follow-up to the Brevo enrichment fix below.

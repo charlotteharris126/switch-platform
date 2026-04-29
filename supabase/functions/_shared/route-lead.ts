@@ -443,7 +443,7 @@ function readRoute(
 // Best-effort: failure logs a leads.dead_letter row and returns. Routing is
 // already committed by the time we get here; Brevo is a downstream side-
 // effect on the same footing as sheet append + provider notification.
-async function upsertLearnerInBrevo(
+export async function upsertLearnerInBrevo(
   sql: Sql,
   provider: ProviderRow,
   submission: SubmissionRow,
