@@ -446,6 +446,20 @@ function readRoute(
   };
 }
 
+// DB enum uses "cannot_reach"; Brevo's SW_ENROL_STATUS Category attribute uses
+// "cannot_contact". Confirmed 2026-04-30 by owner direct from Brevo dashboard.
+// Mapping is one-directional (DB → Brevo) and applied only at the upsert
+// boundary so the rest of the codebase stays on the canonical DB taxonomy.
+// Other values (open / enrolled / presumed_enrolled / lost) match exactly and
+// pass through. Empty string also passes through (no enrolment row yet).
+const ENROL_STATUS_DB_TO_BREVO: Record<string, string> = {
+  cannot_reach: "cannot_contact",
+};
+
+function mapEnrolStatusForBrevo(dbStatus: string): string {
+  return ENROL_STATUS_DB_TO_BREVO[dbStatus] ?? dbStatus;
+}
+
 // Resolves course / region / intake / sector for a submission, branching on
 // funding_category. Self-funded leads skip matrix.json entirely (their
 // course_id is a YAML id, not a page slug, so the lookup would silently miss)
@@ -576,7 +590,7 @@ export async function upsertLearnerInBrevo(
     // SW_MATCH_STATUS lets Brevo Automations trigger off attribute updates
     // without needing a separate event API. See _shared/brevo.ts comment.
     SW_MATCH_STATUS: "matched",
-    SW_ENROL_STATUS: enrolStatus,
+    SW_ENROL_STATUS: mapEnrolStatusForBrevo(enrolStatus),
   };
 
   // One upsert call adds the contact to both lists atomically. Previously
