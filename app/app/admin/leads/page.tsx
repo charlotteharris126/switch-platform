@@ -267,9 +267,9 @@ export default async function LeadsPage({
               <TableHead>Email</TableHead>
               <TableHead>Course</TableHead>
               <TableHead>Funding</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Routed to</TableHead>
+              <TableHead>Lead status</TableHead>
               <TableHead>Campaign</TableHead>
+              <TableHead>Routed</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -317,22 +317,21 @@ export default async function LeadsPage({
                           DQ{r.dq_reason ? `: ${truncate(r.dq_reason, 18)}` : ""}
                         </Badge>
                       ) : r.primary_routed_to ? (
-                        // Routed leads: show the latest enrolment status if there is one.
-                        // Fallback "Routed" badge covers historical rows from before
-                        // migration 0042 (when route-lead.ts started auto-creating an
-                        // open enrolment row at routing time). Once the 0043 backfill
-                        // ships, every routed lead has a row and this fallback is dead.
+                        // Routed leads: enrolment status badge from crm.enrolments.
+                        // Post-0043 every active routed parent has a row; the
+                        // fallback below is now dead-code defence for any edge
+                        // case (children, race conditions, manual deletes).
                         (() => {
                           const enrol = enrolmentBySubId.get(r.id);
                           if (!enrol) {
                             return (
                               <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
-                                Routed
+                                Open
                               </Badge>
                             );
                           }
                           const cls = enrolmentBadgeClass(enrol.status);
-                          const label = enrol.status === "open" ? "Routed" : enrol.status.replace(/_/g, " ");
+                          const label = enrol.status.replace(/_/g, " ");
                           return (
                             <>
                               <Badge className={`text-xs ${cls}`}>{label}</Badge>
@@ -354,8 +353,8 @@ export default async function LeadsPage({
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-xs">{r.primary_routed_to ?? "—"}</TableCell>
                   <TableCell className="text-xs text-[#5a6a72]">{truncate(r.utm_campaign, 20)}</TableCell>
+                  <TableCell className="text-xs">{r.primary_routed_to ?? "—"}</TableCell>
                 </TableRow>
               ))
             )}
