@@ -4,6 +4,34 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-30: One-click SF2 chaser button on /admin/leads + last-chaser tracking
+
+**Type:** New column + new RPC + new Edge Function + new UI button. Migration 0046.
+
+Owner needed a one-click way to bulk-trigger the SF2 "Provider tried no answer" Brevo automation from the admin dashboard. Previously a 3-click manual operation in Brevo's UI per lead — at volume that was ~5 minutes of pure friction every time a provider reported they couldn't reach a learner.
+
+**Migration 0046:**
+- `crm.enrolments.last_chaser_at TIMESTAMPTZ` column. NULL = never. Stamped by `crm.fire_provider_chaser`. Surfaced on `/admin/leads` to discourage double-firing.
+- `crm.fire_provider_chaser(BIGINT[])` RPC. SECURITY DEFINER. For each submission: looks up email, validates eligibility (must have email, not be archived, must have an enrolment row), stamps `last_chaser_at`, audits, queues the email for Brevo. Async-fires `admin-brevo-chase` once with all eligible emails. Returns per-id status (ok / skipped + reason).
+
+**Edge Function `admin-brevo-chase`:** POST endpoint with `x-audit-key` auth. Adds emails to the Brevo internal list specified by `BREVO_LIST_ID_PROVIDER_TRIED_NO_ANSWER` (set to 8 today). 250ms throttle, dead_letter on Brevo failure. Brevo's auto-remove-at-end-of-flow on SF2 means re-adding fires the chaser fresh.
+
+**UI:**
+- New "Send chaser" button in the sticky bulk action bar on `/admin/leads`. Smaller secondary visual treatment beneath the status "Apply" button. One toast on success showing fired / skipped counts; skip reasons surface from the RPC.
+- New "Last chaser" column showing `—` / `today` / `Xd ago`. Coloured `#b3412e` bold + ≤2 days to discourage rapid re-firing. Hover tooltip carries the exact ISO timestamp.
+
+**Files changed:**
+- `platform/supabase/migrations/0046_chaser_tracking.sql` — new
+- `platform/supabase/functions/admin-brevo-chase/index.ts` — new
+- `platform/supabase/config.toml` — `[functions.admin-brevo-chase]` block (verify_jwt=false)
+- `platform/app/app/admin/leads/bulk-actions.ts` — new `fireProviderChaser` Server Action
+- `platform/app/app/admin/leads/bulk-selection.tsx` — "Send chaser" button + handler
+- `platform/app/app/admin/leads/page.tsx` — "Last chaser" column + colouring
+
+**Owner-side setup done in session:** `BREVO_LIST_ID_PROVIDER_TRIED_NO_ANSWER=8` set via `supabase secrets set`. Edge Function deployed.
+
+---
+
 ## 2026-04-30: Brevo auto-sync on enrolment status change (closes U4 trigger gap)
 
 **Type:** New SECURITY DEFINER function + Server Action wiring. No schema change to `crm.enrolments`.

@@ -254,15 +254,15 @@ export default async function LeadsPage({
       ? supabase
           .schema("crm")
           .from("enrolments")
-          .select("submission_id, status, lost_reason, disputed_at")
+          .select("submission_id, status, lost_reason, disputed_at, last_chaser_at")
           .in("submission_id", submissionIdsOnPage)
       : Promise.resolve({ data: [], error: null }),
   ]);
 
   // Map submission_id → latest enrolment row for fast lookup in the table render.
-  const enrolmentBySubId = new Map<number, { status: string; lost_reason: string | null; disputed_at: string | null }>();
-  for (const e of (enrolmentsRes.data ?? []) as Array<{ submission_id: number; status: string; lost_reason: string | null; disputed_at: string | null }>) {
-    enrolmentBySubId.set(e.submission_id, { status: e.status, lost_reason: e.lost_reason, disputed_at: e.disputed_at });
+  const enrolmentBySubId = new Map<number, { status: string; lost_reason: string | null; disputed_at: string | null; last_chaser_at: string | null }>();
+  for (const e of (enrolmentsRes.data ?? []) as Array<{ submission_id: number; status: string; lost_reason: string | null; disputed_at: string | null; last_chaser_at: string | null }>) {
+    enrolmentBySubId.set(e.submission_id, { status: e.status, lost_reason: e.lost_reason, disputed_at: e.disputed_at, last_chaser_at: e.last_chaser_at });
   }
 
   const fundingCategories = Array.from(
@@ -324,6 +324,7 @@ export default async function LeadsPage({
               <TableHead>Course</TableHead>
               <TableHead>Funding</TableHead>
               <TableHead>Lead status</TableHead>
+              <TableHead>Last chaser</TableHead>
               <TableHead>Campaign</TableHead>
               <TableHead>Routed</TableHead>
             </TableRow>
@@ -331,7 +332,7 @@ export default async function LeadsPage({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center text-[#5a6a72] py-10">
+                <TableCell colSpan={11} className="text-center text-[#5a6a72] py-10">
                   No leads match these filters.
                 </TableCell>
               </TableRow>
@@ -408,6 +409,17 @@ export default async function LeadsPage({
                         </Badge>
                       )}
                     </div>
+                  </TableCell>
+                  <TableCell className="text-xs text-[#5a6a72] whitespace-nowrap">
+                    {(() => {
+                      const enrol = enrolmentBySubId.get(r.id);
+                      if (!enrol?.last_chaser_at) return "—";
+                      const d = new Date(enrol.last_chaser_at);
+                      const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+                      const label = days === 0 ? "today" : days === 1 ? "1d ago" : `${days}d ago`;
+                      const cls = days <= 2 ? "text-[#b3412e] font-semibold" : "";
+                      return <span className={cls} title={d.toISOString()}>{label}</span>;
+                    })()}
                   </TableCell>
                   <TableCell className="text-xs text-[#5a6a72]">{truncate(r.utm_campaign, 20)}</TableCell>
                   <TableCell className="text-xs">{r.primary_routed_to ?? "—"}</TableCell>

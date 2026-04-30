@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { markEnrolmentOutcomeBulk } from "./bulk-actions";
+import { markEnrolmentOutcomeBulk, fireProviderChaser } from "./bulk-actions";
 import type { EnrolmentStatus, LostReason } from "./[id]/actions";
 
 // -----------------------------------------------------------------------------
@@ -143,6 +143,38 @@ export function BulkActionBar() {
 
   const showLostReason = status === "lost";
 
+  function handleFireChaser() {
+    const submissionIds = Array.from(selected);
+    if (submissionIds.length === 0) return;
+
+    startTransition(async () => {
+      const result = await fireProviderChaser(submissionIds);
+      if (!result.ok) {
+        toast.error("Chaser failed", {
+          description: "DB error firing chaser. See logs.",
+        });
+        return;
+      }
+      const skippedReasons = Array.from(
+        new Set(
+          result.perId
+            .filter((r) => r.status === "skipped")
+            .map((r) => r.reason ?? "skipped"),
+        ),
+      );
+      if (result.skipped === 0) {
+        toast.success(`Chaser sent for ${result.fired}`, {
+          description: "Brevo list-add fired. SF2 chaser will land in inboxes.",
+        });
+      } else {
+        toast.warning(`Chaser sent for ${result.fired}, ${result.skipped} skipped`, {
+          description: skippedReasons.join("; ") || "See per-id detail.",
+        });
+      }
+      clear();
+    });
+  }
+
   function handleApply() {
     if (!status) {
       toast.warning("Pick a status before applying.");
@@ -270,7 +302,7 @@ export function BulkActionBar() {
             </label>
           </div>
 
-          <div className="flex-shrink-0 self-end">
+          <div className="flex-shrink-0 self-end flex flex-col gap-2 items-stretch">
             <button
               type="button"
               onClick={handleApply}
@@ -278,6 +310,15 @@ export function BulkActionBar() {
               className="h-10 px-6 text-[11px] font-bold uppercase tracking-[0.08em] rounded-full bg-[#143643] text-white hover:bg-[#11242e] active:scale-[0.97] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#143643] shadow-[0_2px_6px_rgba(17,36,46,0.15)]"
             >
               {pending ? "Applying..." : `Apply to ${count}`}
+            </button>
+            <button
+              type="button"
+              onClick={handleFireChaser}
+              disabled={pending}
+              title="Adds selected contacts to the Provider tried no answer Brevo list. SF2 chaser email fires automatically. Last chaser stamped on each enrolment."
+              className="h-9 px-4 text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60 hover:bg-[#fbf9f5] active:scale-[0.97] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Send chaser
             </button>
           </div>
         </div>

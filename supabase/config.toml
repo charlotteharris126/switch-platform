@@ -436,3 +436,6 @@ verify_jwt = false
 
 [functions.admin-brevo-inspect]
 verify_jwt = false
+
+[functions.admin-brevo-chase]
+verify_jwt = false
