@@ -17,6 +17,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   loan: "Loan-funded",
 };
 
+const LEAD_STATUSES: Array<{ value: string; label: string }> = [
+  { value: "",                  label: "Any" },
+  { value: "open",              label: "Open" },
+  { value: "enrolled",          label: "Enrolled" },
+  { value: "presumed_enrolled", label: "Presumed enrolled" },
+  { value: "cannot_reach",      label: "Cannot reach" },
+  { value: "lost",              label: "Lost" },
+];
+
 export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, providers, current }: Props) {
   const router = useRouter();
   const params = useSearchParams();
@@ -39,8 +48,36 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
   const inputClass =
     "h-9 text-xs border border-[#dad4cb] rounded-lg bg-white px-3 text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76]";
 
+  const currentLeadStatus = current.lead_status ?? "";
+
   return (
-    <div className="flex flex-wrap gap-3 items-end bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
+    <div className="bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
+      <div className="mb-3">
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72] block mb-2">Lead status</span>
+        <div className="flex flex-wrap gap-2">
+          {LEAD_STATUSES.map((s) => {
+            const selected = currentLeadStatus === s.value;
+            return (
+              <button
+                key={s.value || "any"}
+                type="button"
+                onClick={() => updateParam("lead_status", s.value)}
+                disabled={pending}
+                className={
+                  "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full border transition-all duration-150 active:scale-[0.97] " +
+                  (selected
+                    ? "bg-[#cd8b76] text-white border-[#cd8b76] shadow-[0_2px_6px_rgba(205,139,118,0.35)]"
+                    : "bg-white text-[#143643] border-[#dad4cb] hover:border-[#cd8b76]/60 hover:bg-[#fbf9f5]")
+                }
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3 items-end">
       <label className="flex flex-col gap-1">
         <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Search</span>
         <input
@@ -183,6 +220,7 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
       >
         Clear
       </button>
+      </div>
     </div>
   );
 }

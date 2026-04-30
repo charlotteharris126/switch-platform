@@ -38,7 +38,13 @@ type SearchParams = {
   // Lifecycle pill filter. Drives the high-level "where in the funnel" view.
   // Values: all | qualified | routed | awaiting | enrolled | lost | dq | archived
   stage?: string;
+  // Granular enrolment outcome filter. Only honoured when stage='all' (so it
+  // doesn't double-narrow stage views). Values: open | enrolled |
+  // presumed_enrolled | cannot_reach | lost.
+  lead_status?: string;
 };
+
+const VALID_LEAD_STATUSES = ["open", "enrolled", "presumed_enrolled", "cannot_reach", "lost"] as const;
 
 type Stage = "all" | "qualified" | "routed" | "awaiting" | "enrolled" | "lost" | "dq" | "archived";
 
@@ -112,6 +118,24 @@ export default async function LeadsPage({
     }
   }
 
+  // Granular lead_status filter (only active when stage='all'). Pre-fetch
+  // submission ids matching the requested enrolment status.
+  let leadStatusIds: number[] | null = null;
+  if (
+    stage === "all" &&
+    sp.lead_status &&
+    (VALID_LEAD_STATUSES as readonly string[]).includes(sp.lead_status)
+  ) {
+    const { data: enrolForLeadStatus } = await supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("submission_id")
+      .eq("status", sp.lead_status);
+    leadStatusIds = ((enrolForLeadStatus ?? []) as Array<{ submission_id: number }>).map(
+      (r) => r.submission_id,
+    );
+  }
+
   let q = supabase
     .schema("leads")
     .from("submissions")
@@ -173,6 +197,13 @@ export default async function LeadsPage({
     }
     if (sp.routed === "no") {
       q = q.is("primary_routed_to", null).is("archived_at", null);
+    }
+    if (leadStatusIds !== null) {
+      if (leadStatusIds.length > 0) {
+        q = q.in("id", leadStatusIds);
+      } else {
+        q = q.eq("id", -1); // no matching enrolments -> empty result
+      }
     }
   }
 
