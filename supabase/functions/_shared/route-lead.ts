@@ -162,23 +162,37 @@ export async function routeLead(
     return { kind: "db_error", error: describeError(err) };
   }
 
-  // Write phase: routing_log INSERT + submissions UPDATE atomically
+  // Write phase: routing_log INSERT + submissions UPDATE + open-enrolment
+  // INSERT atomically. The third call goes through crm.ensure_open_enrolment
+  // (SECURITY DEFINER, migration 0042) so functions_writer doesn't need
+  // direct INSERT grant on crm.enrolments. Idempotent on (submission_id,
+  // provider_id) so a retry can't double-insert.
+  let routingLogId: number | null = null;
   try {
     await sql.begin(async (trx) => {
       await trx`SET LOCAL ROLE functions_writer`;
-      await trx`
+      const logRows = await trx<Array<{ id: number }>>`
         INSERT INTO leads.routing_log (
           submission_id, provider_id, route_reason, delivery_method, delivery_status
         ) VALUES (
           ${submission.id}, ${provider.provider_id}, 'primary', 'sheet_webhook', 'sent'
         )
+        RETURNING id
       `;
+      routingLogId = Number(logRows[0].id);
       await trx`
         UPDATE leads.submissions
            SET primary_routed_to = ${provider.provider_id},
                routed_at         = now(),
                updated_at        = now()
          WHERE id = ${submission.id}
+      `;
+      await trx`
+        SELECT crm.ensure_open_enrolment(
+          ${submission.id},
+          ${routingLogId},
+          ${provider.provider_id}
+        )
       `;
     });
   } catch (err) {

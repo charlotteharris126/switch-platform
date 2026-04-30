@@ -127,6 +127,18 @@ const FIELD_MAP = {
   // NULL on single-cohort / rolling-intake leads → empty cell.
   'preferredintake':   'preferred_intake_id',
   'acceptableintakes': 'acceptable_intake_ids',
+
+  // Notes / comments column. Auto-populated by route-lead.ts for prior-
+  // submission matches ("Previously applied for X on date") and for
+  // re-applications ("Re-applied — see <parent-id> above"). Not a manual
+  // column — the Edge Function owns this value. Bug fix 2026-04-30: these
+  // entries were missing from v2, so cross-course duplicate notes have
+  // been silently dropped on every provider's sheet since each migrated
+  // off v1. Each bound script copy needs to be redeployed.
+  'notes':             'notes',
+  'note':              'notes',
+  'comment':           'notes',
+  'comments':          'notes',
 };
 
 function doPost(e) {

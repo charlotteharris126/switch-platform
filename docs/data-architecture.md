@@ -521,6 +521,8 @@ CREATE INDEX ON crm.provider_courses (course_slug, active, priority);
 
 One row per lead-to-provider routing that could lead to enrolment. Status machine tracks the 14-day auto-presume → 7-day dispute window described in `.claude/rules/business.md`.
 
+**Open row creation (migration 0042, 2026-04-30):** every routed lead atomically gets a `status='open'` enrolment row at routing time. `route-lead.ts` calls `crm.ensure_open_enrolment(submission_id, routing_log_id, provider_id)` inside the same transaction as the `leads.routing_log` INSERT — if either step fails the routing rolls back. Idempotent on `(submission_id, provider_id)` so retries are safe. Re-application children (rows with `parent_submission_id IS NOT NULL`) deliberately do not get their own enrolment row; the outcome is tracked on the parent. Pre-0042 routed leads are missing rows pending the 0043 backfill.
+
 ```sql
 CREATE TABLE crm.enrolments (
   id                    BIGSERIAL PRIMARY KEY,

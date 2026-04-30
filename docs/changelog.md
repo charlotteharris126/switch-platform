@@ -4,6 +4,71 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-30: Bulk enrolment outcome update on /admin/leads (Phase 3)
+
+**Type:** Admin app feature.
+
+Checkbox column added to the leads table. Master checkbox in the header toggles all rows on the current page (with indeterminate state when partially selected). When ≥1 row is selected, a sticky action bar appears at the bottom of the viewport: status button group (open / enrolled / presumed_enrolled / cannot_reach / lost), conditional lost-reason buttons that show when "lost" is picked, optional notes textarea (applied to all selected), and an "Apply to N" button. The dispute flag is intentionally not exposed in bulk — disputed enrolments need per-lead reason text and stay on the single-lead form at `/admin/leads/[id]`.
+
+The bulk Server Action `markEnrolmentOutcomeBulk` loops `crm.upsert_enrolment_outcome` per submission so audit rows are written per lead (not per batch), keeping the audit trail granular. Returns succeeded / failed counts and per-row errors.
+
+**Files changed:**
+- `platform/app/app/admin/leads/bulk-actions.ts` — new Server Action
+- `platform/app/app/admin/leads/bulk-selection.tsx` — new client component (context provider, master + row checkboxes, sticky bar)
+- `platform/app/app/admin/leads/page.tsx` — wraps table in `<BulkSelectionProvider>`, adds checkbox column, renders `<BulkActionBar />` at the bottom
+
+Filter the list first (stage pill, provider, date, search), tick the rows you want, set status, click Apply. Selection clears on success.
+
+---
+
+## 2026-04-30: Backfill open enrolment rows for pre-0042 routed leads (Phase 2)
+
+**Type:** One-shot data migration.
+
+Migration `0043_backfill_open_enrolments.sql` walked `leads.routing_log` joined to `leads.submissions` and called `crm.ensure_open_enrolment` for every active routed parent (non-DQ, non-archived, `parent_submission_id IS NULL`). Re-application children stayed row-less by design — outcome lives on the parent.
+
+**Result:** before=17, after=108, inserted=91. The 17 pre-existing rows (12 enrolled + 3 presumed_enrolled + 1 historical open + 1 fresh open from lead 221 routed earlier today) were untouched via `ON CONFLICT DO NOTHING`. Status breakdown after backfill: 93 open, 12 enrolled, 3 presumed_enrolled. Diagnostic gap query (routed parents with no enrolment row) now returns 0.
+
+**14-day auto-flip:** the older EMS leads from 19 April backfilled with their original `sent_to_provider_at` timestamps (sourced from `leads.routing_log.routed_at` inside the function), so the auto-flip schedule is unchanged. The first auto-flip on/around 3 May proceeds as planned.
+
+**Sanity check learned the hard way:** the first attempt at this migration aborted due to a brittle "newly inserted vs already-existing" counter that used a 1-minute `created_at` window. Lead 221 routed during the deploy window and tripped the assertion. Replaced with a simple before/after total comparison. Lead 221 also confirmed Phase 1 was working live before Phase 2 ran — the routing transaction had already created an open row for it without any code path other than `ensure_open_enrolment`.
+
+---
+
+## 2026-04-30: Routed leads now atomically get an open enrolment row (Phase 1: function + Edge Function call)
+
+**Type:** New schema function, Edge Function behaviour change, Apps Script bug fix.
+
+**Context:** Audit on 2026-04-30 found `crm.enrolments` had 16 rows for 113 routed leads. 95 active routed leads (91 parents + 4 re-application children) had no enrolment row at all, so any report joining `leads.submissions` to `crm.enrolments` undercounted by ~85%. Root cause: `route-lead.ts` wrote `leads.routing_log` and updated `leads.submissions.primary_routed_to` but never inserted into `crm.enrolments`. The page comment claiming an open row was inserted at routing time was aspirational and never shipped — rows only landed when the owner used the outcome RPC or the 14-day auto-flip ran.
+
+**Phase 1 changes (this entry):**
+- Migration `0042_ensure_open_enrolment.sql` adds `crm.ensure_open_enrolment(BIGINT, BIGINT, TEXT)` SECURITY DEFINER. Idempotent via ON CONFLICT DO NOTHING on the `(submission_id, provider_id)` unique constraint. Returns the enrolment row id (newly inserted or pre-existing). Granted to `functions_writer` and `authenticated`. `functions_writer` itself still has zero direct grants on `crm.enrolments` — all writes route through this RPC or `crm.upsert_enrolment_outcome`.
+- `platform/supabase/functions/_shared/route-lead.ts` — write phase now captures the new `routing_log` row id and calls `crm.ensure_open_enrolment` inside the same transaction. Atomic with the routing_log insert and the submissions update; if any step fails, the routing rolls back.
+- `platform/app/app/admin/leads/page.tsx` — stale comment fixed; the "no enrolment row" fallback badge now correctly described as covering only pre-0042 historical rows.
+
+**Phase 2 (next session):** migration `0043` will backfill the 91 historical parent rows by walking `leads.routing_log` and calling `crm.ensure_open_enrolment` for any routed lead with no row. The 4 re-application children stay row-less by design (outcome lives on the parent). The 14-day auto-flip end-state is unchanged: open rows reach presumed_enrolled via the same code path.
+
+**Phase 3 (next session):** bulk status update on `/admin/leads` (checkboxes + sticky action bar) operates on the now-complete enrolment denominator.
+
+**Apps Script v2 bug found and patched:** investigation into a separate "missing prior-submission note on EMS sheet" defect (Julie Orange-Benjamin, lead 216 — no "Previously applied for counselling-skills-tees-valley" note) traced to `provider-sheet-appender-v2.gs` FIELD_MAP missing entries for `notes` / `note` / `comment` / `comments`. Each provider's sheet has been silently dropping auto-populated notes since they migrated off v1 (EMS Session 5, Courses Direct + WYK during their onboarding). Canonical source patched.
+
+**Owner action pending:** redeploy the v2 Apps Script source to each provider's bound script copy (EMS, WYK Digital, Courses Direct). The header-driven appender means no FIELD_MAP edits per sheet, but each bound script needs the source pasted in and saved. Edit that landed: 4 lines added under "Cohort intake fields" in `platform/apps-scripts/provider-sheet-appender-v2.gs`.
+
+**Files changed:**
+- `platform/supabase/migrations/0042_ensure_open_enrolment.sql` — new
+- `platform/supabase/functions/_shared/route-lead.ts` — write phase updated
+- `platform/app/app/admin/leads/page.tsx` — fallback comment fixed
+- `platform/apps-scripts/provider-sheet-appender-v2.gs` — FIELD_MAP notes entries added
+
+**Verification after deploy:**
+- New routed lead (any path) creates a `crm.enrolments` row with `status='open'` in the same transaction. Sanity SQL: `SELECT COUNT(*) FROM crm.enrolments WHERE status='open' AND created_at >= now() - interval '1 hour';`
+- Existing 16 enrolment rows untouched (insert-only, `ON CONFLICT DO NOTHING`).
+- Once at least one new lead routes post-deploy and an open row appears, Phase 2 backfill can ship.
+
+**Signed off:** Owner (session 2026-04-30)
+
+---
+
 ## 2026-04-30: Multi-cohort picker reverted to single-pick; "Acceptable intakes" column retired from provider sheets
 
 **Type:** Page UX revert + provider sheet decluttering. No schema change.

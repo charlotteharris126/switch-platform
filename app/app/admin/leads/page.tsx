@@ -13,6 +13,12 @@ import { formatDateTime, truncate } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { LeadFilters } from "./filters";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
+import {
+  BulkSelectionProvider,
+  BulkSelectionMasterCheckbox,
+  BulkSelectionRowCheckbox,
+  BulkActionBar,
+} from "./bulk-selection";
 
 const PAGE_SIZE = 50;
 
@@ -247,10 +253,14 @@ export default async function LeadsPage({
         />
       ) : null}
 
+      <BulkSelectionProvider rowIds={rows.map((r) => r.id)}>
       <div className="mt-6 bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10">
+                <BulkSelectionMasterCheckbox />
+              </TableHead>
               <TableHead className="w-16">ID</TableHead>
               <TableHead>Submitted</TableHead>
               <TableHead>Name</TableHead>
@@ -265,13 +275,16 @@ export default async function LeadsPage({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-[#5a6a72] py-10">
+                <TableCell colSpan={10} className="text-center text-[#5a6a72] py-10">
                   No leads match these filters.
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((r) => (
                 <TableRow key={r.id} className="hover:bg-[#f4f1ed]/60">
+                  <TableCell className="w-10">
+                    <BulkSelectionRowCheckbox id={r.id} />
+                  </TableCell>
                   <TableCell className="font-mono text-xs">
                     <Link href={`/leads/${r.id}`} className="text-[#cd8b76] hover:text-[#b3412e] font-semibold">
                       {r.id}
@@ -305,8 +318,10 @@ export default async function LeadsPage({
                         </Badge>
                       ) : r.primary_routed_to ? (
                         // Routed leads: show the latest enrolment status if there is one.
-                        // Falls back to "Routed" when no enrolment row exists yet (rare —
-                        // route-lead.ts inserts an open row at routing time).
+                        // Fallback "Routed" badge covers historical rows from before
+                        // migration 0042 (when route-lead.ts started auto-creating an
+                        // open enrolment row at routing time). Once the 0043 backfill
+                        // ships, every routed lead has a row and this fallback is dead.
                         (() => {
                           const enrol = enrolmentBySubId.get(r.id);
                           if (!enrol) {
@@ -373,6 +388,8 @@ export default async function LeadsPage({
           </div>
         </div>
       )}
+      <BulkActionBar />
+      </BulkSelectionProvider>
     </div>
   );
 }
