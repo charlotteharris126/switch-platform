@@ -40,8 +40,11 @@ type SearchParams = {
   stage?: string;
   // Granular enrolment outcome filter. Only honoured when stage='all' (so it
   // doesn't double-narrow stage views). Values: open | enrolled |
-  // presumed_enrolled | cannot_reach | lost.
+  // presumed_enrolled | cannot_reach | lost. Comma-separated for multi-select.
   lead_status?: string;
+  // Comma-separated list of emails to filter by (e.g. pasted from a provider's
+  // outcome report). Case-insensitive, exact match. Empty entries ignored.
+  emails?: string;
 };
 
 const VALID_LEAD_STATUSES = ["open", "enrolled", "presumed_enrolled", "cannot_reach", "lost"] as const;
@@ -118,23 +121,35 @@ export default async function LeadsPage({
     }
   }
 
-  // Granular lead_status filter (only active when stage='all'). Pre-fetch
-  // submission ids matching the requested enrolment status.
+  // Granular lead_status filter (only active when stage='all'). Multi-select
+  // via comma-separated values. Pre-fetch submission ids matching any of the
+  // requested enrolment statuses.
   let leadStatusIds: number[] | null = null;
-  if (
-    stage === "all" &&
-    sp.lead_status &&
-    (VALID_LEAD_STATUSES as readonly string[]).includes(sp.lead_status)
-  ) {
+  const leadStatusList = stage === "all" && sp.lead_status
+    ? sp.lead_status
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => (VALID_LEAD_STATUSES as readonly string[]).includes(s))
+    : [];
+  if (leadStatusList.length > 0) {
     const { data: enrolForLeadStatus } = await supabase
       .schema("crm")
       .from("enrolments")
       .select("submission_id")
-      .eq("status", sp.lead_status);
+      .in("status", leadStatusList);
     leadStatusIds = ((enrolForLeadStatus ?? []) as Array<{ submission_id: number }>).map(
       (r) => r.submission_id,
     );
   }
+
+  // Email paste filter: comma OR newline separated, lowercased, exact match.
+  // Active at any stage (it's a hard intent: "show me these specific people").
+  const emailList = sp.emails
+    ? sp.emails
+        .split(/[,\n]/)
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => e.length > 0)
+    : [];
 
   let q = supabase
     .schema("leads")
@@ -214,6 +229,16 @@ export default async function LeadsPage({
     q = q.or(
       `email.ilike.%${needle}%,first_name.ilike.%${needle}%,last_name.ilike.%${needle}%`
     );
+  }
+
+  // Email paste list: case-insensitive exact match against lower(email).
+  // Honoured at every stage so the owner can grab a list from anywhere.
+  if (emailList.length > 0) {
+    // Supabase doesn't expose ilike-IN; fall back to a series of OR ilike
+    // matches. Each value already lowercased; ilike is case-insensitive on
+    // the column too.
+    const orClauses = emailList.map((e) => `email.ilike.${e}`).join(",");
+    q = q.or(orClauses);
   }
 
   const { data, count, error } = await q;

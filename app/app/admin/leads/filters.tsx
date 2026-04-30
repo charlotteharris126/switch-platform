@@ -2,6 +2,14 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 
 type Props = {
   fundingCategories: string[];
@@ -18,13 +26,22 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const LEAD_STATUSES: Array<{ value: string; label: string }> = [
-  { value: "",                  label: "Any" },
   { value: "open",              label: "Open" },
   { value: "enrolled",          label: "Enrolled" },
   { value: "presumed_enrolled", label: "Presumed enrolled" },
   { value: "cannot_reach",      label: "Cannot reach" },
   { value: "lost",              label: "Lost" },
 ];
+
+function parseLeadStatusList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(",").map((s) => s.trim()).filter((s) => LEAD_STATUSES.some((ls) => ls.value === s));
+}
+
+function parseEmails(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(/[,\n]/).map((e) => e.trim().toLowerCase()).filter((e) => e.length > 0);
+}
 
 export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, providers, current }: Props) {
   const router = useRouter();
@@ -48,36 +65,66 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
   const inputClass =
     "h-9 text-xs border border-[#dad4cb] rounded-lg bg-white px-3 text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76]";
 
-  const currentLeadStatus = current.lead_status ?? "";
+  const selectedStatuses = parseLeadStatusList(current.lead_status);
+  const activeEmails = parseEmails(current.emails);
+
+  function toggleLeadStatus(value: string, checked: boolean) {
+    const next = checked
+      ? Array.from(new Set([...selectedStatuses, value]))
+      : selectedStatuses.filter((s) => s !== value);
+    updateParam("lead_status", next.join(","));
+  }
+
+  function clearLeadStatus() {
+    updateParam("lead_status", "");
+  }
+
+  function applyEmails(raw: string) {
+    const cleaned = parseEmails(raw).join(",");
+    updateParam("emails", cleaned);
+  }
+
+  const triggerLabel = selectedStatuses.length === 0
+    ? "Any"
+    : selectedStatuses.length === 1
+      ? (LEAD_STATUSES.find((s) => s.value === selectedStatuses[0])?.label ?? selectedStatuses[0])
+      : `${selectedStatuses.length} selected`;
 
   return (
-    <div className="bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
-      <div className="mb-3">
-        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72] block mb-2">Lead status</span>
-        <div className="flex flex-wrap gap-2">
-          {LEAD_STATUSES.map((s) => {
-            const selected = currentLeadStatus === s.value;
-            return (
-              <button
-                key={s.value || "any"}
-                type="button"
-                onClick={() => updateParam("lead_status", s.value)}
-                disabled={pending}
-                className={
-                  "px-3 h-7 inline-flex items-center text-[10px] font-bold uppercase tracking-[0.08em] rounded-full border transition-all duration-150 active:scale-[0.97] " +
-                  (selected
-                    ? "bg-[#cd8b76] text-white border-[#cd8b76] shadow-[0_2px_6px_rgba(205,139,118,0.35)]"
-                    : "bg-white text-[#143643] border-[#dad4cb] hover:border-[#cd8b76]/60 hover:bg-[#fbf9f5]")
-                }
+    <div className="flex flex-wrap gap-3 items-end bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Lead status</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            disabled={pending}
+            className={selectClass + " text-left flex items-center justify-between gap-2 cursor-pointer"}
+          >
+            <span className={selectedStatuses.length === 0 ? "text-[#5a6a72]" : "text-[#11242e] font-semibold"}>
+              {triggerLabel}
+            </span>
+            <span className="text-[#5a6a72]">▾</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            {LEAD_STATUSES.map((s) => (
+              <DropdownMenuCheckboxItem
+                key={s.value}
+                checked={selectedStatuses.includes(s.value)}
+                onCheckedChange={(checked) => toggleLeadStatus(s.value, Boolean(checked))}
+                onSelect={(e) => e.preventDefault()}
               >
                 {s.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+              </DropdownMenuCheckboxItem>
+            ))}
+            {selectedStatuses.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={clearLeadStatus}>Clear</DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </label>
 
-      <div className="flex flex-wrap gap-3 items-end">
       <label className="flex flex-col gap-1">
         <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Search</span>
         <input
@@ -87,6 +134,30 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
           onKeyDown={(e) => {
             if (e.key === "Enter") updateParam("q", (e.target as HTMLInputElement).value);
           }}
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 flex-1 min-w-[260px] max-w-[420px]">
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72] flex items-center gap-2">
+          Emails (paste list)
+          {activeEmails.length > 0 && (
+            <span className="px-2 h-4 inline-flex items-center bg-[#cd8b76] text-white rounded-full text-[9px] font-bold">
+              {activeEmails.length} active
+            </span>
+          )}
+        </span>
+        <textarea
+          className={inputClass + " min-h-[36px] py-2 resize-y"}
+          placeholder="paste emails, comma or newline separated…"
+          defaultValue={current.emails ?? ""}
+          onBlur={(e) => applyEmails(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              applyEmails((e.target as HTMLTextAreaElement).value);
+            }
+          }}
+          rows={1}
         />
       </label>
 
@@ -220,7 +291,6 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
       >
         Clear
       </button>
-      </div>
     </div>
   );
 }
