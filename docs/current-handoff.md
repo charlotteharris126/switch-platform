@@ -1,3 +1,17 @@
+# Platform: Current Handoff: 2026-04-30 — doc-mirror appends from switchable/site Session 47 (multi-cohort revert + sheet decluttering)
+
+## Doc-mirror append (2026-04-30, from switchable/site Session 47)
+
+Site reverted the multi-cohort start_date picker from multi-pick (Continue button) to single-pick auto-advance same session it shipped. CRO trade-off call: extra click was likely a small drop-off cost we couldn't measure without analytics. `acceptable_intake_ids` continues to mirror `preferred_intake_id` under single-pick — schema 1.2 stays intact, future multi-pick re-introduction is cheap. See site commit `8906d3a`.
+
+Two platform-side commits resulted:
+- **`ae9234b`** ([changelog](changelog.md), [provider-onboarding-playbook.md:40](provider-onboarding-playbook.md#L40)) — playbook now lists Preferred intake as optional for multi-cohort funded providers and explicitly flags Acceptable intakes as dormant. Owner deleted the Acceptable intakes column from the EMS provider sheet (header-driven appender = no script redeploy needed).
+- **`8287b86`** ([infrastructure-manifest.md:127-128](infrastructure-manifest.md#L127-L128)) — refreshed Courses Direct + WYK Digital rows. DB confirmed both have sheet_id, webhook_url, auto_route_enabled=true, and first_lead_received_at on 2026-04-21 — manifest had been showing them as "pending sheet creation" since session 5.
+
+FIELD_MAP entry for `acceptableintakes` retained in canonical `provider-sheet-appender-v2.gs` as a no-op for future revival. No DB or Edge Function changes from this session.
+
+---
+
 # Platform: Current Handoff: 2026-04-29 (Session 19 closed, late-evening doc-mirror append from switchable/site Session 45): Brevo enrichment fix end-to-end + admin-brevo-resync tool + no-match build spec
 
 ## Late-evening doc-mirror append (2026-04-29, from switchable/site Session 45)
