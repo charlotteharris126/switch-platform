@@ -55,6 +55,15 @@ export async function markEnrolmentOutcome(
     return { ok: false, error: error.message };
   }
 
+  // Fire-and-forget Brevo sync so SW_ENROL_STATUS catches up to the DB-side
+  // change. crm.sync_leads_to_brevo (migration 0044) returns the pg_net
+  // request_id immediately; the actual Brevo upsert runs async via the
+  // admin-brevo-resync Edge Function. Failures land in leads.dead_letter,
+  // never blocking the UI flow.
+  await supabase.schema("crm").rpc("sync_leads_to_brevo", {
+    p_submission_ids: [input.submissionId],
+  });
+
   revalidatePath(`/leads/${input.submissionId}`);
 
   return { ok: true, enrolmentId: data as number };

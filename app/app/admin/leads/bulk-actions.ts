@@ -29,6 +29,7 @@ export async function markEnrolmentOutcomeBulk(
   const supabase = await createClient();
 
   let succeeded = 0;
+  const succeededIds: number[] = [];
   const errors: Array<{ submissionId: number; error: string }> = [];
 
   for (const submissionId of input.submissionIds) {
@@ -45,7 +46,18 @@ export async function markEnrolmentOutcomeBulk(
       errors.push({ submissionId, error: error.message });
     } else {
       succeeded += 1;
+      succeededIds.push(submissionId);
     }
+  }
+
+  // Single Brevo sync call covering every successfully-updated lead. The
+  // Edge Function runs the upserts sequentially with its own throttle so
+  // Brevo's contacts API rate limit is respected even on big bulk runs.
+  // Best-effort: failures land in leads.dead_letter, don't surface to UI.
+  if (succeededIds.length > 0) {
+    await supabase.schema("crm").rpc("sync_leads_to_brevo", {
+      p_submission_ids: succeededIds,
+    });
   }
 
   revalidatePath("/leads");

@@ -4,6 +4,29 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-30: Brevo auto-sync on enrolment status change (closes U4 trigger gap)
+
+**Type:** New SECURITY DEFINER function + Server Action wiring. No schema change to `crm.enrolments`.
+
+The morning's Brevo work made `SW_ENROL_STATUS` push correctly at routing time and resync time, but did NOT auto-fire when an owner changed a lead's status in `/admin/leads` (single-lead form or bulk action). DB updated, Brevo stayed stale until next manual resync. Email-side U4 (enrolment celebration) and other lifecycle automations rely on SW_ENROL_STATUS attribute changes — without auto-sync they don't fire on owner outcome edits.
+
+**Closed via:**
+- Migration `0044_sync_leads_to_brevo.sql` — adds `crm.sync_leads_to_brevo(BIGINT[])` SECURITY DEFINER function. Uses `public.get_shared_secret('AUDIT_SHARED_SECRET')` + `pg_net.http_post` to fire the existing `admin-brevo-resync` Edge Function asynchronously. Returns request_id immediately, doesn't block. Granted to `authenticated`.
+- `platform/app/app/admin/leads/[id]/actions.ts` — `markEnrolmentOutcome` calls `crm.sync_leads_to_brevo([submissionId])` after a successful upsert.
+- `platform/app/app/admin/leads/bulk-actions.ts` — `markEnrolmentOutcomeBulk` collects successfully-updated submission ids and calls `crm.sync_leads_to_brevo(idArray)` once at the end of the loop, so a 50-lead bulk update fires one Edge Function call (which then loops with its 250ms throttle) rather than 50 parallel calls.
+
+**Failure handling:** best-effort. The DB update is the contract; Brevo sync runs async. If pg_net or the Edge Function fails, the row lands in `leads.dead_letter` and Sasha catches it on Monday.
+
+**Out of scope here:**
+- Auto-flip cron (`crm.run_enrolment_auto_flip`) doesn't yet call `sync_leads_to_brevo`. When the 14-day auto-flip flips ~6 EMS leads from open → presumed_enrolled on 3-4 May, those Brevo contacts will go stale until a manual resync. Adding the call to the cron function is a small follow-up — not blocking U4.
+
+**Files changed:**
+- `platform/supabase/migrations/0044_sync_leads_to_brevo.sql` — new
+- `platform/app/app/admin/leads/[id]/actions.ts` — single-lead Server Action
+- `platform/app/app/admin/leads/bulk-actions.ts` — bulk Server Action
+
+---
+
 ## 2026-04-30: SW_ENROL_STATUS Brevo attribute (lifecycle segmentation)
 
 **Type:** Additive Brevo attribute. No DB schema change.
