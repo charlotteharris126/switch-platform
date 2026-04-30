@@ -17,8 +17,7 @@ The morning's Brevo work made `SW_ENROL_STATUS` push correctly at routing time a
 
 **Failure handling:** best-effort. The DB update is the contract; Brevo sync runs async. If pg_net or the Edge Function fails, the row lands in `leads.dead_letter` and Sasha catches it on Monday.
 
-**Out of scope here:**
-- Auto-flip cron (`crm.run_enrolment_auto_flip`) doesn't yet call `sync_leads_to_brevo`. When the 14-day auto-flip flips ~6 EMS leads from open → presumed_enrolled on 3-4 May, those Brevo contacts will go stale until a manual resync. Adding the call to the cron function is a small follow-up — not blocking U4.
+**Auto-flip cron now also syncs (migration 0045, same day):** `crm.run_enrolment_auto_flip` rewritten to collect every flipped submission_id and fire one `crm.sync_leads_to_brevo` call at the end. Closes the third write path so all status changes (Server Action single-lead, Server Action bulk, cron auto-flip) push to Brevo automatically. Public function shape unchanged — `sample_submission_ids` still returns the first 10; the new `v_flipped_ids` array is internal-only. The 3-4 May presumed_enrolled flips for the ~6 oldest EMS leads will sync to Brevo without intervention.
 
 **Files changed:**
 - `platform/supabase/migrations/0044_sync_leads_to_brevo.sql` — new
