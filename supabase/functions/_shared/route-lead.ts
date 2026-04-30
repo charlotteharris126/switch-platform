@@ -516,15 +516,16 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
 // Brevo Automations watch list membership + attribute updates to trigger
 // the utility and marketing sequences described in switchable/email/.
 //
-// Best-effort: failure logs a leads.dead_letter row and returns. Routing is
-// already committed by the time we get here; Brevo is a downstream side-
-// effect on the same footing as sheet append + provider notification.
+// Returns { ok, error? } so callers that care about success can branch on it
+// (admin-brevo-resync reports per-id status; route-lead's auto/owner paths
+// ignore it because routing is already committed and Brevo is best-effort).
+// Failure also logs a leads.dead_letter row regardless of caller behaviour.
 export async function upsertLearnerInBrevo(
   sql: Sql,
   provider: ProviderRow,
   submission: SubmissionRow,
-): Promise<void> {
-  if (!submission.email) return;
+): Promise<{ ok: boolean; error?: string }> {
+  if (!submission.email) return { ok: false, error: "submission has no email" };
 
   const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
   const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
@@ -532,7 +533,7 @@ export async function upsertLearnerInBrevo(
   if (utilityListId == null) {
     // Email launch hasn't been wired yet — silently skip rather than spam
     // dead_letter. Owner sets the list IDs once Brevo dashboard is configured.
-    return;
+    return { ok: false, error: "BREVO_LIST_ID_SWITCHABLE_UTILITY not set" };
   }
 
   const ctx = await composeBrevoCourseContext(submission);
@@ -612,7 +613,9 @@ export async function upsertLearnerInBrevo(
     await persistDeadLetter(sql, "edge_function_brevo_upsert",
       { provider_id: provider.provider_id, submission_id: submission.id },
       `Brevo learner upsert failed: ${upsertResult.error ?? "unknown"}`);
+    return { ok: false, error: upsertResult.error ?? "unknown" };
   }
+  return { ok: true };
 }
 
 // Same Brevo upsert as upsertLearnerInBrevo, minus the provider attributes,
@@ -636,7 +639,7 @@ export async function upsertLearnerInBrevoNoMatch(
   sql: Sql,
   submissionId: number,
   matchStatus: "no_match" | "pending",
-): Promise<void> {
+): Promise<{ ok: boolean; error?: string }> {
   const [submission] = await sql<SubmissionRow[]>`
     SELECT id, submitted_at, course_id, funding_category, funding_route,
            first_name, last_name, email, phone,
@@ -652,15 +655,15 @@ export async function upsertLearnerInBrevoNoMatch(
      WHERE id = ${submissionId}
      LIMIT 1
   `;
-  if (!submission) return;
-  if (submission.archived_at) return;
-  if (!submission.email) return;
+  if (!submission) return { ok: false, error: "submission not found" };
+  if (submission.archived_at) return { ok: false, error: "submission archived" };
+  if (!submission.email) return { ok: false, error: "submission has no email" };
 
   const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
   const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
 
   if (utilityListId == null) {
-    return;
+    return { ok: false, error: "BREVO_LIST_ID_SWITCHABLE_UTILITY not set" };
   }
 
   const ctx = await composeBrevoCourseContext(submission);
@@ -705,7 +708,9 @@ export async function upsertLearnerInBrevoNoMatch(
     await persistDeadLetter(sql, "edge_function_brevo_upsert_no_match",
       { submission_id: submission.id, match_status: matchStatus },
       `Brevo learner upsert (${matchStatus}) failed: ${upsertResult.error ?? "unknown"}`);
+    return { ok: false, error: upsertResult.error ?? "unknown" };
   }
+  return { ok: true };
 }
 
 function parseEnvInt(name: string): number | null {

@@ -94,13 +94,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ error: "submissionIds must contain only numbers" }, 400);
   }
 
+  // Throttle between Brevo calls so we stay below the contacts-API rate limit
+  // (observed 429s firing 6 parallel batches of 25 with no delay; 250ms gap
+  // gives ~4 calls/sec per running instance, well clear of the limit).
+  const THROTTLE_MS = 250;
+
   const results: ResyncResult[] = [];
-  for (const id of numericIds) {
-    results.push(await resyncOne(id));
+  for (let i = 0; i < numericIds.length; i++) {
+    if (i > 0) await sleep(THROTTLE_MS);
+    results.push(await resyncOne(numericIds[i]));
   }
 
   return json({ results }, 200);
 });
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function resyncOne(submissionId: number): Promise<ResyncResult> {
   let submission: SubmissionRow;
@@ -129,7 +139,8 @@ async function resyncOne(submissionId: number): Promise<ResyncResult> {
     // to the U-track utility list for SF8 recirc + monthly newsletter.
     if (submissionRow.is_dq) {
       try {
-        await upsertLearnerInBrevoNoMatch(sql, submissionId, "no_match");
+        const r = await upsertLearnerInBrevoNoMatch(sql, submissionId, "no_match");
+        if (!r.ok) return { id: submissionId, status: "error", reason: `no_match upsert: ${r.error ?? "unknown"}` };
         return { id: submissionId, status: "ok", reason: "dq → no_match" };
       } catch (err) {
         console.error(`resync ${submissionId} no_match upsert failed:`, err);
@@ -142,7 +153,8 @@ async function resyncOne(submissionId: number): Promise<ResyncResult> {
     // future-proofs the resync against any that land before/after deploy.
     if (!submissionRow.primary_routed_to) {
       try {
-        await upsertLearnerInBrevoNoMatch(sql, submissionId, "pending");
+        const r = await upsertLearnerInBrevoNoMatch(sql, submissionId, "pending");
+        if (!r.ok) return { id: submissionId, status: "error", reason: `pending upsert: ${r.error ?? "unknown"}` };
         return { id: submissionId, status: "ok", reason: "unrouted → pending" };
       } catch (err) {
         console.error(`resync ${submissionId} pending upsert failed:`, err);
@@ -171,7 +183,8 @@ async function resyncOne(submissionId: number): Promise<ResyncResult> {
   }
 
   try {
-    await upsertLearnerInBrevo(sql, provider, submission);
+    const r = await upsertLearnerInBrevo(sql, provider, submission);
+    if (!r.ok) return { id: submissionId, status: "error", reason: `upsert: ${r.error ?? "unknown"}` };
     return { id: submissionId, status: "ok" };
   } catch (err) {
     console.error(`resync ${submissionId} upsert failed:`, err);
