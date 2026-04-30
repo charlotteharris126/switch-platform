@@ -124,8 +124,8 @@ Onboarding new providers: follow `platform/docs/provider-onboarding-playbook.md`
 | Provider | Sheet ID | Web app URL (in `crm.providers.sheet_webhook_url`) | Script version | Status |
 |---|---|---|---|---|
 | `enterprise-made-simple` | `1ABX9p_5OQUS3kLD1ztvFYSccozoTOmt7RiiDBg4IOuU` | `https://script.google.com/macros/s/AKfycbw35aTlElUvxdU3zh-EwLeI0M_XUfLKHQoU08xewvz2Xgoz-UCbRa_4k4rE5k2sKT4R-Q/exec` | v2 | Live. Migrated v1 → v2 on 2026-04-29 to enable cohort intake columns ("Preferred intake" / "Acceptable intakes") for multi-cohort EMS courses (Counselling Tees Valley, SMM Tees Valley). URL preserved across migration (New version, not New deployment). End-to-end verified with live lead. |
-| `courses-direct` | owner to paste after sheet creation (data-ops/007) | owner to paste after Apps Script deploy (data-ops/007) | v2 | Session 5 - pending sheet creation + Apps Script v2 deploy. Unblocks auto-routing of self-funded leads. |
-| `wyk-digital` | owner to paste after sheet creation (data-ops/007) | owner to paste after Apps Script deploy (data-ops/007) | v2 | Session 5 - pending sheet creation + Apps Script v2 deploy. LIFT Digital Marketing Futures cohort starts 2026-04-27. |
+| `courses-direct` | `1BUVA70N2AwFbAidUJLf1LTUyUUncTu1hfVbx9AwnES0` | `https://script.google.com/macros/s/AKfycbz35Ua3omaTpIFt32I9LvK3UMvGfelpX6EdoEXkWAbK4QS1trUi3u2xUAHSSx2HGeXbWA/exec` | v2 | Live. Sheet + Apps Script v2 deployed; `auto_route_enabled=true`. First lead received 2026-04-21. Self-funded shape (no cohort intake columns needed). |
+| `wyk-digital` | `1VnRWpLyujEZidZ6PrWuQEvjFtiHmzYvohR-rHyKex0E` | `https://script.google.com/macros/s/AKfycbxOp-eNqR8IPt1vymxH4PgbYNMleqwjjZLq1ZAM2QPOweMhMQGOQEW0o9zPPYAXtn4M/exec` | v2 | Live. Sheet + Apps Script v2 deployed; `auto_route_enabled=true`. First lead received 2026-04-21 (Ruby Marle, Laura Hawdon). LIFT Digital Marketing Futures is single-cohort, no intake columns needed. |
 
 ---
 
