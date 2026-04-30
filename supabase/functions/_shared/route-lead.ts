@@ -524,6 +524,29 @@ export async function upsertLearnerInBrevo(
   const ctx = await composeBrevoCourseContext(submission);
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
 
+  // SW_ENROL_STATUS reads crm.enrolments.status for this (submission, provider)
+  // pair. LEFT JOIN-equivalent: if no row (race condition on resync paths
+  // where the enrolment row hasn't materialised yet, or future no-row edge
+  // cases), push empty string. Per migration 0042 every routed lead has a row
+  // at routing time, so in practice this is always populated for the matched
+  // path. Brevo Category accepts empty string for unset. The attribute lets
+  // marketing automation segment by lifecycle (open / enrolled / etc.) so
+  // re-engagement campaigns can target only open leads.
+  let enrolStatus = "";
+  try {
+    const [enrolRow] = await sql<Array<{ status: string }>>`
+      SELECT status
+        FROM crm.enrolments
+       WHERE submission_id = ${submission.id}
+         AND provider_id   = ${provider.provider_id}
+       LIMIT 1
+    `;
+    enrolStatus = enrolRow?.status ?? "";
+  } catch (err) {
+    console.error("crm.enrolments.status read failed:", String(err));
+    // Continue with empty string; one missing attribute shouldn't sink the upsert.
+  }
+
   // Attribute namespacing: FIRSTNAME / LASTNAME stay as unprefixed Brevo
   // defaults (built-in fields). Everything Switchable-specific carries an
   // SW_ prefix so it doesn't collide with future SwitchLeads SL_-prefixed
@@ -553,6 +576,7 @@ export async function upsertLearnerInBrevo(
     // SW_MATCH_STATUS lets Brevo Automations trigger off attribute updates
     // without needing a separate event API. See _shared/brevo.ts comment.
     SW_MATCH_STATUS: "matched",
+    SW_ENROL_STATUS: enrolStatus,
   };
 
   // One upsert call adds the contact to both lists atomically. Previously
@@ -646,6 +670,10 @@ export async function upsertLearnerInBrevoNoMatch(
     SW_DQ_REASON: dqReason,
     SW_CONSENT_MARKETING: submission.marketing_opt_in,
     SW_MATCH_STATUS: matchStatus,
+    // SW_ENROL_STATUS is empty for no_match / pending — these contacts aren't
+    // in the enrolment lifecycle yet. Will be populated once the lead routes
+    // and the matched upsert helper takes over.
+    SW_ENROL_STATUS: "",
   };
 
   const listIds = [utilityListId];

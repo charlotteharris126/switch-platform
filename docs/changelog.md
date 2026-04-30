@@ -4,6 +4,39 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-30: SW_ENROL_STATUS Brevo attribute (lifecycle segmentation)
+
+**Type:** Additive Brevo attribute. No DB schema change.
+
+Marketing automation needs to segment by enrolment lifecycle (open / enrolled / presumed_enrolled / cannot_reach / lost) so re-engagement campaigns can target only open leads, and entry filters can suppress U1 etc. for already-routed contacts. Adds `SW_ENROL_STATUS` (Brevo Category, 16th SW_ attribute) to the contact upsert.
+
+**Source of truth:** `crm.enrolments.status` joined to the submission by `(submission_id, provider_id)`. LEFT JOIN-equivalent: empty string if no row, defensive against any race condition (in practice every routed lead has a row at routing time per migration 0042).
+
+**Behaviour by helper:**
+- `upsertLearnerInBrevo` (matched): reads live status from `crm.enrolments`. Always populated post-0042.
+- `upsertLearnerInBrevoNoMatch` (no_match / pending): empty string. These contacts aren't in the enrolment lifecycle until routed. Flips to a real status when the lead routes and the matched helper takes over.
+
+**Value mapping:** DB enum and Brevo Category values are pushed verbatim. DB uses `cannot_reach`. The original task spec listed `cannot_contact` as a Brevo Category value — owner to verify Brevo Category options match DB exactly. If Brevo has `cannot_contact`, a 1-line value mapping in the helper closes the gap; if Brevo has `cannot_reach` (most likely — owner said "values aligned"), no further change needed.
+
+**Test plan (run before full backfill):**
+1. Owner confirms U1 funded + U1 self automations are paused in Brevo (already in progress per task brief).
+2. Run admin-brevo-resync against submission 159 only (Luana Martinez, currently `cannot_reach`, routed to EMS) and confirm her contact in Brevo has `SW_ENROL_STATUS=cannot_reach`. The earlier task spec listed her as `open` — outcome's been updated since, which makes the test more useful (it proves a non-default value pushes through).
+3. Verify U1 doesn't fire (expected: paused).
+4. If clean, proceed with full backfill across all 166 (53 DQ + 113 routed) submissions.
+
+**Files changed:**
+- `platform/supabase/functions/_shared/route-lead.ts` — `upsertLearnerInBrevo` adds the LEFT JOIN-equivalent enrolment status read + `SW_ENROL_STATUS` attribute. `upsertLearnerInBrevoNoMatch` adds `SW_ENROL_STATUS: ""`.
+- No netlify-lead-router or admin-brevo-resync change — both inherit via the helpers.
+
+**Owner-side work tracked separately:**
+- Brevo dashboard: SW_ENROL_STATUS Category attribute set up with the 5 values.
+- U1 funded + U1 self automations paused for the backfill window. Unpause once backfill complete.
+- `switchable/email/CLAUDE.md` namespacing list to bump 15 SW_ attrs → 16. Out of platform scope; flagging here.
+
+**Deployed:** netlify-lead-router, routing-confirm, admin-brevo-resync.
+
+---
+
 ## 2026-04-30: Brevo 3-state push live (no_match / pending / matched) + historical resync extended
 
 **Type:** Edge Function behaviour change. No schema change.
