@@ -535,8 +535,13 @@ CREATE TABLE crm.enrolments (
   -- 'open'              - sent to provider, awaiting update
   -- 'contacted'         - provider reached learner
   -- 'enrolled'          - provider confirms enrolment
-  -- 'presumed_enrolled' - auto-set after 14 days if no update
-  -- 'not_enrolled'      - provider confirms no enrolment
+  -- 'presumed_enrolled' - auto-set after 14 days if no update; also settable
+  --                        manually by provider via sheet (sheet-edit-mirror, 2026-04-30)
+  -- 'cannot_reach'      - provider tried, no response yet (sheet vocab; 2026-04-30)
+  -- 'lost'              - lead won't convert (sheet vocab; 2026-04-30). Distinct
+  --                        from 'not_enrolled': 'lost' is provider's "closed lost"
+  --                        terminology, 'not_enrolled' is owner-side outcome.
+  -- 'not_enrolled'      - confirmed no enrolment (used by owner / system)
   -- 'disputed'          - provider or learner dispute raised
   -- 'billed'            - invoice issued via GoCardless
   -- 'paid'              - payment collected
@@ -588,6 +593,75 @@ CREATE TABLE crm.disputes (
 
 CREATE INDEX ON crm.disputes (enrolment_id);
 CREATE INDEX ON crm.disputes (resolved_at) WHERE resolved_at IS NULL;
+```
+
+### `crm.sheet_edits_log` (migration 0047, 2026-04-30)
+
+Audit row per provider sheet edit captured by the Apps Script `onEdit` trigger. Covers two channels: Channel A (Status column, deterministic mirror) and Channel B (Notes column, AI-interpreted). Decoupled from the `crm.enrolments` status enum so future enum changes only touch the Edge Function mapping. Retires alongside the Apps Script `onEdit` trigger and `sheet-edit-mirror` Edge Function when the Phase 4 provider dashboard ships, but is retained as historical audit. Full design in `platform/docs/sheet-mirror-scoping.md`.
+
+```sql
+CREATE TABLE crm.sheet_edits_log (
+  id                BIGSERIAL PRIMARY KEY,
+  enrolment_id      BIGINT REFERENCES crm.enrolments(id),
+  submission_id     BIGINT REFERENCES leads.submissions(id),
+  provider_id       TEXT NOT NULL REFERENCES crm.providers(provider_id),
+  column_name       TEXT NOT NULL,            -- 'Status' | 'Updates'
+  old_value         TEXT,
+  new_value         TEXT,
+  editor_email      TEXT,
+  edited_at         TIMESTAMPTZ NOT NULL,
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  action            TEXT NOT NULL,
+  -- 'mirrored' | 'queued' | 'note_only' | 'ai_suggested' | 'ai_approved'
+  -- | 'ai_rejected' | 'ai_overridden' | 'ai_error' | 'rejected'
+  applied_status    TEXT,
+  ai_summary        TEXT,
+  ai_implied_status TEXT,
+  ai_confidence     TEXT,                     -- 'high' | 'medium' | 'low'
+  prompt_version    TEXT,
+  pending_update_id BIGINT,                   -- FK to crm.pending_updates
+  reason            TEXT,
+  notes             TEXT
+);
+
+CREATE INDEX ON crm.sheet_edits_log (provider_id, received_at DESC);
+CREATE INDEX ON crm.sheet_edits_log (enrolment_id);
+CREATE INDEX ON crm.sheet_edits_log (action, received_at DESC)
+  WHERE action NOT IN ('mirrored', 'note_only', 'ai_approved');
+```
+
+### `crm.pending_updates` (migration 0047, 2026-04-30)
+
+Queue of AI-suggested enrolment status changes awaiting owner approval. Resolved via HMAC-signed email links (Approve / Reject / Override) hitting the `pending-update-confirm` Edge Function — same pattern as `routing-confirm`. Source-tagged so future suggestion sources (learner self-report AI, call transcript AI) share the queue.
+
+```sql
+CREATE TABLE crm.pending_updates (
+  id                        BIGSERIAL PRIMARY KEY,
+  enrolment_id              BIGINT NOT NULL REFERENCES crm.enrolments(id),
+  source                    TEXT NOT NULL,           -- 'sheet_note_ai' (extensible)
+  source_log_id             BIGINT REFERENCES crm.sheet_edits_log(id),
+  source_payload            JSONB,                   -- PII-redacted
+  current_status            TEXT NOT NULL,           -- snapshot at suggestion time
+  suggested_status          TEXT NOT NULL,
+  ai_summary                TEXT,
+  ai_rationale              TEXT,
+  ai_confidence             TEXT,
+  prompt_version            TEXT,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status                    TEXT NOT NULL DEFAULT 'pending',
+  -- 'pending' | 'approved' | 'rejected' | 'overridden' | 'expired'
+  override_status           TEXT,                    -- chosen status if overridden
+  resolved_at               TIMESTAMPTZ,
+  resolved_by               TEXT,                    -- 'owner' | 'auto_expire'
+  applied_at                TIMESTAMPTZ,
+  resolver_token_expires_at TIMESTAMPTZ NOT NULL     -- 7 days from created_at
+  -- Tokens themselves are stateless (HMAC payload binds pending_update_id,
+  -- action, expires_at). DB only stores the expiry for the daily sweep cron.
+);
+
+CREATE INDEX ON crm.pending_updates (status, created_at DESC) WHERE status = 'pending';
+CREATE INDEX ON crm.pending_updates (enrolment_id);
+CREATE INDEX ON crm.pending_updates (resolver_token_expires_at) WHERE status = 'pending';
 ```
 
 ### `crm.providers` — Session C additions (migration 0016)

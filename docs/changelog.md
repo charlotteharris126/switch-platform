@@ -4,6 +4,67 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-30: Switchable `data-complaint-switchable` form added to allowlist
+
+**Type:** New Netlify form name registered for the `/data-complaint/` page on switchable.org.uk.
+
+DUAA "How to Complain" section (live in Notion privacy 24 Apr, surfaced as Section 13 in current Notion structure) requires a routable complaint surface on each brand. SwitchLeads version shipped earlier today; Switchable version followed in the same session to bring deployed HTML up to lockstep with Notion. Privacy + Terms HTML also synced end-to-end from Notion as part of the same Mable session — see `switchable/site/docs/current-handoff.md`.
+
+**Form details:**
+- `form_name: data-complaint-switchable`
+- `webhook_url: null` — Netlify email notification only to legal@switchable.org.uk (not a lead capture, no Edge Function routing)
+- Captures user PII (name, email, what_happened, outcome_wanted, brand selection) so carries `terms_accepted` (required), `marketing_opt_in` (optional), `schema_version=1.0`, and honeypot per the PII consent rule
+- Page has noindex + og:url to /course-finder/ per transactional-page meta rule
+
+**Owner action items pending (post-deploy, in Netlify dashboard):**
+- Forms → data-complaint-switchable → Form notifications → add email notification to legal@switchable.org.uk (no outgoing webhook needed)
+- After form is wired and a test submission lands, trigger `POST https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/netlify-forms-audit` to verify allowlist alignment
+
+**Files changed:**
+- `switchable/site/deploy/deploy/data-complaint/index.html` — new (procedure + form)
+- `switchable/site/deploy/deploy/data-complaint-thankyou/index.html` — new
+- `switchable/site/deploy/deploy/data/form-allowlist.json` — new entry appended
+- `switchable/site/deploy/deploy/privacy/index.html` — full sync from Notion (added: Section 1 apprenticeship paragraph, Section 5 payments + international transfers, Section 6 AI sub-processor + retention table, Section 7 marketing/analytics/advertising expanded, Section 12 DPO line, Section 13 How to Complain). Em dash count 15 → 0.
+- `switchable/site/deploy/deploy/terms/index.html` — full sync from Notion (added: Section 2 apprenticeship clarification + statutory rights paragraphs, Section 3 under-18 termination, Section 7 expanded liability bullets). Em dash count 3 → 0.
+
+---
+
+## 2026-04-30: Sheet→DB mirror schema (migration 0047)
+
+**Type:** Two new tables + indexes. Migration 0047. Schema only — Edge Function and Apps Script work follow.
+
+Owner is losing track of pipeline state across three pilot providers because providers update sheets in two different ways: sometimes a Status column, sometimes free-text Notes. `crm.enrolments` exists but never advances — nothing flows back from sheets. This migration adds the schema layer for a hybrid sheet→DB mirror designed in `platform/docs/sheet-mirror-scoping.md`: deterministic mirror for Status edits (Channel A), AI-suggest-then-owner-approve for Notes edits (Channel B).
+
+**Migration 0047:**
+- `crm.sheet_edits_log` — audit row per sheet edit captured by the new `provider-sheet-edit-mirror.gs` Apps Script trigger. Covers both channels with extensible action taxonomy (`mirrored | queued | note_only | ai_suggested | ai_approved | ai_rejected | ai_overridden | ai_error | rejected`). Channel B-only fields (`ai_summary`, `ai_implied_status`, `ai_confidence`, `prompt_version`, `pending_update_id`) are nullable. Decoupled from `crm.enrolments` status enum so future enum changes only touch the Edge Function mapping.
+- `crm.pending_updates` — queue of AI-suggested status changes awaiting owner approval. Resolved via HMAC-signed Approve / Reject / Override email links (same pattern as `routing-confirm`). Source-tagged for future suggestion sources (learner self-report AI, call transcript AI) sharing the queue.
+
+**Decisions confirmed in design:**
+- Channel A auto-mirrors `Enrolled` without owner approval — dispute window is the safety net.
+- Channel B always requires owner Approve click, even on high-confidence suggestions.
+- Notes are PII-redacted (email + phone stripped) before sending to Anthropic — supports GDPR data minimisation.
+- Build both channels in parallel; Channel B activation in production gated on Phase 0 legal sign-off (Switchable privacy policy lists Anthropic as sub-processor + DPA filed). Phase 0 owned by owner + Clara, in progress.
+- No backfill — forward-only from go-live.
+
+**Phase 4 retirement:** Apps Script onEdit trigger and `sheet-edit-mirror` Edge Function retire when the provider dashboard ships. `crm.sheet_edits_log` and `crm.pending_updates` carry forward — the suggestion-and-approve pattern applies to other future signal sources regardless of sheets. Status vocabulary, audit log, dashboard view all unchanged.
+
+**Files changed:**
+- `platform/supabase/migrations/0047_sheet_mirror_tables.sql` — new
+- `platform/docs/data-architecture.md` — `crm.sheet_edits_log` and `crm.pending_updates` sections added
+- `platform/docs/sheet-mirror-scoping.md` — new design doc
+
+**Next steps (separate sessions):**
+- Edge Function `sheet-edit-mirror` — Channel A path first (log-only, then activate UPDATE)
+- Edge Function `pending-update-confirm` — Approve/Reject/Override handler
+- Apps Script `provider-sheet-edit-mirror.gs` — onEdit trigger watching Status + Notes columns
+- Brevo templates for anomaly emails and AI suggestion emails
+- Daily digest cron `sheet-mirror-daily-digest`
+- Admin dashboard tiles (Overview headline, Actions drill-through)
+- `infrastructure-manifest.md` and `secrets-rotation.md` updates (`ANTHROPIC_API_KEY`)
+- `/ultrareview` before each production deploy
+
+---
+
 ## 2026-04-30: One-click SF2 chaser button on /admin/leads + last-chaser tracking
 
 **Type:** New column + new RPC + new Edge Function + new UI button. Migration 0046.

@@ -439,3 +439,9 @@ verify_jwt = false
 
 [functions.admin-brevo-chase]
 verify_jwt = false
+
+[functions.sheet-edit-mirror]
+verify_jwt = false
+
+[functions.pending-update-confirm]
+verify_jwt = false
