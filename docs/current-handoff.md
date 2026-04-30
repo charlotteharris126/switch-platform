@@ -73,7 +73,15 @@
 - Migration `0045_auto_flip_calls_brevo_sync.sql` — `crm.run_enrolment_auto_flip` rewritten to collect every flipped submission_id (separate from the existing `v_sample` BIGINT[] which stays capped at 10 for telemetry) and fire one `crm.sync_leads_to_brevo` call at the end. Public function shape unchanged. The 3-4 May presumed_enrolled flips for the ~6 oldest EMS leads will sync to Brevo without intervention.
 - All three enrolment-status write paths (single-lead form, bulk action, cron) now push to Brevo automatically.
 
-### 9. Owner-side Brevo work (in flight / done during session)
+### 9. SF2 chaser one-click button on /admin/leads (migration 0046, post-handoff add-on, verified live)
+
+- Owner request: replace the 3-clicks-per-lead manual Brevo UI add to "Provider tried no answer" list with a single button on the dashboard.
+- Migration 0046 — adds `crm.enrolments.last_chaser_at TIMESTAMPTZ` + `crm.fire_provider_chaser(BIGINT[])` SECURITY DEFINER RPC. RPC validates eligibility (must have email, not archived, must have enrolment row), stamps `last_chaser_at`, audits, async-fires `admin-brevo-chase` via pg_net. Returns per-id status + skip reason.
+- New Edge Function `admin-brevo-chase` — `x-audit-key` auth, adds emails to Brevo internal list ID 8 (set as `BREVO_LIST_ID_PROVIDER_TRIED_NO_ANSWER` via `supabase secrets set`). 250ms throttle. Failures land in `dead_letter`; `last_chaser_at` still stamped (owner's intent recorded regardless).
+- UI — "Send chaser" button in the sticky bulk action bar (secondary style next to "Apply"). New "Last chaser" column on `/admin/leads` showing `today` / `Xd ago` / `—`, coloured red+bold when ≤2 days to discourage double-firing. Hover tooltip carries the ISO timestamp.
+- Verified live by owner end-to-end immediately after deploy.
+
+### 10. Owner-side Brevo work (in flight / done during session)
 
 - `SW_ENROL_STATUS` Category attribute added in Brevo with values `open` / `enrolled` / `presumed_enrolled` / `cannot_contact` / `lost`.
 - `SW_MATCH_STATUS` Category attribute added with values `matched` / `pending` / `no_match` (was missing — caused the test resync's first attempt to silently drop ALL the new attributes; Brevo's behaviour is to drop the entire attribute update if any single key isn't defined as a Contact Attribute).
