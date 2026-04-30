@@ -37,6 +37,7 @@ import {
   type ProviderRow,
   type SubmissionRow,
   upsertLearnerInBrevo,
+  upsertLearnerInBrevoNoMatch,
 } from "../_shared/route-lead.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
@@ -121,9 +122,34 @@ async function resyncOne(submissionId: number): Promise<ResyncResult> {
        WHERE id = ${submissionId}
     `;
     if (!submissionRow) return { id: submissionId, status: "skipped", reason: "submission not found" };
-    if (submissionRow.is_dq) return { id: submissionId, status: "skipped", reason: "is_dq=true" };
     if (submissionRow.archived_at) return { id: submissionId, status: "skipped", reason: "archived" };
-    if (!submissionRow.primary_routed_to) return { id: submissionId, status: "skipped", reason: "never routed" };
+
+    // DQ leads: push as no_match with SW_DQ_REASON populated. Pre-2026-04-30
+    // these leads were never in Brevo at all; the no-match build added them
+    // to the U-track utility list for SF8 recirc + monthly newsletter.
+    if (submissionRow.is_dq) {
+      try {
+        await upsertLearnerInBrevoNoMatch(sql, submissionId, "no_match");
+        return { id: submissionId, status: "ok", reason: "dq → no_match" };
+      } catch (err) {
+        console.error(`resync ${submissionId} no_match upsert failed:`, err);
+        return { id: submissionId, status: "error", reason: `no_match upsert: ${String(err)}` };
+      }
+    }
+
+    // Unrouted qualified: push as pending (owner-confirm path will flip to
+    // matched later). Currently zero such leads in production but the branch
+    // future-proofs the resync against any that land before/after deploy.
+    if (!submissionRow.primary_routed_to) {
+      try {
+        await upsertLearnerInBrevoNoMatch(sql, submissionId, "pending");
+        return { id: submissionId, status: "ok", reason: "unrouted → pending" };
+      } catch (err) {
+        console.error(`resync ${submissionId} pending upsert failed:`, err);
+        return { id: submissionId, status: "error", reason: `pending upsert: ${String(err)}` };
+      }
+    }
+
     submission = submissionRow;
 
     const [providerRow] = await sql<ProviderRow[]>`

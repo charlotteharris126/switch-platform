@@ -74,6 +74,7 @@ export interface SubmissionRow {
   budget: string | null;
   courses_selected: string[] | null;
   is_dq: boolean;
+  dq_reason: string | null;
   primary_routed_to: string | null;
   archived_at: string | null;
   marketing_opt_in: boolean;
@@ -139,7 +140,7 @@ export async function routeLead(
              outcome_interest, why_this_course,
              postcode, region, reason, interest, situation,
              qualification, start_when, budget, courses_selected,
-             is_dq, primary_routed_to, archived_at,
+             is_dq, dq_reason, primary_routed_to, archived_at,
              marketing_opt_in,
              preferred_intake_id, acceptable_intake_ids
         FROM leads.submissions
@@ -445,6 +446,53 @@ function readRoute(
   };
 }
 
+// Resolves course / region / intake / sector for a submission, branching on
+// funding_category. Self-funded leads skip matrix.json entirely (their
+// course_id is a YAML id, not a page slug, so the lookup would silently miss)
+// and read sector from submission.interest. Funded (gov/loan) leads go
+// through matrix.json as before.
+//
+// Returned values are always strings (empty when not applicable) so the caller
+// can drop them straight into Brevo attributes without null-handling.
+async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
+  courseTitle: string;
+  courseSlug: string;
+  intakeId: string;
+  intakeDate: string;
+  regionName: string;
+  sector: string;
+}> {
+  if (submission.funding_category === "self") {
+    return {
+      courseTitle: "",
+      courseSlug: "",
+      intakeId: "",
+      intakeDate: "",
+      regionName: "",
+      sector: submission.interest ?? "",
+    };
+  }
+
+  const matrix = await getMatrixContext(submission.course_id, submission.preferred_intake_id);
+
+  // SW_SECTOR maps to the course's interest tag in the funding-appropriate
+  // taxonomy. Funded leads (gov) read ffInterest (free-courses-for-jobs
+  // categorisation). Loan-funded reads cfInterest (course-finder
+  // categorisation). Falls back to the other side if the primary is missing.
+  const sector = submission.funding_category === "gov"
+    ? (matrix.ffInterest ?? matrix.cfInterest)
+    : (matrix.cfInterest ?? matrix.ffInterest);
+
+  return {
+    courseTitle: matrix.courseTitle ?? submission.course_id ?? "",
+    courseSlug: matrix.courseId ?? "",
+    intakeId: matrix.intakeId ?? "",
+    intakeDate: matrix.intakeDate ?? "",
+    regionName: matrix.regionName ?? "",
+    sector: sector ?? "",
+  };
+}
+
 // Composes the learner's Brevo contact from the submission + provider rows
 // and upserts it into the Switchable utility list (contract basis, every
 // matched lead) plus the marketing list if marketing_opt_in=true (consent
@@ -473,16 +521,8 @@ export async function upsertLearnerInBrevo(
     return;
   }
 
-  const matrix = await getMatrixContext(submission.course_id, submission.preferred_intake_id);
-
-  // SW_SECTOR maps to the course's interest tag in the funding-appropriate
-  // taxonomy. Funded leads (gov funding_category) read ffInterest because
-  // that's what /find-funded-courses categorises by; self-funded and
-  // loan-funded leads read cfInterest because that's the course-finder
-  // taxonomy. Falls back to the other side if the primary is missing.
-  const sector = submission.funding_category === "gov"
-    ? (matrix.ffInterest ?? matrix.cfInterest)
-    : (matrix.cfInterest ?? matrix.ffInterest);
+  const ctx = await composeBrevoCourseContext(submission);
+  const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
 
   // Attribute namespacing: FIRSTNAME / LASTNAME stay as unprefixed Brevo
   // defaults (built-in fields). Everything Switchable-specific carries an
@@ -492,12 +532,12 @@ export async function upsertLearnerInBrevo(
   const attributes: BrevoAttributes = {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
-    SW_COURSE_NAME: matrix.courseTitle ?? submission.course_id ?? "",
-    SW_COURSE_SLUG: matrix.courseId ?? "",
-    SW_COURSE_INTAKE_ID: matrix.intakeId ?? "",
-    SW_COURSE_INTAKE_DATE: matrix.intakeDate ?? "",
-    SW_REGION_NAME: matrix.regionName ?? "",
-    SW_SECTOR: sector ?? "",
+    SW_COURSE_NAME: ctx.courseTitle,
+    SW_COURSE_SLUG: ctx.courseSlug,
+    SW_COURSE_INTAKE_ID: ctx.intakeId,
+    SW_COURSE_INTAKE_DATE: ctx.intakeDate,
+    SW_REGION_NAME: ctx.regionName,
+    SW_SECTOR: ctx.sector,
     SW_PROVIDER_NAME: provider.company_name,
     SW_PROVIDER_TRUST_LINE: provider.trust_line ?? "",
     SW_FUNDING_CATEGORY: submission.funding_category ?? "",
@@ -508,6 +548,7 @@ export async function upsertLearnerInBrevo(
     // when the new shape lands. Cleaner to not push it at all at v1.
     SW_EMPLOYMENT_STATUS: submission.employment_status ?? "",
     SW_OUTCOME_INTEREST: submission.outcome_interest ?? "",
+    SW_DQ_REASON: dqReason,
     SW_CONSENT_MARKETING: submission.marketing_opt_in,
     // SW_MATCH_STATUS lets Brevo Automations trigger off attribute updates
     // without needing a separate event API. See _shared/brevo.ts comment.
@@ -533,6 +574,95 @@ export async function upsertLearnerInBrevo(
     await persistDeadLetter(sql, "edge_function_brevo_upsert",
       { provider_id: provider.provider_id, submission_id: submission.id },
       `Brevo learner upsert failed: ${upsertResult.error ?? "unknown"}`);
+  }
+}
+
+// Same Brevo upsert as upsertLearnerInBrevo, minus the provider attributes,
+// for unmatched (no_match / pending) leads. Provider attrs stay empty;
+// SW_MATCH_STATUS carries the state. Brevo Automation entry filters branch
+// the nurture from there:
+//   - matched + funded     -> N1-N7 spine + monthly newsletter
+//   - matched + self       -> U-track utility only (sector-led nurture future)
+//   - pending              -> SF13 "picking your provider", flips to matched on confirm
+//   - no_match             -> SF8 recirc utility, then monthly newsletter only
+//
+// Takes a submission id rather than a row so callers (netlify-lead-router
+// post-insert, admin-brevo-resync historical backfill) don't have to assemble
+// the SubmissionRow shape themselves. Fetches with the same column list as
+// fetchSubmission inside routeLead so the two helpers stay aligned.
+//
+// Same best-effort posture as the matched helper: failure logs to
+// leads.dead_letter and returns. The submission is already committed by the
+// caller, so Brevo failure doesn't unwind anything.
+export async function upsertLearnerInBrevoNoMatch(
+  sql: Sql,
+  submissionId: number,
+  matchStatus: "no_match" | "pending",
+): Promise<void> {
+  const [submission] = await sql<SubmissionRow[]>`
+    SELECT id, submitted_at, course_id, funding_category, funding_route,
+           first_name, last_name, email, phone,
+           la, region_scheme, age_band, employment_status,
+           prior_level_3_or_higher, can_start_on_intake_date,
+           outcome_interest, why_this_course,
+           postcode, region, reason, interest, situation,
+           qualification, start_when, budget, courses_selected,
+           is_dq, dq_reason, primary_routed_to, archived_at,
+           marketing_opt_in,
+           preferred_intake_id, acceptable_intake_ids
+      FROM leads.submissions
+     WHERE id = ${submissionId}
+     LIMIT 1
+  `;
+  if (!submission) return;
+  if (submission.archived_at) return;
+  if (!submission.email) return;
+
+  const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
+  const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
+
+  if (utilityListId == null) {
+    return;
+  }
+
+  const ctx = await composeBrevoCourseContext(submission);
+  const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
+
+  const attributes: BrevoAttributes = {
+    FIRSTNAME: submission.first_name ?? "",
+    LASTNAME: submission.last_name ?? "",
+    SW_COURSE_NAME: ctx.courseTitle,
+    SW_COURSE_SLUG: ctx.courseSlug,
+    SW_COURSE_INTAKE_ID: ctx.intakeId,
+    SW_COURSE_INTAKE_DATE: ctx.intakeDate,
+    SW_REGION_NAME: ctx.regionName,
+    SW_SECTOR: ctx.sector,
+    SW_PROVIDER_NAME: "",
+    SW_PROVIDER_TRUST_LINE: "",
+    SW_FUNDING_CATEGORY: submission.funding_category ?? "",
+    SW_FUNDING_ROUTE: submission.funding_route ?? "",
+    SW_EMPLOYMENT_STATUS: submission.employment_status ?? "",
+    SW_OUTCOME_INTEREST: submission.outcome_interest ?? "",
+    SW_DQ_REASON: dqReason,
+    SW_CONSENT_MARKETING: submission.marketing_opt_in,
+    SW_MATCH_STATUS: matchStatus,
+  };
+
+  const listIds = [utilityListId];
+  if (submission.marketing_opt_in && marketingListId != null) {
+    listIds.push(marketingListId);
+  }
+
+  const upsertResult = await upsertBrevoContact({
+    email: submission.email,
+    attributes,
+    listIds,
+  });
+
+  if (!upsertResult.ok) {
+    await persistDeadLetter(sql, "edge_function_brevo_upsert_no_match",
+      { submission_id: submission.id, match_status: matchStatus },
+      `Brevo learner upsert (${matchStatus}) failed: ${upsertResult.error ?? "unknown"}`);
   }
 }
 

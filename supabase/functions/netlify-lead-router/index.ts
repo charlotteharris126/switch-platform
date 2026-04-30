@@ -28,7 +28,7 @@ import {
   type JsonValue,
   normaliseAndOverride,
 } from "../_shared/ingest.ts";
-import { routeLead } from "../_shared/route-lead.ts";
+import { routeLead, upsertLearnerInBrevoNoMatch } from "../_shared/route-lead.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -114,6 +114,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // Both paths run as post-response background tasks via EdgeRuntime.waitUntil
   // so a slow Brevo or sheet append can never time out Netlify's webhook
   // (Session 3.3 incident, 2026-04-21).
+  //
+  // Brevo 3-state push (no_match / pending / matched) — added 2026-04-30 per
+  // platform/docs/no-match-brevo-build.md:
+  //   - DQ or 0 candidates → upsertLearnerInBrevoNoMatch(..., "no_match")
+  //   - matched leads (auto-route or owner-confirm) push from inside routeLead
+  //     via upsertLearnerInBrevo with SW_MATCH_STATUS=matched
+  //   - 2+ candidates OR 1 candidate that won't auto-route → push "pending"
+  //     here, owner-confirm flips it to "matched" later
+  // The no_match push runs whether or not the routable branch fires, so the
+  // call site for no_match sits OUTSIDE the !is_dq && provider_ids.length > 0
+  // guard. The pending push lives inside the guard alongside the existing
+  // owner-confirm flow.
+  const runtime0 = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
+
+  if (row.is_dq || row.provider_ids.length === 0) {
+    const noMatchTask = upsertLearnerInBrevoNoMatch(sql, result.id, "no_match")
+      .catch((err) => console.error("Brevo no_match upsert failed:", describeError(err)));
+    if (runtime0?.waitUntil) runtime0.waitUntil(noMatchTask);
+  }
+
   if (!row.is_dq && row.provider_ids.length > 0) {
     const isSingleCandidate = row.provider_ids.length === 1;
     const candidateProviderId: string | null = isSingleCandidate ? row.provider_ids[0] : null;
@@ -176,7 +196,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       if (runtime?.waitUntil) runtime.waitUntil(autoRouteTask);
     } else {
-      // Existing email-confirm flow
+      // Email-confirm flow: candidates exist but auto-route isn't firing
+      // (multiple candidates, or single candidate without auto_route_enabled).
+      // Push "pending" to Brevo so the SF13 "we're picking your provider"
+      // sequence fires; owner clicking confirm later flips the contact to
+      // "matched" via routeLead's upsertLearnerInBrevo.
+      const pendingTask = upsertLearnerInBrevoNoMatch(sql, result.id, "pending")
+        .catch((err) => console.error("Brevo pending upsert failed:", describeError(err)));
+      if (runtime?.waitUntil) runtime.waitUntil(pendingTask);
+
       const emailTask = notifyOwnerOfRoutableLead(result.id, row).catch((notifyErr) => {
         console.error("owner notification failed:", describeError(notifyErr));
       });

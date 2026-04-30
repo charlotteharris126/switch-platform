@@ -4,6 +4,36 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-30: Brevo 3-state push live (no_match / pending / matched) + historical resync extended
+
+**Type:** Edge Function behaviour change. No schema change.
+
+Closes the gap where `upsertLearnerInBrevo` only fired for matched leads. Now every form submission lands a Brevo contact with `SW_MATCH_STATUS` set:
+
+- `matched` — matched lead routed (auto or owner-confirm), provider attributes populated. Fires from `_shared/route-lead.ts:upsertLearnerInBrevo` inside the routing transaction.
+- `pending` — qualified lead with candidate(s) awaiting owner confirm (2+ candidates, or 1 candidate without `auto_route_enabled`). Provider attributes empty. Owner-confirm later flips this contact to `matched` via the same routeLead path.
+- `no_match` — DQ lead OR lead with zero candidates. Provider attributes empty, `SW_DQ_REASON` populated when `is_dq=true`.
+
+**Files changed:**
+- `platform/supabase/functions/_shared/route-lead.ts` — refactored `upsertLearnerInBrevo` to branch on `funding_category` (self-funded skips matrix, sector pulls from `submission.interest`); added `SW_DQ_REASON` to attribute set; added `composeBrevoCourseContext` helper; added new exported `upsertLearnerInBrevoNoMatch(sql, submissionId, matchStatus)`. `SubmissionRow` interface gains `dq_reason: string | null`; `routeLead`'s SELECT updated to populate it.
+- `platform/supabase/functions/netlify-lead-router/index.ts` — fires `upsertLearnerInBrevoNoMatch(..., "no_match")` when DQ or 0 candidates; fires `upsertLearnerInBrevoNoMatch(..., "pending")` in the email-confirm flow before notifying owner.
+- `platform/supabase/functions/admin-brevo-resync/index.ts` — DQ leads no longer skipped; pushed as `no_match`. Unrouted qualified leads pushed as `pending` (zero such leads in production today; future-proofing). Routed leads continue through the existing matched path.
+
+**Brevo Automation entry filters (email-side, owned by `switchable/email/`):**
+- N1-N7 spine: `SW_MATCH_STATUS=matched AND SW_FUNDING_CATEGORY in (gov, loan)`
+- U-track utility: every contact on the utility list (matched + self / pending / no_match)
+- SF13 "picking your provider": `SW_MATCH_STATUS=pending`
+- SF8 recirc: `SW_MATCH_STATUS=no_match`
+- Sector-led self-funded nurture: future workstream, not in this build
+
+**Self-funded path correction:** the matched `upsertLearnerInBrevo` previously called `getMatrixContext` for self-funded leads, which silently returned empty because self-funded `course_id` is a YAML id not a page slug. Self-funded matched leads were landing in Brevo with `SW_COURSE_NAME`/`SW_COURSE_SLUG`/`SW_REGION_NAME`/`SW_SECTOR` all empty. Now self-funded short-circuits the matrix call and reads `SW_SECTOR` directly from `submission.interest`. Course / region / intake stay blank by design.
+
+**Historical reconcile to follow:** with the resync function extended, the next step is to fire it against every active (non-archived) submission so Brevo state matches DB exactly. Owner runs the resync SQL via Supabase SQL editor (audit key stays in vault, never in chat). 166 leads across 53 DQ + 113 routed; 0 unrouted-qualified.
+
+**Deployed:** netlify-lead-router, routing-confirm, admin-brevo-resync.
+
+---
+
 ## 2026-04-30: Bulk enrolment outcome update on /admin/leads (Phase 3)
 
 **Type:** Admin app feature.
