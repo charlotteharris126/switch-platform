@@ -38,6 +38,7 @@ Ask the provider what fields they want visible and in what order. Pick from the 
 
 **Funded-shape (for funded providers like EMS, WYK)**
 - LA (Local authority), Region scheme, Age band, Employment, Prior L3, Start date checked, Outcome interest, Why this course
+- Optional, multi-cohort funded providers only: Preferred intake (the start date the learner picked, e.g. `tees-valley-2026-05-06`). Single-cohort funded courses don't need this column — the picked date is implicit. The script also exposes an `Acceptable intakes` header for a future multi-pick UX (currently dormant — under single-pick this column duplicates Preferred intake, so don't add it).
 
 **Self-funded-shape (for self-funded providers like Courses Direct)**
 - Postcode, Region, Reason, Interest, Situation, Qualification seeking, Start when, Budget, Courses selected

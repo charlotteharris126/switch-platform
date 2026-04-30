@@ -4,6 +4,24 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-04-30: Multi-cohort picker reverted to single-pick; "Acceptable intakes" column retired from provider sheets
+
+**Type:** Page UX revert + provider sheet decluttering. No schema change.
+
+The funded-course multi-cohort start_date step was briefly upgraded to multi-pick (cohort buttons toggle, Continue button advances) earlier today. Reverted same session: under pilot scale (~45 leads/week, no funnel analytics) the extra click was likely a small drop-off cost we couldn't measure or justify, and most learners realistically commit to one start date anyway. The page is back to single-pick auto-advance with truthful singular wording: "Which start date works for you?" / "There's more than one start date for this course. Pick the one that works best for you."
+
+`acceptable_intake_ids` continues to be emitted by the page (mirroring `preferred_intake_id` under single-pick) so schema 1.2 stays intact and a future multi-pick re-introduction is cheap. The corresponding `Acceptable intakes` column on provider sheets is now duplicate noise — to be removed from the EMS sheet (the only sheet currently carrying it; Courses Direct and WYK are single-cohort and don't have either intake column). FIELD_MAP entry stays in the canonical Apps Script v2 as a no-op, ready if multi-pick ships later.
+
+**Owner action pending:** delete the "Acceptable intakes" column header from the EMS provider sheet. Header-driven appender means no script redeploy needed.
+
+**Files changed:**
+- `switchable/site/deploy/template/funded-course.html` — multi-cohort step copy, `handleIntakePick`, `setQualMultiIntake` reverted to auto-advance
+- `switchable/site/deploy/data/form-copy.yml` — `q4_multi.question` reverted to singular
+- `switchable/site/deploy/deploy/tools/form-matrix/index.html` — simulator labels reverted to singular
+- `platform/docs/provider-onboarding-playbook.md` — added guidance on Preferred intake (optional, multi-cohort only); explicitly flagged Acceptable intakes as dormant
+
+---
+
 ## 2026-04-29: admin-brevo-resync Edge Function
 
 **Type:** New Edge Function (operational tool, not a runtime dependency).
