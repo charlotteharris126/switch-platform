@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatDateTime, formatAgo } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { ResolveButton } from "./resolve-button";
+import { BulkResolveButton } from "./bulk-resolve";
 
 interface DeadLetterRow {
   id: number;
@@ -35,28 +36,81 @@ interface SubmissionLite {
   is_dq: boolean | null;
 }
 
-const SOURCE_EXPLANATIONS: Record<string, { headline: string; what: string; whatToDo: string }> = {
+// Severity tells you what to do at a glance:
+//   "fix"   — something's actually broken; needs your hands.
+//   "clean" — self-resolves or was a one-off; bulk-mark it done.
+//   "info"  — audit row, not really an error; mark done when convenient.
+type Severity = "fix" | "clean" | "info";
+
+interface SourceExplanation {
+  headline: string;
+  severity: Severity;
+  what: string;
+  whatToDo: string;
+  bulkNote?: string;
+}
+
+const SOURCE_EXPLANATIONS: Record<string, SourceExplanation> = {
   edge_function_sheet_append: {
     headline: "Sheet append failed",
+    severity: "fix",
     what: "The lead was saved to our database and emailed to you, but the row didn't make it into the provider's Google Sheet. The lead is fine on our side. The provider just can't see it on their tracker yet.",
-    whatToDo: "Open the lead, re-trigger routing manually (this re-tries the sheet append). If it keeps failing, the provider's webhook URL is probably wrong; check it on their edit page. Mark resolved once the row is in their sheet.",
+    whatToDo: "Open the lead and re-trigger routing manually (this retries the sheet append). If it keeps failing, the provider's webhook URL is probably wrong — check it on their edit page. Mark resolved once the row is in their sheet.",
   },
   reconcile_backfill: {
     headline: "Lead recovered from Netlify",
-    what: "Each row below is an audit entry, not a true error. The hourly reconciliation cron found a lead in Netlify's submission store that was missing from our database, and back-filled it. The lead exists now, but it bypassed the live webhook, so routing may not have triggered.",
-    whatToDo: "Open each linked lead and confirm it routed correctly. If it didn't route, route it manually. Once the lead is in the right state, mark this row resolved with a short note (e.g. \"verified routed\" or \"manually routed to EMS\").",
+    severity: "info",
+    what: "Not a real error. The hourly safety-net cron noticed a lead in Netlify's submission store that was missing from our database and back-filled it. The lead now exists, but it bypassed the live webhook, so routing may not have triggered.",
+    whatToDo: "Open each linked lead and confirm it routed. If it didn't, route it manually. Once it's in the right state, mark resolved with a short note like \"verified routed\".",
+    bulkNote: "Bulk cleanup — Netlify back-fill audit rows, leads verified.",
   },
   edge_function_partial_capture: {
     headline: "Partial-form capture failed",
-    what: "Someone started filling the form but didn't submit. Their progress failed to save. Doesn't affect submitted leads; only breaks funnel-drop analytics.",
-    whatToDo: "Usually self-resolves on the next attempt. Mark resolved if older than 24 hours.",
+    severity: "info",
+    what: "Someone started filling the form but didn't submit. Their progress failed to save. Doesn't affect submitted leads — only breaks funnel-drop analytics.",
+    whatToDo: "Self-resolves on the next attempt. Bulk-clean any over 24h old.",
+    bulkNote: "Bulk cleanup — partial-capture failures don't affect any submitted lead.",
+  },
+  edge_function_brevo_upsert: {
+    headline: "Brevo contact sync failed",
+    severity: "clean",
+    what: "Lead saved fine in our database — only the push to Brevo (the email tool) failed. The lead can still be routed and emailed manually. The Brevo contact may be missing or have stale attributes; future activity will normally repair it.",
+    whatToDo: "If the lead is hot, open it and click \"Resync to Brevo\" on the lead detail page. Otherwise bulk-mark these resolved — Brevo catches up on the next contact event.",
+    bulkNote: "Bulk cleanup — Brevo upsert errors, contacts will resync on next activity.",
+  },
+  edge_function_brevo_upsert_no_match: {
+    headline: "Brevo sync ran without a course match",
+    severity: "info",
+    what: "Lead saved fine, contact pushed to Brevo, but the course wasn't in our routing matrix so course-tailored emails won't trigger. Usually means the course slug isn't in matrix.json yet, or the lead came from a generic landing page.",
+    whatToDo: "If the course is real and you want it in the funnel, add it to matrix.json. Otherwise bulk-clean — these are informational only.",
+    bulkNote: "Bulk cleanup — no matrix match, leads not affected.",
+  },
+  edge_function_brevo_chase: {
+    headline: "Provider chaser failed to fire",
+    severity: "clean",
+    what: "You clicked \"Send chaser\" on a lead, but Brevo refused to add the contact to the chaser list — usually because the contact doesn't exist in Brevo yet, or has unsubscribed. The \"Last chaser\" timestamp on the lead was still recorded, so the system knows you tried.",
+    whatToDo: "If the chaser email genuinely needs to go out, email the learner directly. Otherwise mark resolved — clicking the chaser button again won't help.",
+    bulkNote: "Bulk cleanup — chaser failures, learner contacted manually or no longer in scope.",
   },
 };
 
-const DEFAULT_EXPLANATION = {
+const DEFAULT_EXPLANATION: SourceExplanation = {
   headline: "Unknown ingestion error",
-  what: "An ingestion or webhook step failed for an unknown reason.",
-  whatToDo: "Inspect the error context and raw payload below. Replay manually if appropriate, or mark resolved with a note explaining the action taken.",
+  severity: "fix",
+  what: "An ingestion or webhook step failed for an unknown reason. New error type — needs a human look.",
+  whatToDo: "Inspect the error context and raw payload below. Replay manually if appropriate, or mark resolved with a note. Then ping me to add a plain-English explanation for this source.",
+};
+
+const SEVERITY_LABEL: Record<Severity, string> = {
+  fix: "Action needed",
+  clean: "Just clean up",
+  info: "Informational",
+};
+
+const SEVERITY_PILL: Record<Severity, string> = {
+  fix: "bg-[#b3412e] text-white",
+  clean: "bg-[#cd8b76] text-white",
+  info: "bg-[#dad4cb] text-[#11242e]",
 };
 
 function formatLeadName(s: SubmissionLite | undefined): string {
@@ -195,23 +249,51 @@ export default async function ErrorsPage() {
       ) : (
         <>
           <Card className="bg-[#fef9f5] border-[#cd8b76]/40">
-            <CardContent className="pt-4 text-xs text-[#11242e]">
-              <strong>What &ldquo;Mark resolved&rdquo; means:</strong> click it once you&rsquo;ve checked the lead and confirmed it&rsquo;s in the right state (routed, in the sheet, or genuinely DQ&rsquo;d). The note you write becomes part of the audit trail. It does <em>not</em> trigger any automation. It&rsquo;s purely an acknowledgement that you&rsquo;ve dealt with the row.
+            <CardContent className="pt-4 text-xs text-[#11242e] space-y-2">
+              <p>Errors are grouped by what they actually need from you:</p>
+              <ul className="space-y-1 ml-3">
+                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#b3412e] text-white font-bold mr-2">ACTION NEEDED</span> Something&rsquo;s broken — open the lead and fix it.</li>
+                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#cd8b76] text-white font-bold mr-2">JUST CLEAN UP</span> Self-resolves; bulk-mark them done.</li>
+                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#dad4cb] text-[#11242e] font-bold mr-2">INFORMATIONAL</span> Audit rows, not real errors. Bulk-clean.</li>
+              </ul>
+              <p className="text-[#5a6a72]">Marking resolved doesn&rsquo;t trigger anything. It&rsquo;s just acknowledging you&rsquo;ve seen the row.</p>
             </CardContent>
           </Card>
 
-          {Array.from(bySource.entries()).map(([source, sourceRows]) => {
+          {(() => {
+            // Sort sources so action-needed cards come first.
+            const ordered = Array.from(bySource.entries()).sort(([a], [b]) => {
+              const sevA = (SOURCE_EXPLANATIONS[a] ?? DEFAULT_EXPLANATION).severity;
+              const sevB = (SOURCE_EXPLANATIONS[b] ?? DEFAULT_EXPLANATION).severity;
+              const order: Severity[] = ["fix", "clean", "info"];
+              return order.indexOf(sevA) - order.indexOf(sevB);
+            });
+            return ordered;
+          })().map(([source, sourceRows]) => {
             const explanation = SOURCE_EXPLANATIONS[source] ?? DEFAULT_EXPLANATION;
+            const showBulk = explanation.severity === "clean" || explanation.severity === "info";
             return (
               <Card key={source}>
                 <CardHeader>
-                  <CardTitle className="text-sm flex items-center gap-2">
+                  <CardTitle className="text-sm flex flex-wrap items-center gap-2">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${SEVERITY_PILL[explanation.severity]}`}>
+                      {SEVERITY_LABEL[explanation.severity]}
+                    </span>
                     <span>{explanation.headline}</span>
                     <Badge className="text-[10px] bg-[#cd8b76] text-white hover:bg-[#cd8b76]">{sourceRows.length}</Badge>
                     <span className="font-mono text-[10px] text-[#5a6a72] font-normal">{source}</span>
                   </CardTitle>
                   <p className="text-xs text-[#5a6a72] mt-2"><strong className="text-[#11242e]">What this is:</strong> {explanation.what}</p>
                   <p className="text-xs text-[#5a6a72] mt-1"><strong className="text-[#11242e]">What to do:</strong> {explanation.whatToDo}</p>
+                  {showBulk ? (
+                    <div className="mt-3">
+                      <BulkResolveButton
+                        source={source}
+                        count={sourceRows.length}
+                        defaultNote={explanation.bulkNote ?? `Bulk cleanup — ${explanation.headline.toLowerCase()}.`}
+                      />
+                    </div>
+                  ) : null}
                 </CardHeader>
                 <CardContent className="p-0">
                   <Table>

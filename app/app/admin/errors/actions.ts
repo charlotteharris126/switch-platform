@@ -48,3 +48,48 @@ export async function markErrorResolved(deadLetterId: number, note: string): Pro
   revalidatePath("/errors");
   return { ok: true };
 }
+
+// Bulk-mark all unresolved rows for a given source as resolved with a single
+// note. For sources where individual rows don't need per-row review (e.g.
+// "Brevo upsert failed" — Brevo is eventually consistent, the row exists
+// in the DB, the email tool will catch up). Saves clicking 30+ Mark Resolved
+// buttons one by one.
+export async function bulkMarkSourceResolved(
+  source: string,
+  note: string,
+): Promise<ActionResult & { resolved?: number }> {
+  if (!note || note.trim().length === 0) {
+    return { ok: false, error: "Add a note explaining the cleanup reason." };
+  }
+
+  const supabase = await createClient();
+  const stamp = new Date().toISOString();
+  const annotation = `\n[bulk resolved ${stamp}]: ${note}`;
+
+  const { data: existing, error: readErr } = await supabase
+    .schema("leads")
+    .from("dead_letter")
+    .select("id, error_context")
+    .eq("source", source)
+    .is("replayed_at", null)
+    .limit(500);
+
+  if (readErr) return { ok: false, error: readErr.message };
+  const rows = existing ?? [];
+  if (rows.length === 0) return { ok: true, resolved: 0 };
+
+  let resolved = 0;
+  for (const r of rows) {
+    const annotated = `${r.error_context ?? ""}${annotation}`.trim();
+    const { error: updateErr } = await supabase
+      .schema("leads")
+      .from("dead_letter")
+      .update({ replayed_at: stamp, error_context: annotated })
+      .eq("id", r.id)
+      .is("replayed_at", null);
+    if (!updateErr) resolved += 1;
+  }
+
+  revalidatePath("/errors");
+  return { ok: true, resolved };
+}
