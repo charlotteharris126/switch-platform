@@ -11,8 +11,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PageHeader } from "@/components/page-header";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatAgo } from "@/lib/format";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
+import { PendingActions } from "../sheet-activity/pending-actions";
 
 // One page that surfaces every actionable lead state, so Charlotte never
 // has to skim the full leads list to find what needs doing.
@@ -34,7 +35,7 @@ import { RealtimeRefresh } from "@/components/realtime-refresh";
 export default async function ActionsPage() {
   const supabase = await createClient();
 
-  const [unroutedRes, approachingFlipRes, presumedEnrolledRes] = await Promise.all([
+  const [unroutedRes, approachingFlipRes, presumedEnrolledRes, pendingAiRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("submissions")
@@ -60,6 +61,14 @@ export default async function ActionsPage() {
       .select("id, submission_id, provider_id, status, sent_to_provider_at, status_updated_at, dispute_deadline_at, notes, disputed_at, disputed_reason")
       .eq("status", "presumed_enrolled")
       .order("status_updated_at", { ascending: true }),
+
+    // Pending AI suggestions from sheet Notes edits awaiting owner approval.
+    supabase
+      .schema("crm")
+      .from("pending_updates")
+      .select("id, enrolment_id, current_status, suggested_status, ai_summary, ai_confidence, created_at")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false }),
   ]);
 
   const unrouted = (unroutedRes.data ?? []) as Array<{
@@ -93,12 +102,37 @@ export default async function ActionsPage() {
     disputed_reason: string | null;
   }>;
 
-  // For the approaching-flip + presumed-enrolled sections we want learner
-  // names. Pull all relevant submissions in one query.
+  const pendingAi = (pendingAiRes.data ?? []) as Array<{
+    id: number;
+    enrolment_id: number;
+    current_status: string;
+    suggested_status: string;
+    ai_summary: string | null;
+    ai_confidence: string | null;
+    created_at: string;
+  }>;
+
+  // Hydrate enrolment + submission context for pending AI suggestions.
+  const pendingEnrolmentIds = pendingAi.map((p) => p.enrolment_id);
+  const pendingEnrolMap = new Map<number, { id: number; submission_id: number; provider_id: string }>();
+  if (pendingEnrolmentIds.length > 0) {
+    const { data } = await supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id, submission_id, provider_id")
+      .in("id", pendingEnrolmentIds);
+    for (const e of (data ?? []) as Array<{ id: number; submission_id: number; provider_id: string }>) {
+      pendingEnrolMap.set(e.id, e);
+    }
+  }
+
+  // For the approaching-flip + presumed-enrolled + pending-AI sections we
+  // want learner names. Pull all relevant submissions in one query.
   const submissionIdsToLookup = Array.from(
     new Set([
       ...approachingFlip.map((r) => r.submission_id),
       ...presumedEnrolled.map((r) => r.submission_id),
+      ...Array.from(pendingEnrolMap.values()).map((e) => e.submission_id),
     ])
   );
 
@@ -114,7 +148,21 @@ export default async function ActionsPage() {
     }
   }
 
-  const totalActions = unrouted.length + approachingFlip.length + presumedEnrolled.length;
+  // Provider names for pending AI section
+  const providerIds = Array.from(new Set(Array.from(pendingEnrolMap.values()).map((e) => e.provider_id)));
+  const providerMap = new Map<string, string>();
+  if (providerIds.length > 0) {
+    const { data: provData } = await supabase
+      .schema("crm")
+      .from("providers")
+      .select("provider_id, company_name")
+      .in("provider_id", providerIds);
+    for (const p of (provData ?? []) as Array<{ provider_id: string; company_name: string }>) {
+      providerMap.set(p.provider_id, p.company_name);
+    }
+  }
+
+  const totalActions = unrouted.length + approachingFlip.length + presumedEnrolled.length + pendingAi.length;
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -122,6 +170,7 @@ export default async function ActionsPage() {
         tables={[
           { schema: "leads", table: "submissions" },
           { schema: "crm", table: "enrolments" },
+          { schema: "crm", table: "pending_updates" },
         ]}
       />
       <PageHeader
@@ -132,11 +181,74 @@ export default async function ActionsPage() {
             <span>Nothing pending. Inbox zero.</span>
           ) : (
             <span>
-              {totalActions} {totalActions === 1 ? "lead" : "leads"} across {countActiveSections([unrouted, approachingFlip, presumedEnrolled])} {countActiveSections([unrouted, approachingFlip, presumedEnrolled]) === 1 ? "section" : "sections"}.
+              {totalActions} {totalActions === 1 ? "item" : "items"} across {countActiveSections([pendingAi, unrouted, approachingFlip, presumedEnrolled])} {countActiveSections([pendingAi, unrouted, approachingFlip, presumedEnrolled]) === 1 ? "section" : "sections"}.
             </span>
           )
         }
       />
+
+      {/* SECTION 0 — Pending AI suggestions (sheet Notes interpretations awaiting approval) */}
+      {pendingAi.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm flex items-center gap-2">
+              AI suggestions
+              <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
+                {pendingAi.length}
+              </Badge>
+            </CardTitle>
+            <p className="text-xs text-[#5a6a72] mt-1">
+              Provider notes Claude thinks imply a status change. Approve to apply, reject to ignore, or set a different status.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {pendingAi.map((p) => {
+              const enrol = pendingEnrolMap.get(p.enrolment_id);
+              const sub = enrol ? submissionsById.get(enrol.submission_id) : null;
+              const providerName = enrol ? providerMap.get(enrol.provider_id) ?? enrol.provider_id : "—";
+              const leadName = sub
+                ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || `#${sub.id}`
+                : `Enrolment #${p.enrolment_id}`;
+              return (
+                <div
+                  key={p.id}
+                  className="border border-[#dad4cb] rounded-lg p-3 bg-[#fdfcfa]"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
+                    <div>
+                      <p className="font-medium text-sm">
+                        {sub?.id ? (
+                          <Link href={`/leads/${sub.id}`} className="text-[#143643] hover:text-[#cd8b76]">
+                            {leadName}
+                          </Link>
+                        ) : (
+                          leadName
+                        )}
+                        <span className="text-xs text-[#5a6a72] ml-2">
+                          {providerName} · {sub?.course_id ?? "—"}
+                        </span>
+                      </p>
+                      <p className="text-xs text-[#5a6a72] mt-1">
+                        Current: <span className="font-medium text-[#143643]">{p.current_status}</span>
+                        {" · "}
+                        Suggested: <span className="font-medium text-[#143643]">{p.suggested_status}</span>
+                        {p.ai_confidence ? ` (${p.ai_confidence})` : ""}
+                      </p>
+                    </div>
+                    <span className="text-xs text-[#5a6a72]" title={formatDateTime(p.created_at)}>
+                      {formatAgo(p.created_at)}
+                    </span>
+                  </div>
+                  {p.ai_summary ? (
+                    <p className="text-sm italic text-[#5a6a72] mb-3">&ldquo;{p.ai_summary}&rdquo;</p>
+                  ) : null}
+                  <PendingActions pendingUpdateId={p.id} suggestedStatus={p.suggested_status} />
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* SECTION 1 — Unrouted */}
       <Card>

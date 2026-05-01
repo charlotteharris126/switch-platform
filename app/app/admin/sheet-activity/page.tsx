@@ -307,25 +307,22 @@ export default async function SheetActivityPage({
                 : g.submission_id
                   ? `#${g.submission_id}`
                   : "Unknown lead";
+              const editCount = g.edits.length;
               return (
-                <div
+                <details
                   key={g.key}
-                  className="bg-white border border-[#dad4cb] rounded-xl shadow-[0_1px_2px_rgba(17,36,46,0.04)] overflow-hidden"
+                  className="group bg-white border border-[#dad4cb] rounded-xl shadow-[0_1px_2px_rgba(17,36,46,0.04)] overflow-hidden"
                 >
-                  <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3 bg-[#f4f1ed] border-b border-[#dad4cb]">
-                    <div>
-                      <span className="font-medium">
-                        {sub?.id ? (
-                          <Link href={`/leads/${sub.id}`} className="text-[#143643] hover:text-[#cd8b76]">
-                            {leadName}
-                          </Link>
-                        ) : (
-                          leadName
-                        )}
-                      </span>
-                      <span className="text-xs text-[#5a6a72] ml-2">
+                  <summary className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3 bg-[#f4f1ed] cursor-pointer list-none select-none hover:bg-[#ece8e0] [&::-webkit-details-marker]:hidden">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-[#5a6a72] text-xs transition-transform group-open:rotate-90">▶</span>
+                      <span className="font-medium">{leadName}</span>
+                      <span className="text-xs text-[#5a6a72]">
                         {prov?.company_name ?? g.provider_id} · {sub?.course_id ?? "—"}
                       </span>
+                      <Badge variant="outline" className="text-[10px]">
+                        {editCount} edit{editCount === 1 ? "" : "s"}
+                      </Badge>
                     </div>
                     <div className="flex items-center gap-3 text-xs">
                       {enrol ? (
@@ -337,37 +334,46 @@ export default async function SheetActivityPage({
                         {formatAgo(g.latestAt)}
                       </span>
                     </div>
-                  </div>
-                  <ul className="divide-y divide-[#f0ece6]">
-                    {g.edits.map((e) => (
-                      <li key={e.id} className="px-4 py-2 flex flex-wrap items-center gap-3 text-sm">
-                        <span className="text-xs text-[#5a6a72] w-16 shrink-0" title={formatDateTime(e.received_at)}>
-                          {formatAgo(e.received_at)}
-                        </span>
-                        <Badge variant="outline" className="shrink-0">{e.column_name}</Badge>
-                        <span className="flex-1 min-w-0">
-                          {e.column_name === "Status" ? (
-                            <span>
-                              <span className="text-[#5a6a72]">{e.old_value || "—"}</span>
-                              {" → "}
-                              <span className="font-medium">{e.new_value || "—"}</span>
-                            </span>
-                          ) : (
-                            <span title={e.new_value ?? ""}>{truncate(e.new_value ?? "", 100)}</span>
-                          )}
-                        </span>
-                        <Badge variant={ACTION_VARIANT[e.action] ?? "outline"} className="shrink-0">
-                          {ACTION_LABEL[e.action] ?? e.action}
-                        </Badge>
-                        {e.reason ? (
-                          <span className="text-xs text-[#5a6a72] basis-full pl-20" title={e.reason}>
-                            {truncate(e.reason, 140)}
+                  </summary>
+                  <div className="border-t border-[#dad4cb]">
+                    {sub?.id ? (
+                      <div className="px-4 py-2 text-xs">
+                        <Link href={`/leads/${sub.id}`} className="text-[#cd8b76] hover:text-[#b3412e]">
+                          Open lead #{sub.id} →
+                        </Link>
+                      </div>
+                    ) : null}
+                    <ul className="divide-y divide-[#f0ece6]">
+                      {g.edits.map((e) => (
+                        <li key={e.id} className="px-4 py-2 flex flex-wrap items-center gap-3 text-sm">
+                          <span className="text-xs text-[#5a6a72] w-16 shrink-0" title={formatDateTime(e.received_at)}>
+                            {formatAgo(e.received_at)}
                           </span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                          <Badge variant="outline" className="shrink-0">{e.column_name}</Badge>
+                          <span className="flex-1 min-w-0">
+                            {e.column_name === "Status" ? (
+                              <span>
+                                <span className="text-[#5a6a72]">{e.old_value || "—"}</span>
+                                {" → "}
+                                <span className="font-medium">{e.new_value || "—"}</span>
+                              </span>
+                            ) : (
+                              <span title={e.new_value ?? ""}>{truncate(e.new_value ?? "", 100)}</span>
+                            )}
+                          </span>
+                          <Badge variant={ACTION_VARIANT[e.action] ?? "outline"} className="shrink-0">
+                            {ACTION_LABEL[e.action] ?? e.action}
+                          </Badge>
+                          {e.reason ? (
+                            <span className="text-xs text-[#5a6a72] basis-full pl-20" title={e.reason}>
+                              {truncate(e.reason, 140)}
+                            </span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </details>
               );
             })}
           </div>

@@ -126,6 +126,7 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
     disputedRes,
     errorsRes,
     presumedListRes,
+    pendingAiRes,
   ] = await Promise.all([
     // Leads in: distinct emails of non-DQ submissions
     applyThis(
@@ -195,6 +196,7 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
       .eq("status", "presumed_enrolled")
       .order("status_updated_at", { ascending: true })
       .limit(1),
+    supabase.schema("crm").from("pending_updates").select("id", { count: "exact", head: true }).eq("status", "pending"),
   ]);
 
   // Pace
@@ -264,7 +266,8 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
   const presumed = presumedAttentionRes.count ?? 0;
   const disputed = disputedRes.count ?? 0;
   const errors = errorsRes.count ?? 0;
-  const totalAttention = unrouted + presumed + disputed + errors;
+  const aiPending = pendingAiRes.count ?? 0;
+  const totalAttention = unrouted + presumed + disputed + errors + aiPending;
 
   // First billable date
   const earliestPresumed = ((presumedListRes.data ?? []) as Array<{ status_updated_at: string }>)[0];
@@ -284,6 +287,7 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
         tables={[
           { schema: "leads", table: "submissions" },
           { schema: "crm", table: "enrolments" },
+          { schema: "crm", table: "pending_updates" },
           { schema: "leads", table: "dead_letter" },
         ]}
       />
@@ -506,7 +510,14 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
             <span className="text-xs text-[#5a6a72]">{totalAttention} items</span>
           )}
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <SmallTile
+            label="AI suggestions"
+            value={aiPending}
+            note="Approve / reject"
+            href="/actions"
+            emphasis={aiPending > 0 ? "primary" : undefined}
+          />
           <SmallTile
             label="Unrouted"
             value={unrouted}
