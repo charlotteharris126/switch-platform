@@ -96,6 +96,10 @@ CREATE INDEX ON crm.sheet_edits_log (action, received_at DESC)
 -- crm tables (admin dashboard reads via authenticated role; readonly_analytics
 -- for Mira/Iris MCP). Edge Functions reach it via the service role which
 -- bypasses RLS — no INSERT/UPDATE policies needed.
+-- IMPORTANT: RLS policies are useless without a base GRANT — Postgres checks
+-- table-level privileges before applying RLS. Grants must be explicit per
+-- role even though policies reference them.
+GRANT SELECT ON crm.sheet_edits_log TO authenticated;
 ALTER TABLE crm.sheet_edits_log ENABLE ROW LEVEL SECURITY;
 CREATE POLICY admin_read_sheet_edits_log ON crm.sheet_edits_log
   FOR SELECT TO authenticated USING (true);
@@ -149,7 +153,12 @@ CREATE INDEX ON crm.pending_updates (status, created_at DESC) WHERE status = 'pe
 CREATE INDEX ON crm.pending_updates (enrolment_id);
 CREATE INDEX ON crm.pending_updates (resolver_token_expires_at) WHERE status = 'pending';
 
+-- Realtime: dashboard subscribes to changes on both tables for auto-refresh.
+ALTER PUBLICATION supabase_realtime ADD TABLE crm.sheet_edits_log;
+ALTER PUBLICATION supabase_realtime ADD TABLE crm.pending_updates;
+
 -- RLS: same posture as crm.sheet_edits_log.
+GRANT SELECT ON crm.pending_updates TO authenticated;
 ALTER TABLE crm.pending_updates ENABLE ROW LEVEL SECURITY;
 CREATE POLICY admin_read_pending_updates ON crm.pending_updates
   FOR SELECT TO authenticated USING (true);

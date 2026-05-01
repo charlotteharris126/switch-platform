@@ -1,17 +1,10 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime, formatAgo, truncate } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
+import { PendingActions } from "./pending-actions";
 
 type SearchParams = {
   provider?: string;
@@ -19,18 +12,6 @@ type SearchParams = {
   column?: string;
   days?: string;
 };
-
-const VALID_ACTIONS = [
-  "mirrored",
-  "queued",
-  "note_only",
-  "ai_suggested",
-  "ai_approved",
-  "ai_rejected",
-  "ai_overridden",
-  "ai_error",
-  "rejected",
-] as const;
 
 const ACTION_LABEL: Record<string, string> = {
   mirrored: "Mirrored",
@@ -56,6 +37,18 @@ const ACTION_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   rejected: "destructive",
 };
 
+const VALID_ACTIONS = [
+  "mirrored",
+  "queued",
+  "note_only",
+  "ai_suggested",
+  "ai_approved",
+  "ai_rejected",
+  "ai_overridden",
+  "ai_error",
+  "rejected",
+] as const;
+
 type EditRow = {
   id: number;
   enrolment_id: number | null;
@@ -74,6 +67,18 @@ type EditRow = {
   reason: string | null;
 };
 
+type PendingRow = {
+  id: number;
+  enrolment_id: number;
+  current_status: string;
+  suggested_status: string;
+  ai_summary: string | null;
+  ai_confidence: string | null;
+  created_at: string;
+};
+
+type SubmissionRow = { id: number; first_name: string | null; last_name: string | null; course_id: string | null };
+type EnrolmentRow = { id: number; submission_id: number; provider_id: string; status: string };
 type ProviderRow = { provider_id: string; company_name: string };
 
 export default async function SheetActivityPage({
@@ -87,16 +92,16 @@ export default async function SheetActivityPage({
 
   const supabase = await createClient();
 
+  // Edits in window
   let editsQuery = supabase
     .schema("crm")
     .from("sheet_edits_log")
     .select(
       "id, enrolment_id, submission_id, provider_id, column_name, old_value, new_value, editor_email, edited_at, received_at, action, applied_status, ai_summary, ai_confidence, reason",
-      { count: "exact" },
     )
     .gte("received_at", since)
     .order("id", { ascending: false })
-    .limit(200);
+    .limit(500);
 
   if (sp.provider) editsQuery = editsQuery.eq("provider_id", sp.provider);
   if (sp.action && (VALID_ACTIONS as readonly string[]).includes(sp.action)) {
@@ -106,32 +111,107 @@ export default async function SheetActivityPage({
     editsQuery = editsQuery.eq("column_name", sp.column);
   }
 
-  const [{ data: edits, count }, { data: providers }] = await Promise.all([
+  const [{ data: editsData }, { data: pendingData }, { data: providersData }] = await Promise.all([
     editsQuery,
+    supabase
+      .schema("crm")
+      .from("pending_updates")
+      .select("id, enrolment_id, current_status, suggested_status, ai_summary, ai_confidence, created_at")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false }),
     supabase.schema("crm").from("providers").select("provider_id, company_name").eq("active", true).order("company_name"),
   ]);
 
-  const editRows: EditRow[] = (edits ?? []) as EditRow[];
-  const providerRows: ProviderRow[] = (providers ?? []) as ProviderRow[];
+  const edits: EditRow[] = (editsData ?? []) as EditRow[];
+  const pending: PendingRow[] = (pendingData ?? []) as PendingRow[];
+  const providers: ProviderRow[] = (providersData ?? []) as ProviderRow[];
 
-  // Counts for the headline tiles
+  // Hydrate lead + enrolment context
+  const submissionIds = Array.from(
+    new Set([
+      ...edits.map((e) => e.submission_id).filter((v): v is number => v !== null),
+      ...pending.map((p) => p.enrolment_id),
+    ]),
+  );
+  const enrolmentIds = Array.from(
+    new Set([
+      ...edits.map((e) => e.enrolment_id).filter((v): v is number => v !== null),
+      ...pending.map((p) => p.enrolment_id),
+    ]),
+  );
+
+  const [{ data: enrolmentsData }, { data: submissionsData }] = await Promise.all([
+    enrolmentIds.length > 0
+      ? supabase
+          .schema("crm")
+          .from("enrolments")
+          .select("id, submission_id, provider_id, status")
+          .in("id", enrolmentIds)
+      : Promise.resolve({ data: [] as EnrolmentRow[] }),
+    submissionIds.length > 0
+      ? supabase
+          .schema("leads")
+          .from("submissions")
+          .select("id, first_name, last_name, course_id")
+          .in("id", submissionIds)
+      : Promise.resolve({ data: [] as SubmissionRow[] }),
+  ]);
+
+  const enrolmentMap = new Map<number, EnrolmentRow>();
+  for (const e of (enrolmentsData ?? []) as EnrolmentRow[]) enrolmentMap.set(e.id, e);
+  // Also map by submission_id for hydrating edits that reference submission_id
+  const enrolmentBySub = new Map<string, EnrolmentRow>();
+  for (const e of enrolmentMap.values()) {
+    enrolmentBySub.set(`${e.submission_id}:${e.provider_id}`, e);
+  }
+  const submissionMap = new Map<number, SubmissionRow>();
+  for (const s of (submissionsData ?? []) as SubmissionRow[]) submissionMap.set(s.id, s);
+  const providerMap = new Map<string, ProviderRow>();
+  for (const p of providers) providerMap.set(p.provider_id, p);
+
+  // Group edits by lead key (submission_id + provider_id)
+  type Group = {
+    key: string;
+    submission_id: number | null;
+    provider_id: string;
+    edits: EditRow[];
+    latestAt: string;
+  };
+  const groups = new Map<string, Group>();
+  for (const e of edits) {
+    const key = `${e.submission_id ?? "x"}:${e.provider_id}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, submission_id: e.submission_id, provider_id: e.provider_id, edits: [], latestAt: e.received_at };
+      groups.set(key, g);
+    }
+    g.edits.push(e);
+    if (e.received_at > g.latestAt) g.latestAt = e.received_at;
+  }
+  const groupList = Array.from(groups.values()).sort((a, b) => (a.latestAt < b.latestAt ? 1 : -1));
+
   const counts = {
-    total: editRows.length,
-    mirrored: editRows.filter((r) => r.action === "mirrored").length,
-    anomalies: editRows.filter((r) => r.action === "queued" || r.action === "rejected" || r.action === "ai_error").length,
-    aiSuggested: editRows.filter((r) => r.action === "ai_suggested").length,
+    total: edits.length,
+    mirrored: edits.filter((r) => r.action === "mirrored").length,
+    anomalies: edits.filter((r) => r.action === "queued" || r.action === "rejected" || r.action === "ai_error").length,
+    pendingNow: pending.length,
   };
 
   return (
     <div className="max-w-6xl space-y-6">
-      <RealtimeRefresh tables={[{ schema: "crm", table: "sheet_edits_log" }]} />
+      <RealtimeRefresh
+        tables={[
+          { schema: "crm", table: "sheet_edits_log" },
+          { schema: "crm", table: "pending_updates" },
+        ]}
+      />
 
       <PageHeader
         eyebrow="Pipeline"
         title="Provider sheet activity"
         subtitle={
           <span>
-            Every edit providers make to the Status or Notes columns flows here. Status edits auto-update the database; Notes edits are logged (Channel B / AI is gated until legal sign-off).
+            Every edit providers make to Status or Notes flows here. Status edits auto-update the database; Notes edits run through Claude — implied status changes appear below for your call.
           </span>
         }
       />
@@ -141,96 +221,158 @@ export default async function SheetActivityPage({
         currentAction={sp.action ?? null}
         currentColumn={sp.column ?? null}
         currentDays={days}
-        providers={providerRows}
+        providers={providers}
       />
 
       {/* Headline tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Tile label="Total edits" value={counts.total} note={`Last ${days}d`} />
-        <Tile label="Mirrored" value={counts.mirrored} note="Status changes applied" tone="good" />
+        <Tile label="Status mirrored" value={counts.mirrored} note="Auto-applied" tone="good" />
         <Tile label="Anomalies" value={counts.anomalies} note="Need a look" tone={counts.anomalies > 0 ? "warn" : undefined} />
-        <Tile label="AI suggested" value={counts.aiSuggested} note="Awaiting your approval" />
+        <Tile label="Awaiting your call" value={counts.pendingNow} note="AI suggestions" tone={counts.pendingNow > 0 ? "warn" : undefined} />
       </div>
 
-      {/* Activity table */}
-      <div className="bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>When</TableHead>
-              <TableHead>Provider</TableHead>
-              <TableHead>Lead</TableHead>
-              <TableHead>Column</TableHead>
-              <TableHead>Change</TableHead>
-              <TableHead>Result</TableHead>
-              <TableHead>Note</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {editRows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center text-[#5a6a72] py-8">
-                  No sheet edits in the last {days} day{days === 1 ? "" : "s"}.
-                </TableCell>
-              </TableRow>
-            ) : (
-              editRows.map((r) => {
-                const provider = providerRows.find((p) => p.provider_id === r.provider_id);
-                return (
-                  <TableRow key={r.id}>
-                    <TableCell className="whitespace-nowrap text-xs text-[#5a6a72]">
-                      <span title={formatDateTime(r.received_at)}>{formatAgo(r.received_at)}</span>
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {provider?.company_name ?? r.provider_id}
-                    </TableCell>
-                    <TableCell>
-                      {r.submission_id ? (
-                        <Link
-                          href={`/leads/${r.submission_id}`}
-                          className="text-[#143643] hover:text-[#cd8b76]"
-                        >
-                          #{r.submission_id}
-                        </Link>
-                      ) : (
-                        <span className="text-[#5a6a72]">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{r.column_name}</Badge>
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      {r.column_name === "Status" ? (
-                        <span>
-                          <span className="text-[#5a6a72]">{r.old_value || "—"}</span>
-                          {" → "}
-                          <span className="font-medium">{r.new_value || "—"}</span>
+      {/* Pending AI suggestions */}
+      {pending.length > 0 ? (
+        <section>
+          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">
+            Awaiting your call ({pending.length})
+          </p>
+          <div className="space-y-3">
+            {pending.map((p) => {
+              const enrol = enrolmentMap.get(p.enrolment_id);
+              const sub = enrol ? submissionMap.get(enrol.submission_id) : null;
+              const prov = enrol ? providerMap.get(enrol.provider_id) : null;
+              const leadName = sub
+                ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || `#${sub.id}`
+                : `#${p.enrolment_id}`;
+              return (
+                <div
+                  key={p.id}
+                  className="bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
+                    <div>
+                      <p className="font-medium">
+                        {sub?.id ? (
+                          <Link href={`/leads/${sub.id}`} className="text-[#143643] hover:text-[#cd8b76]">
+                            {leadName}
+                          </Link>
+                        ) : (
+                          leadName
+                        )}
+                        <span className="text-xs text-[#5a6a72] ml-2">
+                          {prov?.company_name ?? enrol?.provider_id} · {sub?.course_id ?? "—"}
                         </span>
-                      ) : (
-                        <span title={r.new_value ?? ""}>{truncate(r.new_value ?? "", 80)}</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={ACTION_VARIANT[r.action] ?? "outline"}>
-                        {ACTION_LABEL[r.action] ?? r.action}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-[#5a6a72] max-w-[280px]">
-                      {r.reason ?? r.ai_summary ?? ""}
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      {count !== null && count !== undefined && count > editRows.length ? (
-        <p className="text-xs text-[#5a6a72] text-center">
-          Showing {editRows.length} most recent of {count} total. Narrow the date range or filter to see older edits.
-        </p>
+                      </p>
+                      <p className="text-xs text-[#5a6a72] mt-1">
+                        Current: <span className="font-medium text-[#143643]">{p.current_status}</span>
+                        {" · "}
+                        Suggested: <span className="font-medium text-[#143643]">{p.suggested_status}</span>
+                        {p.ai_confidence ? ` (${p.ai_confidence})` : ""}
+                      </p>
+                    </div>
+                    <span className="text-xs text-[#5a6a72]" title={formatDateTime(p.created_at)}>
+                      {formatAgo(p.created_at)}
+                    </span>
+                  </div>
+                  {p.ai_summary ? (
+                    <p className="text-sm italic text-[#5a6a72] mb-3">&ldquo;{p.ai_summary}&rdquo;</p>
+                  ) : null}
+                  <PendingActions pendingUpdateId={p.id} suggestedStatus={p.suggested_status} />
+                </div>
+              );
+            })}
+          </div>
+        </section>
       ) : null}
+
+      {/* Activity feed grouped by lead */}
+      <section>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">
+          Recent activity ({groupList.length} {groupList.length === 1 ? "lead" : "leads"})
+        </p>
+        {groupList.length === 0 ? (
+          <div className="bg-white border border-[#dad4cb] rounded-xl p-8 text-center text-[#5a6a72]">
+            No sheet edits in the last {days} day{days === 1 ? "" : "s"}.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {groupList.map((g) => {
+              const enrol = g.submission_id !== null ? enrolmentBySub.get(`${g.submission_id}:${g.provider_id}`) : null;
+              const sub = g.submission_id !== null ? submissionMap.get(g.submission_id) : null;
+              const prov = providerMap.get(g.provider_id);
+              const leadName = sub
+                ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || `#${sub.id}`
+                : g.submission_id
+                  ? `#${g.submission_id}`
+                  : "Unknown lead";
+              return (
+                <div
+                  key={g.key}
+                  className="bg-white border border-[#dad4cb] rounded-xl shadow-[0_1px_2px_rgba(17,36,46,0.04)] overflow-hidden"
+                >
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3 bg-[#f4f1ed] border-b border-[#dad4cb]">
+                    <div>
+                      <span className="font-medium">
+                        {sub?.id ? (
+                          <Link href={`/leads/${sub.id}`} className="text-[#143643] hover:text-[#cd8b76]">
+                            {leadName}
+                          </Link>
+                        ) : (
+                          leadName
+                        )}
+                      </span>
+                      <span className="text-xs text-[#5a6a72] ml-2">
+                        {prov?.company_name ?? g.provider_id} · {sub?.course_id ?? "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs">
+                      {enrol ? (
+                        <span>
+                          Status: <span className="font-medium text-[#143643]">{enrol.status}</span>
+                        </span>
+                      ) : null}
+                      <span className="text-[#5a6a72]" title={formatDateTime(g.latestAt)}>
+                        {formatAgo(g.latestAt)}
+                      </span>
+                    </div>
+                  </div>
+                  <ul className="divide-y divide-[#f0ece6]">
+                    {g.edits.map((e) => (
+                      <li key={e.id} className="px-4 py-2 flex flex-wrap items-center gap-3 text-sm">
+                        <span className="text-xs text-[#5a6a72] w-16 shrink-0" title={formatDateTime(e.received_at)}>
+                          {formatAgo(e.received_at)}
+                        </span>
+                        <Badge variant="outline" className="shrink-0">{e.column_name}</Badge>
+                        <span className="flex-1 min-w-0">
+                          {e.column_name === "Status" ? (
+                            <span>
+                              <span className="text-[#5a6a72]">{e.old_value || "—"}</span>
+                              {" → "}
+                              <span className="font-medium">{e.new_value || "—"}</span>
+                            </span>
+                          ) : (
+                            <span title={e.new_value ?? ""}>{truncate(e.new_value ?? "", 100)}</span>
+                          )}
+                        </span>
+                        <Badge variant={ACTION_VARIANT[e.action] ?? "outline"} className="shrink-0">
+                          {ACTION_LABEL[e.action] ?? e.action}
+                        </Badge>
+                        {e.reason ? (
+                          <span className="text-xs text-[#5a6a72] basis-full pl-20" title={e.reason}>
+                            {truncate(e.reason, 140)}
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -292,11 +434,8 @@ function ActivityFilters({
 
   return (
     <div className="flex flex-wrap gap-3 text-sm">
-      {/* Provider */}
       <FilterGroup label="Provider">
-        <FilterPill href={buildHref({ provider: null })} active={!currentProvider}>
-          All
-        </FilterPill>
+        <FilterPill href={buildHref({ provider: null })} active={!currentProvider}>All</FilterPill>
         {providers.map((p) => (
           <FilterPill
             key={p.provider_id}
@@ -308,42 +447,19 @@ function ActivityFilters({
         ))}
       </FilterGroup>
 
-      {/* Column */}
       <FilterGroup label="Column">
-        <FilterPill href={buildHref({ column: null })} active={!currentColumn}>
-          Both
-        </FilterPill>
-        <FilterPill href={buildHref({ column: "Status" })} active={currentColumn === "Status"}>
-          Status
-        </FilterPill>
-        <FilterPill href={buildHref({ column: "Notes" })} active={currentColumn === "Notes"}>
-          Notes
-        </FilterPill>
+        <FilterPill href={buildHref({ column: null })} active={!currentColumn}>Both</FilterPill>
+        <FilterPill href={buildHref({ column: "Status" })} active={currentColumn === "Status"}>Status</FilterPill>
+        <FilterPill href={buildHref({ column: "Notes" })} active={currentColumn === "Notes"}>Notes</FilterPill>
       </FilterGroup>
 
-      {/* Action */}
       <FilterGroup label="Result">
-        <FilterPill href={buildHref({ action: null })} active={!currentAction}>
-          All
-        </FilterPill>
-        <FilterPill href={buildHref({ action: "mirrored" })} active={currentAction === "mirrored"}>
-          Mirrored
-        </FilterPill>
-        <FilterPill
-          href={buildHref({ action: "queued" })}
-          active={currentAction === "queued"}
-        >
-          Anomalies
-        </FilterPill>
-        <FilterPill
-          href={buildHref({ action: "ai_suggested" })}
-          active={currentAction === "ai_suggested"}
-        >
-          AI suggested
-        </FilterPill>
+        <FilterPill href={buildHref({ action: null })} active={!currentAction}>All</FilterPill>
+        <FilterPill href={buildHref({ action: "mirrored" })} active={currentAction === "mirrored"}>Mirrored</FilterPill>
+        <FilterPill href={buildHref({ action: "queued" })} active={currentAction === "queued"}>Anomalies</FilterPill>
+        <FilterPill href={buildHref({ action: "ai_suggested" })} active={currentAction === "ai_suggested"}>AI suggested</FilterPill>
       </FilterGroup>
 
-      {/* Range */}
       <FilterGroup label="Range">
         {[1, 7, 30].map((d) => (
           <FilterPill key={d} href={buildHref({ days: String(d) })} active={currentDays === d}>
