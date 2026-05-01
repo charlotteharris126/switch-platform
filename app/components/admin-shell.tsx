@@ -23,12 +23,12 @@ const NAV_SECTIONS: Array<{
       { href: "/leads", label: "Leads" },
       { href: "/sheet-activity", label: "Sheet activity" },
       { href: "/providers", label: "Providers" },
-      { href: "/analytics", label: "Analytics" },
     ],
   },
   {
     label: "Tools",
     items: [
+      { href: "/analytics", label: "Analytics" },
       { href: "/social/drafts", label: "Social" },
       { href: "/ads", label: "Ad spend" },
       { href: "/agents", label: "Agents" },
@@ -37,11 +37,21 @@ const NAV_SECTIONS: Array<{
   },
 ];
 
+interface Health {
+  leads_last_7d: number;
+  unrouted_over_48h: number;
+  errors_over_7d: number;
+  errors_unresolved_total: number;
+  needs_status_update_count: number;
+}
+
 export function AdminShell({
   user,
+  health,
   children,
 }: {
   user: { email?: string };
+  health: Health | null;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -127,7 +137,7 @@ export function AdminShell({
       <div className="flex-1 flex flex-col min-w-0">
         {/* Topbar */}
         <header className="h-16 bg-white border-b border-[#dad4cb] px-8 flex items-center justify-between">
-          <HealthBar />
+          <HealthBar health={health} />
           <UserMenu email={user.email} initials={initials} />
         </header>
 
@@ -214,17 +224,78 @@ function UserMenu({ email, initials }: { email?: string; initials: string }) {
   );
 }
 
-// Placeholder — Session E wires live counters here.
-function HealthBar() {
-  return (
-    <div className="flex items-center gap-3 text-xs text-[#5a6a72]">
-      <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#dad4cb] bg-[#f4f1ed]">
-        <span className="w-1.5 h-1.5 rounded-full bg-[#cd8b76]" />
-        <span className="font-semibold uppercase tracking-[1.5px] text-[10px] text-[#11242e]">
-          Health
+// Live counters from public.vw_admin_health (one row, refreshed each
+// navigation). Pill colour = worst severity across the four watched
+// signals: red if any "over" threshold is non-zero, amber if anything
+// needs attention, green otherwise.
+function HealthBar({ health }: { health: Health | null }) {
+  if (!health) {
+    return (
+      <div className="flex items-center gap-3 text-xs text-[#5a6a72]">
+        <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#dad4cb] bg-[#f4f1ed]">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#cd8b76]" />
+          <span className="font-semibold uppercase tracking-[1.5px] text-[10px] text-[#11242e]">Health</span>
+          <span className="text-[#5a6a72]">unavailable</span>
         </span>
-        <span className="text-[#5a6a72]">live counters — Session E</span>
+      </div>
+    );
+  }
+
+  const stale = health.errors_over_7d > 0 || health.unrouted_over_48h > 0;
+  const warn = stale || health.needs_status_update_count > 0 || health.errors_unresolved_total > 0;
+  const dotColour = stale ? "bg-[#b3412e]" : warn ? "bg-[#cd8b76]" : "bg-emerald-600";
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#dad4cb] bg-[#f4f1ed]">
+        <span className={`w-1.5 h-1.5 rounded-full ${dotColour}`} />
+        <span className="font-semibold uppercase tracking-[1.5px] text-[10px] text-[#11242e]">Health</span>
       </span>
+      <Stat label="Leads 7d" value={health.leads_last_7d} href="/leads" tone={health.leads_last_7d > 0 ? "good" : "neutral"} />
+      <Stat
+        label="Unrouted >48h"
+        value={health.unrouted_over_48h}
+        href="/actions"
+        tone={health.unrouted_over_48h > 0 ? "bad" : "good"}
+      />
+      <Stat
+        label="Stale errors"
+        value={health.errors_over_7d}
+        href="/errors"
+        tone={health.errors_over_7d > 0 ? "bad" : "good"}
+      />
+      <Stat
+        label="Open errors"
+        value={health.errors_unresolved_total}
+        href="/errors"
+        tone={health.errors_unresolved_total > 0 ? "warn" : "good"}
+      />
+      <Stat
+        label="Needs update"
+        value={health.needs_status_update_count}
+        href="/actions"
+        tone={health.needs_status_update_count > 0 ? "warn" : "good"}
+      />
     </div>
+  );
+}
+
+function Stat({ label, value, href, tone }: { label: string; value: number; href: string; tone: "good" | "warn" | "bad" | "neutral" }) {
+  const colour =
+    tone === "bad"
+      ? "text-[#b3412e]"
+      : tone === "warn"
+        ? "text-[#cd8b76]"
+        : tone === "good"
+          ? "text-emerald-700"
+          : "text-[#11242e]";
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-baseline gap-1 px-2 py-1 rounded hover:bg-[#f4f1ed] transition-colors"
+    >
+      <span className={`font-bold tabular-nums ${colour}`}>{value}</span>
+      <span className="text-[10px] uppercase tracking-[1.5px] text-[#5a6a72]">{label}</span>
+    </Link>
   );
 }

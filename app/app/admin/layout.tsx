@@ -28,5 +28,19 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     }
   }
 
-  return <AdminShell user={{ email: user.email }}>{children}</AdminShell>;
+  // Live counters for the topbar HealthBar (vw_admin_health, single row).
+  const { data: healthRows } = await supabase
+    .from("vw_admin_health")
+    .select("leads_last_7d, unrouted_over_48h, errors_over_7d, errors_unresolved_total, needs_status_update_count");
+  const health = (healthRows?.[0] as Health | undefined) ?? null;
+
+  return <AdminShell user={{ email: user.email }} health={health}>{children}</AdminShell>;
+}
+
+interface Health {
+  leads_last_7d: number;
+  unrouted_over_48h: number;
+  errors_over_7d: number;
+  errors_unresolved_total: number;
+  needs_status_update_count: number;
 }

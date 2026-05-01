@@ -415,7 +415,23 @@ export default async function LeadsPage({
                       const enrol = enrolmentBySubId.get(r.id);
                       if (!enrol?.last_chaser_at) return "—";
                       const d = new Date(enrol.last_chaser_at);
-                      const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+                      // Compare UK calendar days, not elapsed hours, so "today"
+                      // means same calendar day rather than "within last 24h".
+                      const ukKey = (date: Date) =>
+                        date.toLocaleDateString("en-GB", {
+                          year: "numeric",
+                          month: "2-digit",
+                          day: "2-digit",
+                          timeZone: "Europe/London",
+                        });
+                      const todayKey = ukKey(new Date());
+                      const thenKey = ukKey(d);
+                      // Day diff: parse the YYYY-MM-DD (en-GB gives DD/MM/YYYY) and floor.
+                      const parseEnGb = (s: string) => {
+                        const [dd, mm, yyyy] = s.split("/").map((p) => Number(p));
+                        return Date.UTC(yyyy, mm - 1, dd);
+                      };
+                      const days = Math.round((parseEnGb(todayKey) - parseEnGb(thenKey)) / 86_400_000);
                       const label = days === 0 ? "today" : days === 1 ? "1d ago" : `${days}d ago`;
                       const cls = days <= 2 ? "text-[#b3412e] font-semibold" : "";
                       return <span className={cls} title={d.toISOString()}>{label}</span>;
