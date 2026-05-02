@@ -1,0 +1,54 @@
+-- Migration 0052 — widen ads_switchable.meta_daily.ctr
+-- Date: 2026-05-02
+-- Author: Claude (Session 23) with owner review
+-- Reason: ctr was defined as NUMERIC(6, 5) in migration 0001, which caps the
+-- maximum representable value at 9.99999. Meta returns CTR as a percentage
+-- (e.g. 12.5 means 12.5%, NOT 0.125), so any ad with CTR > ~10% — easily
+-- produced by low-impression ads where one click puts CTR at 20-50% — fails
+-- the upsert with PostgresError "numeric field overflow". The whole insight
+-- row lands in leads.dead_letter as edge_function_meta_ingest_upsert and
+-- the day's spend/lead numbers go missing for that ad.
+--
+-- Owner reported 10 such rows on 2 May 2026 (dead-letter ids 142-151), all
+-- from the daily 08:00 UTC ingest cron. Cumulative impact: those days'
+-- spend for the affected ads is missing from the Profit tracker.
+--
+-- Fix: widen to NUMERIC(8, 5) — supports CTR up to 999.99999 which is well
+-- past any plausible real value (CTR is bounded at 100). Same precision (5
+-- decimals), just more headroom on the integer side.
+--
+-- Spend, cpc, cpm, cost_per_lead at NUMERIC(10, 2) all have 8 integer digits
+-- (max 99,999,999.99) which is plenty. frequency at NUMERIC(6, 3) maxes at
+-- 999.999, also fine. Only ctr was undersized.
+--
+-- After applying, the next 08:00 UTC cron run will back-fill the missing days
+-- via the rolling 7-day window — no manual replay needed. The dead-letter
+-- rows can then be bulk-cleaned because the source error no longer applies.
+--
+-- Impact assessment (per .claude/rules/data-infrastructure.md §8):
+--   1. Change: ALTER COLUMN ctr TYPE NUMERIC(8, 5).
+--   2. Readers affected: dashboard /admin/profit, /admin (Overview), Iris
+--      (when wired). All read ctr as a numeric — column-type widening is
+--      transparent. No code changes downstream.
+--   3. Writers affected: meta-ads-ingest Edge Function (the function that
+--      was failing). After the widening, the function's existing INSERT
+--      will succeed for high-CTR rows.
+--   4. Schema version: not affected (no payload contract change).
+--   5. Data migration: none. Existing rows are preserved.
+--   6. New role/policy: no.
+--   7. Rollback: ALTER COLUMN ctr TYPE NUMERIC(6, 5) in DOWN — but only safe
+--      if no row has ctr >= 10.0; would otherwise lose precision/error.
+--   8. Sign-off: owner (this session).
+--
+-- Related:
+--   platform/supabase/migrations/0001_init_pilot_schemas.sql (original column)
+--   platform/supabase/functions/meta-ads-ingest/index.ts (writer)
+--   platform/docs/changelog.md — Session 23 entry
+
+-- UP
+
+ALTER TABLE ads_switchable.meta_daily
+  ALTER COLUMN ctr TYPE NUMERIC(8, 5);
+
+-- DOWN
+-- ALTER TABLE ads_switchable.meta_daily ALTER COLUMN ctr TYPE NUMERIC(6, 5);

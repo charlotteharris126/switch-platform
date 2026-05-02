@@ -59,7 +59,7 @@ const SOURCE_EXPLANATIONS: Record<string, SourceExplanation> = {
     headline: "Sheet append failed",
     severity: "fix",
     what: "The lead was saved to our database and emailed to you, but the row didn't make it into the provider's Google Sheet — so the provider can't see it on their tracker yet.",
-    whatToDo: "Click Open lead → re-trigger routing manually (this retries the sheet append). If it still fails, the provider's sheet webhook URL is probably wrong — fix it on the provider edit page. Once the row is in the sheet, click \"I've handled this\" and note what you did.",
+    whatToDo: "Open the lead and re-trigger routing manually (this retries the sheet append) — that's the bit you can do without code. If it still fails, click Flag for Claude and the provider's sheet webhook config will get checked next platform session.",
   },
   reconcile_backfill: {
     headline: "Lead recovered from Netlify",
@@ -104,20 +104,20 @@ const SOURCE_EXPLANATIONS: Record<string, SourceExplanation> = {
   netlify_forms: {
     headline: "Form submission couldn't be saved",
     severity: "fix",
-    what: "A learner submitted the form on switchable.org.uk but our webhook couldn't write the lead to the database. The lead may still exist in Netlify's form store (the hourly reconcile cron back-fills from there), but it bypassed the live routing path — provider hasn't been notified.",
-    whatToDo: "Check the Why-it-failed message — common causes are DB connection blips or a payload that doesn't match the expected schema. Open the lead if back-filled (look for a matching `reconcile_backfill` row), then route manually. If no back-fill row exists, the lead is in Netlify only — pull it from the Netlify forms dashboard and route by hand.",
+    what: "A learner submitted the form on switchable.org.uk but our webhook couldn't write the lead to the database. The hourly reconcile cron will back-fill it from Netlify's form store (look for a matching reconcile_backfill row later), but the live routing path was bypassed — the provider hasn't been notified yet.",
+    whatToDo: "Flag for Claude — the underlying webhook failure needs a code-side check. While you're waiting, you can sanity-check Netlify Forms dashboard for the matching submission and email the provider directly if the lead is hot.",
   },
   netlify_audit: {
     headline: "Form webhook drift detected",
     severity: "fix",
-    what: "The hourly Netlify-forms-audit cron found a mismatch between the live webhook config on Netlify and our allowlist. Could be a webhook deleted by accident, a wrong URL, or a new form on Netlify not in the allowlist. The risk is silent lead loss if a form is feeding nowhere.",
-    whatToDo: "Read the Why-it-failed message for the specific drift kind. Open Netlify → Forms → check the named form. Reinstate the webhook (URL is in `https://switchable.org.uk/data/form-allowlist.json`) or update the allowlist if a new form is legitimate.",
+    what: "The hourly Netlify-forms-audit cron found a mismatch between the live webhook config on Netlify and our allowlist (a webhook deleted by accident, wrong URL, or a new form not in the allowlist). The risk is silent lead loss if a form is feeding nowhere.",
+    whatToDo: "Flag for Claude — webhook config is a code/admin fix, not an owner action.",
   },
   edge_function_provider_email: {
     headline: "Provider notification email failed",
     severity: "fix",
     what: "Lead was saved, routed, and appended to the provider's sheet — but the \"new enquiry, check your sheet\" email to the provider didn't send. The provider doesn't know a lead landed unless they look at the sheet manually.",
-    whatToDo: "Open the lead, check the routing log — the row reached the provider's sheet. Email the provider directly with the lead reference so they pick it up. Then mark resolved with a note like \"emailed provider manually\".",
+    whatToDo: "Email the provider directly with the lead reference (that's the bit you can do without code). Then click Flag for Claude so the email-send path gets checked next platform session.",
   },
   edge_function_crm_push: {
     headline: "CRM push failed (HubSpot etc)",
@@ -154,8 +154,8 @@ const SOURCE_EXPLANATIONS: Record<string, SourceExplanation> = {
   edge_function_meta_ingest_upsert: {
     headline: "Meta data couldn't be written to DB",
     severity: "fix",
-    what: "Meta returned valid data but the write to `ads_switchable.meta_daily` failed — usually a schema mismatch (Meta added a field), a DB role permission gap, or a constraint violation.",
-    whatToDo: "Read the Why-it-failed message — Postgres error codes point at the exact issue. Most likely a schema/grant fix in a migration. Don't bulk-dismiss without resolving, since the data isn't backed up anywhere else.",
+    what: "Meta returned valid data but the write to `ads_switchable.meta_daily` failed — schema or constraint issue on our side. Until fixed, those days' spend / lead numbers are missing from the Profit tracker for the affected ads.",
+    whatToDo: "Flag for Claude — needs a code/migration fix. The plain-English translation in the row tells you broadly what went wrong; Claude will look at the technical detail next session.",
   },
 };
 
@@ -167,7 +167,7 @@ const DEFAULT_EXPLANATION: SourceExplanation = {
 };
 
 const SEVERITY_LABEL: Record<Severity, string> = {
-  fix: "Action needed",
+  fix: "Flag for Claude",
   clean: "Just clean up",
   info: "Informational",
 };
@@ -177,6 +177,72 @@ const SEVERITY_PILL: Record<Severity, string> = {
   clean: "bg-[#cd8b76] text-white",
   info: "bg-[#dad4cb] text-[#11242e]",
 };
+
+// Translate common technical error messages into plain English.
+// Owner is non-technical — "PostgresError: numeric field overflow" tells
+// them nothing actionable. Pattern-match on the common shapes our Edge
+// Functions emit and return a sentence the owner can actually read.
+// Falls through to the raw message if no pattern matches.
+function translateError(raw: string | null): { plain: string; technical: string } {
+  const technical = (raw ?? "").trim();
+  if (!technical) return { plain: "(no error message recorded)", technical: "" };
+
+  const m = technical.toLowerCase();
+
+  if (m.includes("numeric field overflow")) {
+    return {
+      plain: "A number from an external service was too big to fit in our database. The column needs widening — that's a code/migration change Claude has to make.",
+      technical,
+    };
+  }
+  if (m.includes("fetch failed") || m.includes("network") || m.includes("etimedout") || m.includes("econnreset")) {
+    return {
+      plain: "Couldn't reach an external service (Meta, Brevo, Google Sheets etc) — network glitch or the service was temporarily down. Usually self-heals on the next run.",
+      technical,
+    };
+  }
+  if (m.includes("non-json response") || m.includes("unexpected token")) {
+    return {
+      plain: "External service returned an error page instead of valid data. Usually a transient outage on their side; next run normally recovers.",
+      technical,
+    };
+  }
+  if (m.includes("rate limit") || m.includes("429")) {
+    return {
+      plain: "We hit a rate limit on an external service (too many calls in a short window). Self-heals once the limit window resets.",
+      technical,
+    };
+  }
+  if (m.includes("auth") && (m.includes("401") || m.includes("403") || m.includes("invalid token") || m.includes("unauthorized"))) {
+    return {
+      plain: "An external service rejected our credentials. A token has likely expired or been revoked — needs Claude to rotate the secret.",
+      technical,
+    };
+  }
+  if (m.includes("constraint") || m.includes("violates") || m.includes("foreign key") || m.includes("unique")) {
+    return {
+      plain: "Tried to write a row that breaks a database rule (duplicate, missing reference). Needs Claude to look at the data shape.",
+      technical,
+    };
+  }
+  if (m.includes("permission denied") || m.includes("42501")) {
+    return {
+      plain: "The database role doing the write doesn't have permission. Needs Claude to add a grant or RLS policy.",
+      technical,
+    };
+  }
+  if (m.includes("non-200") || m.includes("status 5") || m.includes("status 4")) {
+    return {
+      plain: "An external service returned an error. Usually their side; next run often recovers. If it persists, Claude can investigate.",
+      technical,
+    };
+  }
+  // Fallback — show the raw message but soften the framing.
+  return {
+    plain: "Technical error from an external system — Claude needs to look at the message below to know what to do.",
+    technical,
+  };
+}
 
 function formatLeadName(s: SubmissionLite | undefined): string {
   if (!s) return "Lead not found";
@@ -362,12 +428,12 @@ export default async function ErrorsPage() {
                 <strong>What these are:</strong> background sync failures (sheet appends, Brevo upserts, audit back-fills). Every lead is still in the database — none of these have stopped a lead from reaching a provider. Each card below explains exactly what failed and what (if anything) needs doing.
               </p>
               <ul className="space-y-1 ml-3">
-                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#b3412e] text-white font-bold mr-2">ACTION NEEDED</span> Open the lead, follow the steps in the card, then click <em>Mark resolved</em>.</li>
+                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#b3412e] text-white font-bold mr-2">FLAG FOR CLAUDE</span> Real errors that need a code or migration fix. You don&rsquo;t fix these yourself — click <em>Flag for Claude</em> and they&rsquo;ll be picked up next platform session.</li>
                 <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#cd8b76] text-white font-bold mr-2">JUST CLEAN UP</span> Safe to clear in bulk — the system catches up automatically.</li>
                 <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#dad4cb] text-[#11242e] font-bold mr-2">INFORMATIONAL</span> Audit rows, not real errors. Bulk-clean any time.</li>
               </ul>
               <p className="text-[#5a6a72]">
-                <strong>About &ldquo;Mark resolved&rdquo;:</strong> it&rsquo;s an acknowledgement, not a re-run. One click clears the row from this list — it does not retry the underlying sync. If you need a retry, the per-row card tells you where.
+                <strong>About the buttons:</strong> none of them retry the failed sync — they just clear the row from this list. <em>Flag for Claude</em> records that you&rsquo;ve seen the row and prepends &ldquo;Flagged for next session&rdquo; to the audit note so Claude can find it; <em>Mark resolved</em> on clean/info rows is straight dismissal because no follow-up is needed.
               </p>
             </CardContent>
           </Card>
@@ -434,8 +500,9 @@ export default async function ErrorsPage() {
                         const lead = sid != null ? subsById.get(sid) : undefined;
                         const formName =
                           (r.raw_payload as { form_name?: string } | null)?.form_name ?? "—";
-                        const errMsg = (r.error_context ?? "").split("\n")[0] || "—";
-                        const errShort = errMsg.length > 140 ? errMsg.slice(0, 140) + "…" : errMsg;
+                        const rawMsg = (r.error_context ?? "").split("\n")[0] || "";
+                        const { plain, technical } = translateError(rawMsg);
+                        const techShort = technical.length > 120 ? technical.slice(0, 120) + "…" : technical;
                         return (
                           <TableRow key={r.id} className={isStale ? "bg-[#b3412e]/5" : ""}>
                             <TableCell className="text-xs">
@@ -453,10 +520,13 @@ export default async function ErrorsPage() {
                               </div>
                             </TableCell>
                             <TableCell
-                              className="text-[11px] text-[#11242e] font-mono leading-tight"
+                              className="text-[11px] leading-tight"
                               title={r.error_context ?? undefined}
                             >
-                              {errShort}
+                              <p className="text-[#11242e]">{plain}</p>
+                              {technical ? (
+                                <p className="text-[10px] text-[#5a6a72] font-mono mt-1">{techShort}</p>
+                              ) : null}
                             </TableCell>
                             <TableCell className="text-xs whitespace-nowrap">
                               <span className={

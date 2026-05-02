@@ -8,10 +8,11 @@ import { markErrorResolved } from "./actions";
 interface Props {
   errorId: number;
   defaultNote: string;
-  // requireNote = true forces the typed-note flow (used for ACTION NEEDED
-  // rows so owner has to acknowledge what they actually did to fix it,
-  // rather than blind-dismiss real errors). false = one-click for clean/
-  // info rows where dismissal is genuinely safe.
+  // requireNote = true is the FIX-severity flow: owner cannot fix the
+  // error themselves (it's a code/migration job for Claude), so the button
+  // becomes "Flag for Claude" and the saved note is prefixed so it's
+  // greppable next platform session. Owner can add optional context.
+  // false = clean/info rows: one-click straight dismissal, no prefix.
   requireNote?: boolean;
 }
 
@@ -22,14 +23,16 @@ export function ResolveButton({ errorId, defaultNote, requireNote = false }: Pro
   const [note, setNote] = useState("");
 
   function resolve(noteText: string) {
-    if (requireNote && !noteText.trim()) {
-      toast.warning("Add a note describing how you handled it.");
-      return;
-    }
+    // FIX-severity rows always get the "Flagged for next session" prefix so
+    // they're greppable in the audit trail — even if owner skips the
+    // optional context field. CLEAN/INFO rows take the note as-is.
+    const finalNote = requireNote
+      ? `Flagged for next session${noteText.trim() ? `: ${noteText.trim()}` : ""}`
+      : noteText.trim() || defaultNote;
     startTransition(async () => {
-      const result = await markErrorResolved(errorId, noteText);
+      const result = await markErrorResolved(errorId, finalNote);
       if (result.ok) {
-        toast.success("Marked resolved.");
+        toast.success(requireNote ? "Flagged for Claude." : "Marked resolved.");
         router.refresh();
       } else {
         toast.error("Failed", { description: result.error });
@@ -40,14 +43,24 @@ export function ResolveButton({ errorId, defaultNote, requireNote = false }: Pro
   if (!showNote) {
     if (requireNote) {
       return (
-        <button
-          type="button"
-          onClick={() => setShowNote(true)}
-          disabled={pending}
-          className="text-[10px] font-bold uppercase tracking-wide text-[#11242e] bg-white border border-[#dad4cb] hover:border-[#cd8b76]/60 px-2 h-7 rounded"
-        >
-          I&rsquo;ve handled this
-        </button>
+        <div className="flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => resolve("")}
+            disabled={pending}
+            className="text-[10px] font-bold uppercase tracking-wide text-white bg-[#b3412e] hover:bg-[#9a3525] disabled:opacity-40 px-3 h-7 rounded"
+          >
+            {pending ? "..." : "Flag for Claude"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowNote(true)}
+            disabled={pending}
+            className="text-[10px] text-[#5a6a72] hover:text-[#11242e] underline"
+          >
+            add context first
+          </button>
+        </div>
       );
     }
     return (
@@ -78,17 +91,17 @@ export function ResolveButton({ errorId, defaultNote, requireNote = false }: Pro
         type="text"
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder={requireNote ? "What did you do?" : "Optional note"}
+        placeholder={requireNote ? "Anything you noticed? (optional)" : "Optional note"}
         disabled={pending}
         className="text-[10px] border border-[#dad4cb] rounded px-2 h-7 bg-white text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76] w-48"
       />
       <button
         type="button"
-        onClick={() => resolve(note.trim() || defaultNote)}
+        onClick={() => resolve(note)}
         disabled={pending}
         className="h-7 px-2 text-[10px] font-bold uppercase tracking-wide rounded bg-[#143643] text-white hover:bg-[#11242e] disabled:opacity-40"
       >
-        {pending ? "..." : "Save"}
+        {pending ? "..." : requireNote ? "Flag" : "Save"}
       </button>
       <button
         type="button"
