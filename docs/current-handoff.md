@@ -1,141 +1,126 @@
-# Platform: Current Handoff: 2026-04-30 (Session 20 closed) — open-row backfill, /admin/leads upgrades, Brevo 3-state push + reconcile, status-driven auto-sync
+# Platform: Current Handoff: 2026-05-02 (Session 21) — Sheet → DB mirror live, admin dashboard polish, HubSpot scoping, Meta ads ingest started
 
-**Session type:** Long mixed session. Started by diagnosing a reporting defect (only 1 open enrolment row of 113 routed leads), pivoted into the dashboard upgrades that flow downstream, then took on the queued no-match Brevo build, then bridged DB ↔ Brevo into a single source of truth, then closed the third write path so every status change pushes to Brevo automatically.
+**Session type:** Multi-day mixed build. Opened with a strategy conversation (owner losing track of provider activity in sheets), pivoted into a full design + ship of the sheet → DB mirror with optional AI layer, then dashboard polish on three surfaces, then a paused HubSpot integration awaiting provider reply, then opened a Meta ads ingestion build that's mid-token-setup.
 
-**Session opened:** 2026-04-30 morning
-**Session closed:** 2026-04-30 evening
+**Session opened:** 2026-04-30 (mid-afternoon, after Session 20 close)
+**Session closed:** 2026-05-02
 
 ---
 
 ## What we worked on
 
-### 1. Open-row backfill + auto-create at routing time (migrations 0042 + 0043)
+### 1. Sheet → DB mirror — full hybrid build
 
-- Diagnosed: 113 routed leads but only 16 rows in `crm.enrolments` (12 enrolled + 3 presumed_enrolled + 1 open). 95 active routed leads (91 parents + 4 re-application children) had no row at all. The `/admin/leads` page comment claiming an open row was inserted at routing time was aspirational and never shipped.
-- Migration `0042_ensure_open_enrolment.sql` — adds `crm.ensure_open_enrolment(p_submission_id BIGINT, p_routing_log_id BIGINT, p_provider_id TEXT)`. SECURITY DEFINER, idempotent on `(submission_id, provider_id)` via `ON CONFLICT DO NOTHING`. Granted to `functions_writer` and `authenticated`. `functions_writer` keeps zero direct grants on `crm.enrolments` — all writes route through this RPC or `crm.upsert_enrolment_outcome`.
-- `_shared/route-lead.ts` — write phase now captures the inserted `routing_log` row id and calls `crm.ensure_open_enrolment` inside the same transaction. Atomic with the routing_log insert + submissions update; if any step fails, the routing rolls back.
-- Migration `0043_backfill_open_enrolments.sql` — walks `leads.routing_log` joined to `leads.submissions`, calls `crm.ensure_open_enrolment` for every active routed parent (non-DQ, non-archived, `parent_submission_id IS NULL`). Result: before=17, after=108, inserted=91. First attempt aborted on a brittle "newly inserted vs already-existing" 1-minute-window counter that mis-counted lead 221 (Kirsty McCabe) which had routed during the deploy window — fixed with a simple before/after total comparison. Lead 221 also confirmed Phase 1 working live before Phase 2 ran.
-- Stale comment on `/admin/leads/page.tsx` fallback fixed.
-- `data-architecture.md` updated with the open-row creation principle.
+**The need:** owner had no consolidated view of provider activity. Providers were updating Status and Notes columns in their Google Sheets independently and the database never advanced past `open`. Pipeline state across three pilot providers was unmanageable.
 
-### 2. /admin/leads upgrades (Lead status / Routed split, multi-select, paste-emails, bulk action)
+**Design (`platform/docs/sheet-mirror-scoping.md`):** two channels behind one Apps Script `onEdit` trigger.
+- **Channel A — Status column.** Deterministic mapping of the provider's existing dropdown (open / enrolled / presumed enrolled / cannot reach / lost) to `crm.enrolments.status`. Auto-applied silently, no email, no approval. Anomalies (regression, post-billing override, unmapped value) email the owner.
+- **Channel B — Notes column.** AI-interpreted via Claude Haiku 4.5. PII-redacted before the API call. Returns a structured suggestion (`implied_status`, `confidence`, `summary`). Status-implying suggestions queue in `crm.pending_updates` and email the owner with HMAC-signed Approve / Reject / Override links. No auto-apply, even on high confidence — every suggestion needs explicit owner click.
 
-- Bulk enrolment outcome update: checkbox column on the leads table, master checkbox in the header (with indeterminate state), sticky action bar appears when ≥1 row selected, status button group (open / enrolled / presumed_enrolled / cannot_reach / lost), conditional lost-reason picker, optional notes textarea, "Apply to N" button. Dispute stays single-lead. Server Action loops `crm.upsert_enrolment_outcome` per submission so audit rows are written per lead, returns succeeded / failed counts.
-- Status / Routed columns split: "Lead status" shows the actual outcome (Open / Enrolled / Presumed enrolled / Cannot reach / Lost / DQ / Unrouted) with the Reapplied badge alongside; "Routed" column moved to the rightmost position. Status badge label fix: `enrol.status='open'` no longer collapsed to "Routed".
-- Lead status filter: started as a single-select pill row, owner asked for multi-select dropdown — refactored to `DropdownMenuCheckboxItem` with comma-separated URL param. Trigger button shows "Any" / single label / "N selected".
-- Paste-emails filter: textarea takes a paste of comma- or newline-separated emails, applies on blur or Cmd/Ctrl+Enter. Active count shown as a pill next to the label. Server splits the URL param and filters via case-insensitive `ilike-OR` clauses (Supabase doesn't expose `ilike-IN`). Honoured at every stage.
-- Files: `app/app/admin/leads/page.tsx`, `app/app/admin/leads/filters.tsx`, `app/app/admin/leads/bulk-actions.ts` (new), `app/app/admin/leads/bulk-selection.tsx` (new).
+**Migration 0047 — `crm.sheet_edits_log` + `crm.pending_updates`.** Audit row per sheet edit. Pending queue for AI suggestions. RLS enabled with `admin_read_*` + `analytics_read_*` SELECT policies and `GRANT SELECT TO authenticated` (initially missed; fixed mid-session — RLS policy alone isn't enough, base table grant must precede). Both tables added to `supabase_realtime` publication for dashboard auto-refresh.
 
-### 3. Apps Script v2 prior-note bug — root-caused and patched
+**Edge Function `sheet-edit-mirror` (deployed).** Auth via `Authorization: Bearer SHEETS_APPEND_TOKEN` reusing the appender's secret. Bug fixes during build: lead IDs in sheets are formatted `SL-YY-MM-NNNN` (zero-padded submission_id), not raw numeric — added `parseLeadId()` to extract; `submission_id` FK enforcement required validating before logging anomaly rows; `crm.providers.company_name` not `name`, `leads.submissions.course_id` not `course_slug`. Status vocabulary expanded with `cannot_reach` and `lost` to match the provider sheets' actual dropdown.
 
-- Investigated reported defect: lead 216 (Julie Orange-Benjamin, smm) routed to EMS but the "Previously applied for counselling-skills-tees-valley" note didn't appear on the EMS sheet. `lookupPriorSubmissionNote` query verified directly — DOES find a match for 216. Audit logs show `sheet_appended: true`. No dead_letter row.
-- Root cause: `apps-scripts/provider-sheet-appender-v2.gs` FIELD_MAP had no entries for `notes` / `note` / `comment` / `comments`. The script's own line-154 comment said Notes was a manual column. But `route-lead.ts` line 629 said the opposite — Apps Script v2 recognised those headers. Aspirational comment, not actual code. Cross-course duplicate notes have been silently dropped on every provider's sheet since each migrated off v1 (EMS Session 5; WYK Digital + Courses Direct during their onboarding).
-- Canonical source patched. Owner redeployed all 3 providers' bound scripts.
+**Edge Function `pending-update-confirm` (deployed).** HMAC-signed token (binds pending_update_id + action + 7-day expiry). Approve / Reject / Override flow. Soft-fails with 503 when `PENDING_UPDATE_SECRET` not set, so deploys cleanly during Phase 1 before Channel B is activated.
 
-### 4. No-match Brevo build (3-state SW_MATCH_STATUS)
+**Apps Script `provider-sheet-edit-mirror.gs`.** Installable `onEdit` trigger. Watches `Status` and `Notes` (canonical headers, header alias map handles "Comments" etc.). Renamed `TOKEN` → `MIRROR_TOKEN` to avoid clash with the appender's existing const in the shared Apps Script project scope. Logs every step on debug for diagnosing trigger flow. Deployed to all three pilot sheets (EMS, WYK Digital, Courses Direct).
 
-- Spec at `platform/docs/no-match-brevo-build.md`. Was queued as the planned first job today; we picked it up after the enrolment work.
-- `_shared/route-lead.ts` — refactored `upsertLearnerInBrevo` to branch on `funding_category`. Self-funded skips matrix.json entirely (their `course_id` is a YAML id, not a page slug; matrix lookup was silently failing) and reads `SW_SECTOR` from `submission.interest`. Added `composeBrevoCourseContext` helper. Added `SW_DQ_REASON` to attribute set (populated when `is_dq=true`).
-- New exported `upsertLearnerInBrevoNoMatch(sql, submissionId, matchStatus)` — covers `no_match` + `pending` states. Provider attributes empty. Fetches the SubmissionRow internally so callers don't have to assemble it.
-- `SubmissionRow` interface gains `dq_reason: string | null`; `routeLead`'s SELECT updated to populate it.
-- `netlify-lead-router/index.ts` wiring: DQ or 0 candidates → `upsertLearnerInBrevoNoMatch(..., "no_match")`; email-confirm flow (2+ candidates, or 1 candidate without auto-route) → `upsertLearnerInBrevoNoMatch(..., "pending")` before notifying owner. Auto-route + re-application paths unchanged (matched via `routeLead`).
+**Channel B activation.** Owner + Clara confirmed the Switchable privacy policy now lists Anthropic as a sub-processor and the learner consent text covers AI-assisted analysis of provider notes. Set `PENDING_UPDATE_SECRET` (generated via `openssl rand -hex 32`, set via CLI never appearing in chat) and `ANTHROPIC_API_KEY` (paste-into-Supabase-first then generate-in-Anthropic flow). Initial test failed with credit balance 400; topped up; re-tested clean. `OWNER_NOTIFICATION_EMAIL=charlotte@switchleads.co.uk` set so all alert emails route to her.
 
-### 5. SW_ENROL_STATUS attribute (lifecycle segmentation)
+**End-to-end verification.** Real Status edit on Courses Direct lead → mirrored via Apps Script → audit row written → `crm.enrolments.status = cannot_reach`. Confirmed Channel A round-trip on production data.
 
-- `upsertLearnerInBrevo` reads `crm.enrolments.status` for the (submission, provider) pair and pushes it as `SW_ENROL_STATUS`. LEFT JOIN-equivalent: empty string if no row.
-- `upsertLearnerInBrevoNoMatch` hard-codes `SW_ENROL_STATUS=""` — those contacts aren't in the lifecycle yet.
-- DB enum `cannot_reach` mapped to Brevo Category value `cannot_contact` at the upsert boundary (`ENROL_STATUS_DB_TO_BREVO` lookup in `_shared/route-lead.ts`). Owner confirmed Brevo Category uses `cannot_contact`. DB stays canonical.
+### 2. /admin/sheet-activity dashboard page
 
-### 6. Brevo backfill (DB ↔ Brevo single source of truth)
+New page surfacing all sheet edits and pending AI suggestions.
 
-- 38 dead_letter 429 errors on first attempt — fired 7 parallel batches of 25 with no throttle. Brevo's contacts API rate-limited.
-- Fixed by:
-  - `upsertLearnerInBrevo` + `upsertLearnerInBrevoNoMatch` now return `{ ok: boolean; error?: string }`. Failure still writes `dead_letter` (preserving observability) but callers that care can branch on it.
-  - `admin-brevo-resync` reports the real per-id status (was always returning `ok` because helpers caught their own errors and returned void). 250ms throttle between Brevo calls inside the loop.
-  - Resync function extended to handle DQ leads (push as `no_match` with `SW_DQ_REASON`) and unrouted-qualified leads (push as `pending`). Routed leads keep the existing matched path.
-- Re-fired backfill with single batch of all 166 (53 DQ + 113 routed), `pg_net` timeout 200s, sequential server-side processing with throttle. Result: 166 "ok"s, zero dead_letter failures.
-- Verified live by GETting Luana Martinez (lead 159) directly via the new `admin-brevo-inspect` Edge Function. Brevo's API returns Category attributes as numeric indices (e.g. `SW_ENROL_STATUS=4` = `cannot_contact`); dashboard decodes them. Owner confirmed all 16 attributes visible in the Brevo dashboard view (they were initially "hidden attributes" in the dashboard UI — owner unhid them).
-- Pre-backfill Brevo contact count was ~16 because `BREVO_LIST_ID_SWITCHABLE_UTILITY` env var was only recently set; pre-29-April leads silently skipped via the early-return guard. Backfill created the missing ~150 contacts; existing ones were updated. 6 duplicate emails dedupe to 160 unique contacts.
+- **Headline tiles:** total edits, mirrored, anomalies, awaiting your call.
+- **Pending AI suggestions section** at top of page with inline Approve / Reject / Choose Different buttons per suggestion.
+- **Activity feed grouped by lead.** Each lead is a `<details>` block (collapsed by default — page would balloon otherwise). Lead header shows name, course, provider, current status, edit count, latest timestamp; expanding shows the full edit list.
+- **Filters:** provider, column (Status / Notes), action (mirrored / anomaly / AI suggested), date range (1 / 7 / 30 days).
+- **Realtime refresh** subscribes to `crm.sheet_edits_log` and `crm.pending_updates` so changes appear live without manual reload.
+- **Inline Approve / Reject / Override** call the new `crm.resolve_pending_update(BIGINT, TEXT, TEXT)` SECURITY DEFINER RPC (migration 0048). Pattern matches `fire_provider_chaser` — dashboard's `authenticated` role gets `EXECUTE` on the RPC, not direct table writes. RPC handles `pending_updates` flip, enrolment status update, dispute insert, audit row, all atomic.
 
-### 7. New Edge Function: admin-brevo-inspect
+Files: `app/app/admin/sheet-activity/page.tsx`, `actions.ts`, `pending-actions.tsx` (client component for the buttons).
 
-- POST endpoint at `/functions/v1/admin-brevo-inspect`. Read-only debug GET against Brevo's contact API by email. Auth via `x-audit-key`. `verify_jwt = false` in `config.toml`. Returns the raw Brevo response so we can see exactly what's stored vs what the dashboard renders.
-- Surfaced the "Brevo Category attributes return numeric indices in API responses" behaviour during the SW_ENROL_STATUS rollout — the dashboard was the cache concern, not the upsert.
-- Permanent operational tool, registered in changelog.
+### 3. Other dashboard surfaces
 
-### 8. Status-driven Brevo auto-sync (migrations 0044 + 0045)
+- **Overview "Needs your attention" tile** — added "AI suggestions" tile with pending count, links to /actions. Grid widened to 5 columns. Realtime refresh subscribes to `pending_updates`.
+- **Actions page** — new "AI suggestions" Card at the top with the same inline Approve / Reject / Choose Different buttons as /sheet-activity, sorted to the top above unrouted / approaching-flip / presumed-enrolled.
+- **HealthBar** — topbar placeholder ("Session E") replaced with live counters from `public.vw_admin_health`. Five clickable pills (Leads 7d, Unrouted >48h, Stale errors, Open errors, Needs update), tone-coloured by severity.
+- **Last chaser column on /admin/leads** — fixed "today" misreading. Was using elapsed-hours floor; now compares en-GB calendar date keys in Europe/London.
+- **Analytics nav** — moved from main Lifecycle group into Tools alongside Ad spend / Social / Agents / Data health.
 
-- Closes the gap where DB-side enrolment status changes didn't push to Brevo. Now every status change syncs automatically.
-- Migration `0044_sync_leads_to_brevo.sql` — adds `crm.sync_leads_to_brevo(BIGINT[])`. SECURITY DEFINER. Uses `public.get_shared_secret('AUDIT_SHARED_SECRET')` + `pg_net.http_post` to fire `admin-brevo-resync` async with the supplied submission ids. Returns the request_id immediately. Granted to `authenticated`.
-- Server Actions wired:
-  - `markEnrolmentOutcome` (single-lead) calls `sync_leads_to_brevo([id])` after a successful upsert.
-  - `markEnrolmentOutcomeBulk` collects successfully-updated ids, fires once at the end of the loop. So a 50-lead bulk action = one Edge Function call (which then loops with its 250ms throttle), not 50 parallel calls.
-- Migration `0045_auto_flip_calls_brevo_sync.sql` — `crm.run_enrolment_auto_flip` rewritten to collect every flipped submission_id (separate from the existing `v_sample` BIGINT[] which stays capped at 10 for telemetry) and fire one `crm.sync_leads_to_brevo` call at the end. Public function shape unchanged. The 3-4 May presumed_enrolled flips for the ~6 oldest EMS leads will sync to Brevo without intervention.
-- All three enrolment-status write paths (single-lead form, bulk action, cron) now push to Brevo automatically.
+### 4. /admin/errors page redesign
 
-### 9. SF2 chaser one-click button on /admin/leads (migration 0046, post-handoff add-on, verified live)
+Owner reported "no idea what these mean, no value out of it". Investigation showed 45 of 45 unresolved errors hit the `DEFAULT_EXPLANATION` fallback because three sources (`edge_function_brevo_upsert`, `edge_function_brevo_upsert_no_match`, `edge_function_brevo_chase`) had no `SOURCE_EXPLANATIONS` entry.
 
-- Owner request: replace the 3-clicks-per-lead manual Brevo UI add to "Provider tried no answer" list with a single button on the dashboard.
-- Migration 0046 — adds `crm.enrolments.last_chaser_at TIMESTAMPTZ` + `crm.fire_provider_chaser(BIGINT[])` SECURITY DEFINER RPC. RPC validates eligibility (must have email, not archived, must have enrolment row), stamps `last_chaser_at`, audits, async-fires `admin-brevo-chase` via pg_net. Returns per-id status + skip reason.
-- New Edge Function `admin-brevo-chase` — `x-audit-key` auth, adds emails to Brevo internal list ID 8 (set as `BREVO_LIST_ID_PROVIDER_TRIED_NO_ANSWER` via `supabase secrets set`). 250ms throttle. Failures land in `dead_letter`; `last_chaser_at` still stamped (owner's intent recorded regardless).
-- UI — "Send chaser" button in the sticky bulk action bar (secondary style next to "Apply"). New "Last chaser" column on `/admin/leads` showing `today` / `Xd ago` / `—`, coloured red+bold when ≤2 days to discourage double-firing. Hover tooltip carries the ISO timestamp.
-- Verified live by owner end-to-end immediately after deploy.
+- Added plain-English explanations for the three missing sources.
+- Added a `severity` field per source: `fix` (red, action needed) / `clean` (orange, self-resolves) / `info` (grey, audit only). Cards now sort by severity so action-needed surfaces first.
+- New top-of-page explainer maps the three pill colours to plain English.
+- New `bulkMarkSourceResolved` server action + `BulkResolveButton` client component for `clean`/`info` sources — wipes the 30+ row backlog in one click rather than per-row.
+- Charlotte said "still not right, come back to this" — flagged for follow-up.
 
-### 10. Owner-side Brevo work (in flight / done during session)
+### 5. HubSpot two-way integration (paused)
 
-- `SW_ENROL_STATUS` Category attribute added in Brevo with values `open` / `enrolled` / `presumed_enrolled` / `cannot_contact` / `lost`.
-- `SW_MATCH_STATUS` Category attribute added with values `matched` / `pending` / `no_match` (was missing — caused the test resync's first attempt to silently drop ALL the new attributes; Brevo's behaviour is to drop the entire attribute update if any single key isn't defined as a Contact Attribute).
-- U1 funded + U1 self automations paused for the backfill window. Still pending unpause (see Next steps).
-- All 3 providers' bound Apps Scripts redeployed with the canonical v2 + new `notes` / `note` / `comment` / `comments` FIELD_MAP entries.
+Ranjit (Courses Direct) asked if leads can be pushed to HubSpot in addition to the sheet. Designed two-way: outbound lead push + inbound status updates so the sheet becomes a background audit log only.
+
+- **Migration 0049 — `crm_webhook_token` column on `crm.providers`.** File only. Not yet applied (was paused before owner ran it via SQL editor).
+- **`route-lead.ts` extension — `pushToProviderCrm()`.** Local edits, not deployed. Pushes a flat-shape + HubSpot-shape (`fields: [{name, value}, ...]`) JSON body to `crm.providers.crm_webhook_url` after a successful sheet append. Failure is non-fatal (sheet already got the row); persists to `leads.dead_letter`. Field set covers both funded and self-funded shapes; receiver picks via `.filter(v => v !== null)`.
+- **Edge Function `crm-webhook-receiver` (deployed).** Provider-agnostic inbound endpoint. Token in URL query string identifies the provider via `crm.providers.crm_webhook_token`. Accepts our enum directly + common HubSpot lifecycle stages. Audits to `crm.sheet_edits_log` with `column_name='CRM'` so the activity page picks it up.
+- **Status mapping caveat:** receiver hardcodes a generous alias list; per-provider mapping not built. v1 acceptable.
+- **Email sent to Ranjit** asking for: HubSpot form API submission URL, custom Lead status property with our 5 values, Workflow firing on status change with webhook including contact email + our Lead ID. Soft on Workflow tier requirement (Operations Hub Starter+) with Zapier as fallback.
+- **Memory note saved** at `~/.claude/projects/-Users-.../memory/project_hubspot_integration_pending.md` covering resume steps when Ranjit replies.
+
+### 6. Meta ads ingestion (mid-build)
+
+Charlotte got into the developer Facebook account; we're standing up the daily ad spend pull so the existing dashboard tiles (`metaSpendThis`, `metaIngestionLive`) light up.
+
+- **Edge Function `meta-ads-ingest` (deployed).** POST endpoint, `x-audit-key` header auth via `AUDIT_SHARED_SECRET` (Vault). Pulls ad-level daily insights from `https://graph.facebook.com/v22.0/act_<id>/insights` with `level=ad`, `time_increment=1`, full field set. Idempotent upsert on `(date, ad_id)`. Pagination handled (50-page safety bound). Optional body `{ since, until }` for backfills; default last 7 days for daily cron. Failures persist to `leads.dead_letter`. Token redacted in any logged URLs.
+- **Walked owner through Meta app creation** (developers.facebook.com → Create App → Business type → add Marketing API product). Charlotte hadn't created the app yet — that's where she paused.
+- **Token + account ID setup pending.** Once app is created, next steps are: System User in Business Settings, generate token with `ads_read` scope (set to never expire), copy ad account numeric ID. Then `META_ACCESS_TOKEN` and `META_AD_ACCOUNT_ID` go into Supabase secrets via the paste-destination-first pattern (memory: secret_handover_order).
+- **Schedule pending.** Once token works and a backfill succeeds, add a daily pg_cron job to call the function via the same Vault-backed AUDIT_SHARED_SECRET pattern as `netlify-leads-reconcile-hourly`.
 
 ---
 
 ## Current state
 
-DB ↔ Brevo are reconciled. Every lead state in the database has a corresponding Brevo contact with the correct attribute shape; every status change pushes to Brevo automatically across all three write paths (Server Actions + cron). `/admin/leads` ships the bulk action + Lead status filter + paste-emails filter; the Brevo `SW_ENROL_STATUS` attribute updates within seconds of any owner-driven status edit. Email-side U2/U3/U4 build is unblocked.
+Sheet → DB mirror is shipped end-to-end with both channels live; HubSpot two-way is paused awaiting Ranjit's HubSpot setup; Meta ads ingestion is deployed and waiting on Charlotte to finish creating the Meta app and generate the access token.
 
 ---
 
 ## Next steps
 
-In priority order:
-
-1. **Owner: unpause U1 funded + U1 self automations in Brevo.** They've been paused throughout the backfill window; with 160 contacts now correctly attributed, the entry filter (`SW_MATCH_STATUS=matched AND SW_FUNDING_CATEGORY in (gov, loan)`) routes only the right leads through.
-2. **Owner: verify `switchable/email/CLAUDE.md` attribute count is current.** Latest edit lists 17 attrs incl. FIRSTNAME/LASTNAME — quick read-through to confirm SW_DQ_REASON + SW_ENROL_STATUS are in the namespacing block (the linter showed they're already there; just verify).
-3. **Three platform secrets overdue rotation** (`BREVO_API_KEY`, `SHEETS_APPEND_TOKEN`, `ROUTING_CONFIRM_SHARED_SECRET`). Ticket `869d0a9q7`. Carrying since 22 Apr.
-4. **Quarterly backup restore test** (data-infrastructure rule). Not done this quarter.
-5. **Continue platform queue:** Meta ad spend ingestion (#1, blocked on FB device-trust), anomaly detection / Sasha extension (#3).
-6. **Watch the 3-4 May auto-flip.** Migration 0045 should flip ~6 oldest EMS leads from `open` → `presumed_enrolled` and push the new state to Brevo automatically. Sasha's Monday scan on 5 May will surface anything that didn't fire.
-
-Carry-forward unchanged from Session 19:
-- 2 unresolved sheet-append rows from 23 April (id 89, 90) at the 7-day flag line — owner triage still pending.
-- Mira's THE priority for the week is Rosa pipeline reset in `switchleads/outreach/` — not platform.
+1. **Finish Meta ads token setup.** Charlotte's mid-flow on creating the developer Meta app. Once done: System User in Business Settings → assign ad account → generate token with `ads_read` scope → set `META_ACCESS_TOKEN` and `META_AD_ACCOUNT_ID` Supabase secrets via paste-destination-first. Then trigger a backfill (`POST /meta-ads-ingest` with `{"since":"2026-04-15","until":"<today>"}` and `x-audit-key` header). Verify rows appear in `ads_switchable.meta_daily`. Schedule the daily cron.
+2. **Revisit /admin/errors UX.** Charlotte said "still not right, come back to this". Need her to clarify what's missing — likely: hide info-tier rows by default, or summarise rather than list, or surface only the 0 fix-tier as the relevant attention figure.
+3. **Resume HubSpot integration when Ranjit replies.** Resume steps in `~/.claude/projects/-Users-.../memory/project_hubspot_integration_pending.md`. Apply migration 0049, deploy local route-lead.ts edits, set Courses Direct's webhook URL + token, send Ranjit the inbound URL.
+4. **Daily digest cron for sheet mirror.** Original scoping mentioned `sheet-mirror-daily-digest` (09:00 UK summary email). Not built. Owner has the dashboard tile + AI suggestion emails so this is lower priority than originally scoped.
+5. **Pending-updates auto-expire cron.** Mentioned in scoping. 7-day expiry sweep against `resolver_token_expires_at`. Two lines of pg_cron. Deferred until pending volume warrants.
+6. **Provider onboarding playbook** — update with the new Status / Notes column expectations and the `provider-sheet-edit-mirror.gs` install steps. Untouched in this session.
 
 ---
 
 ## Decisions / open questions
 
-**Decisions made this session:**
-
-- Re-application children deliberately stay row-less in `crm.enrolments`. Outcome lives on the parent (`leads.submissions.parent_submission_id IS NULL` filter on the backfill).
-- DB enum stays `cannot_reach`; Brevo Category stays `cannot_contact`. Translation lives at the upsert boundary (`ENROL_STATUS_DB_TO_BREVO` map in `_shared/route-lead.ts`). Cleaner than renaming either side.
-- Bulk action does NOT cover dispute. Dispute carries per-lead reason text and stays on the single-lead form at `/admin/leads/[id]`.
-- `/admin/leads` Lead status filter is multi-select via `DropdownMenuCheckboxItem`, not single-select pills. URL param comma-separated. Owner UX preference for ≤6 options is button group; multi-select breaks that rule and requires a panel.
-- Paste-emails filter is honoured at every stage (not gated by `stage='all'` like the other filters). It's a hard intent: "show me these specific people".
-- Brevo helpers return `{ok, error?}` AND write `dead_letter` on failure. Routing-side callers ignore the result (best-effort posture preserved); resync-side callers thread the result back into the per-id status response.
-- 250ms throttle between Brevo calls inside `admin-brevo-resync`. Single-batch backfill with `pg_net` timeout 200s preferred over parallel batches with sleeps (avoids SQL Editor upstream timeout).
+**Decisions made:**
+- Hybrid sheet mirror design: deterministic for Status, AI-suggest-then-approve for Notes. No auto-apply on AI even at high confidence — owner click required.
+- PII redaction (email + phone) before any Claude API call, supporting GDPR data minimisation (Decision 3 in scoping).
+- Anthropic listed as sub-processor in privacy policy — Charlotte + Clara handled mid-session.
+- Channel B activation gated on Phase 0 legal sign-off; gate cleared this session.
+- HubSpot integration uses Forms API (works on free tier) for outbound, requires Operations Hub Starter+ for inbound webhooks (Workflows).
+- HubSpot custom property recommended over reusing HubSpot's default lifecyclestage values — avoids clashing semantics.
+- Sheet activity grouped by lead with collapsible details — flat row list would balloon.
+- Dashboard writes use SECURITY DEFINER RPCs (matching `fire_provider_chaser` pattern), not direct grants on tables.
 
 **Open questions:**
-
-- Cross-course duplicates (e.g. Julie 209+216, Sue 7+203, Jade 174+175+176) — by design they're separate parents per migration 0026's `(LOWER(email), course_id)` dedup partition. Owner mused on whether to archive them; settled on no — they're real second-course enquiries, the prior-note on the sheet is the cross-course signal. Jade's three submissions in 4 minutes look like clicking around the site rather than three deliberate enquiries; owner can archive 175 + 176 if she wants but isn't blocking on it.
-- The owner-built archive feature on `/admin/leads/[id]` is still scoped (admin-dashboard-scoping.md) but not built. No bulk archive yet either. If the cross-course misfire pattern recurs, this becomes higher priority.
-- `OWNER_TEST_DOMAINS` (in `_shared/ingest.ts`) does NOT cover `ignoreem.com`-style synthetic test emails — they flow through normal routing and require manual archive. Decision affects whether to add the constant + redeploy. Not blocking. (Carries from Session 19.)
+- Does Ranjit have the HubSpot tier needed for Workflows webhooks? Email sent flagged this; awaiting reply.
+- What's specifically "still not right" on /admin/errors. Need more direct feedback before redesign.
+- Should `/admin/errors` "Open errors" health-bar pill exclude info-tier rows? Currently it counts all 45 even though most are audit-only.
+- Sheet activity page filter pills include "Anomalies" but not all anomaly types (queued, rejected, ai_error are different colours but one pill). May want finer breakdown later.
 
 ---
 
 ## Next session
 
-- **Currently in:** `platform/`. Reconcile complete; status changes auto-sync; bulk action shipped.
-- **Next recommended:** `switchleads/outreach/`. Mira's THE priority for the week is the Rosa pipeline reset (Apollo top-up + 11 stale outreach tasks). Platform's queue is steady-state — secrets rotation + backup test are owner-action, no urgent blockers.
-- **First thing to tackle (if back in platform):** rotate the three overdue secrets, then quarterly backup restore test.
-- **First thing to tackle (if `switchleads/outreach/`):** read Rosa's weekly notes + the To-contact queue, run the Apollo top-up of ~20 contacts, work through the 6 Connection-sent stale (14-19 days) and 5 Chase-DM stale (5 days).
+- **Currently in:** `platform/` — data infrastructure, admin dashboard, Edge Functions.
+- **Next recommended:** stay in `platform/`. The Meta ads token setup is the only blocker on lighting up the ad-spend tiles, which Iris and Mira need for weekly reports. After that, /admin/errors UX revisit while it's fresh in Charlotte's mind.
+- **First thing to tackle:** finish the Meta app creation + System User token + first backfill. Should be a 30-minute session with Charlotte on the Meta side and me prompting her through each step.

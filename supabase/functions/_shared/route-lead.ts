@@ -38,6 +38,7 @@ export interface ProviderRow {
   contact_name: string | null;
   sheet_id: string | null;
   sheet_webhook_url: string | null;
+  crm_webhook_url: string | null;
   cc_emails: string[];
   active: boolean;
   archived_at: string | null;
@@ -120,7 +121,7 @@ export async function routeLead(
   try {
     const [providerRow] = await sql<ProviderRow[]>`
       SELECT provider_id, company_name, contact_email, contact_name,
-             sheet_id, sheet_webhook_url, cc_emails,
+             sheet_id, sheet_webhook_url, crm_webhook_url, cc_emails,
              active, archived_at, auto_route_enabled,
              trust_line, regions
         FROM crm.providers
@@ -249,6 +250,19 @@ export async function routeLead(
       sheetAppended: false,
       providerNotified: false,
     };
+  }
+
+  // Optional: push the same lead to the provider's CRM webhook (HubSpot
+  // form submission URL, Zapier catch hook, etc). Failure is non-fatal —
+  // sheet still got the row, lead can still be worked. Failure persists
+  // to dead_letter so the owner can retry or fix the URL.
+  if (provider.crm_webhook_url) {
+    const crmResult = await pushToProviderCrm(provider, submission, courseTitle, sheetStatus);
+    if (!crmResult.ok) {
+      await persistDeadLetter(sql, "edge_function_crm_push",
+        { provider_id: provider.provider_id, submission_id: submission.id, crm_webhook_url: provider.crm_webhook_url },
+        `CRM webhook push failed: ${crmResult.error}`);
+    }
   }
 
   const emailResult = await sendProviderNotification(provider, submission, trigger, reApplicationContext);
@@ -847,6 +861,92 @@ async function appendToProviderSheet(
   } catch {
     return { ok: true };
   }
+}
+
+// -------- CRM webhook push --------
+
+// Posts the lead payload to the provider's external CRM webhook URL
+// (e.g. HubSpot Forms API submission URL, Zapier catch hook, Make.com).
+// Pure JSON, no auth — provider URLs are unguessable per-provider tokens.
+// Mirrors the appender's payload but flattens to a name/value pair shape
+// that HubSpot Forms accepts natively (most providers' tooling accepts
+// either flat fields or HubSpot's array shape, so we send both).
+//
+// Compatibility note for HubSpot Forms API:
+//   POST https://api.hsforms.com/submissions/v3/integration/submit/{portalId}/{formGuid}
+//   Body shape required: { "fields": [{ "name": "...", "value": "..." }, ...] }
+//
+// Other receivers (Zapier, Make, custom) usually accept either. We send
+// both `fields[]` (HubSpot shape) and the flat object so providers don't
+// need to massage the payload at the receiver.
+async function pushToProviderCrm(
+  provider: ProviderRow,
+  submission: SubmissionRow,
+  courseTitle: string | null,
+  status: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!provider.crm_webhook_url) return { ok: true };
+
+  const leadId = formatLeadId(submission.id, submission.submitted_at);
+  const flat: Record<string, string | number | null> = {
+    lead_id: leadId,
+    switchleads_lead_id: leadId,
+    submission_id: submission.id,
+    submitted_at: submission.submitted_at,
+    name: [submission.first_name, submission.last_name].filter(Boolean).join(" ") || null,
+    first_name: submission.first_name ?? null,
+    last_name: submission.last_name ?? null,
+    email: submission.email ?? null,
+    phone: submission.phone ?? null,
+
+    // Funded shape (gov / loan)
+    course_id: submission.course_id ?? null,
+    course_title: courseTitle ?? null,
+    funding_category: submission.funding_category ?? null,
+    funding_route: submission.funding_route ?? null,
+    age_band: submission.age_band ?? null,
+    employment_status: submission.employment_status ?? null,
+    why_this_course: submission.why_this_course ?? null,
+    outcome_interest: submission.outcome_interest ?? null,
+
+    // Self-funded shape (Courses Direct etc.)
+    courses_selected: submission.courses_selected?.join(", ") ?? null,
+    region: submission.region ?? null,
+    postcode: submission.postcode ?? null,
+    interest: submission.interest ?? null,
+    reason: submission.reason ?? null,
+    budget: submission.budget ?? null,
+    situation: submission.situation ?? null,
+    qualification: submission.qualification ?? null,
+    readiness: submission.start_when ?? null,
+
+    // Routing context
+    provider_id: provider.provider_id,
+    provider_company: provider.company_name,
+    status,
+  };
+
+  const fields = Object.entries(flat)
+    .filter(([, v]) => v !== null && v !== "")
+    .map(([name, value]) => ({ name, value: String(value) }));
+
+  const payload = { ...flat, fields };
+
+  let res: Response;
+  try {
+    res = await fetch(provider.crm_webhook_url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    return { ok: false, error: `fetch failed: ${String(err)}` };
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "<body unreadable>");
+    return { ok: false, error: `crm webhook ${res.status}: ${text.slice(0, 300)}` };
+  }
+  return { ok: true };
 }
 
 // -------- Emails --------

@@ -445,3 +445,9 @@ verify_jwt = false
 
 [functions.pending-update-confirm]
 verify_jwt = false
+
+[functions.crm-webhook-receiver]
+verify_jwt = false
+
+[functions.meta-ads-ingest]
+verify_jwt = false
