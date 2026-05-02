@@ -48,10 +48,12 @@ interface Health {
 export function AdminShell({
   user,
   health,
+  navBadges,
   children,
 }: {
   user: { email?: string };
   health: Health | null;
+  navBadges?: Record<string, number>;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -101,6 +103,7 @@ export function AdminShell({
               <ul className="space-y-0.5 px-3">
                 {section.items.map((item) => {
                   const active = isActive(item.href);
+                  const badge = navBadges?.[item.href] ?? 0;
                   return (
                     <li key={item.href}>
                       <Link
@@ -118,7 +121,12 @@ export function AdminShell({
                             active ? "bg-[#cd8b76]" : "bg-white/20 group-hover:bg-white/40",
                           ].join(" ")}
                         />
-                        {item.label}
+                        <span className="flex-1">{item.label}</span>
+                        {badge > 0 && (
+                          <span className="ml-2 inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-[#cd8b76] text-white text-[10px] font-bold tabular-nums">
+                            {badge > 99 ? "99+" : badge}
+                          </span>
+                        )}
                       </Link>
                     </li>
                   );

@@ -44,6 +44,11 @@ function intFmt(n: number | null): string {
   return n.toLocaleString();
 }
 
+function pctFmt(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return "—";
+  return `${(n * 100).toFixed(1)}%`;
+}
+
 function formatDateUK(ymd: string): string {
   return new Date(ymd + "T00:00:00Z").toLocaleDateString("en-GB", {
     day: "numeric",
@@ -64,13 +69,17 @@ function resolveWindow(period: Period, customFrom?: string, customTo?: string): 
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
 
-  if (period === "custom" && customFrom && customTo) {
+  if (period === "custom") {
+    const fromYmd =
+      customFrom ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const toYmd = customTo ?? today;
+    const labelled = customFrom && customTo;
     return {
-      fromISO: customFrom + "T00:00:00Z",
-      toISO: customTo + "T23:59:59Z",
-      fromDate: customFrom,
-      toDate: customTo,
-      label: `${formatDateUK(customFrom)} to ${formatDateUK(customTo)}`,
+      fromISO: fromYmd + "T00:00:00Z",
+      toISO: toYmd + "T23:59:59Z",
+      fromDate: fromYmd,
+      toDate: toYmd,
+      label: labelled ? `${formatDateUK(fromYmd)} to ${formatDateUK(toYmd)}` : "Custom",
     };
   }
   if (period === "lifetime") {
@@ -228,6 +237,7 @@ export default async function ProfitPage({
 
   const headlineCpl = totalLeads > 0 ? totalSpend / totalLeads : null;
   const costPerEnrolment = totalEnrolled > 0 ? totalSpend / totalEnrolled : null;
+  const enrolmentRate = totalLeads > 0 ? totalEnrolled / totalLeads : null;
 
   const bucketMap = new Map<
     string,
@@ -272,10 +282,14 @@ export default async function ProfitPage({
       <PeriodPills active={period} customFrom={customFrom} customTo={customTo} bucket={bucket} />
 
       {period === "custom" ? (
-        <CustomRangeForm currentFrom={customFrom} currentTo={customTo} bucket={bucket} />
+        <CustomRangeForm
+          currentFrom={customFrom ?? window.fromDate}
+          currentTo={customTo ?? window.toDate}
+          bucket={bucket}
+        />
       ) : null}
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <Tile label="Spend" value={gbp(totalSpend)} />
         <Tile label="Leads" value={intFmt(totalLeads)} note="True (DB count)" />
         <Tile label="CPL" value={gbp(headlineCpl)} highlight />
@@ -284,6 +298,7 @@ export default async function ProfitPage({
           value={intFmt(totalEnrolled)}
           note={`${totalOpen} open, ${totalLost} lost`}
         />
+        <Tile label="Enrolment rate" value={pctFmt(enrolmentRate)} note="Enrolled / leads" />
         <Tile label="Cost / enrolment" value={gbp(costPerEnrolment)} highlight />
       </div>
 
@@ -312,6 +327,7 @@ export default async function ProfitPage({
                   <TableHead className="text-right">Open</TableHead>
                   <TableHead className="text-right">Lost</TableHead>
                   <TableHead className="text-right">Enrolled</TableHead>
+                  <TableHead className="text-right">Enrol %</TableHead>
                   <TableHead className="text-right">CPL</TableHead>
                   <TableHead className="text-right">Cost / enrol</TableHead>
                 </TableRow>
@@ -320,6 +336,7 @@ export default async function ProfitPage({
                 {buckets.map(([key, v]) => {
                   const cpl = v.leads > 0 ? v.spend / v.leads : null;
                   const cpe = v.enrolled > 0 ? v.spend / v.enrolled : null;
+                  const rate = v.leads > 0 ? v.enrolled / v.leads : null;
                   return (
                     <TableRow key={key}>
                       <TableCell className="text-xs whitespace-nowrap font-semibold">
@@ -332,6 +349,7 @@ export default async function ProfitPage({
                       <TableCell className="text-xs text-right font-bold text-emerald-700">
                         {v.enrolled}
                       </TableCell>
+                      <TableCell className="text-xs text-right">{pctFmt(rate)}</TableCell>
                       <TableCell className="text-xs text-right font-bold">{gbp(cpl)}</TableCell>
                       <TableCell className="text-xs text-right font-bold">{gbp(cpe)}</TableCell>
                     </TableRow>

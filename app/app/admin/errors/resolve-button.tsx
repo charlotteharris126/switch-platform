@@ -7,21 +7,22 @@ import { markErrorResolved } from "./actions";
 
 interface Props {
   errorId: number;
+  defaultNote: string;
 }
 
-export function ResolveButton({ errorId }: Props) {
+// One-click resolve. Clicking the button immediately marks the row resolved
+// using `defaultNote` (severity-appropriate text passed in by the parent).
+// "Add note" reveals an optional textbox for owners who want to record more
+// context — but the common case is one click and done.
+export function ResolveButton({ errorId, defaultNote }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [showInput, setShowInput] = useState(false);
+  const [showNote, setShowNote] = useState(false);
   const [note, setNote] = useState("");
 
-  function handleResolve() {
-    if (!note.trim()) {
-      toast.warning("Add a note first.");
-      return;
-    }
+  function resolve(noteText: string) {
     startTransition(async () => {
-      const result = await markErrorResolved(errorId, note.trim());
+      const result = await markErrorResolved(errorId, noteText);
       if (result.ok) {
         toast.success("Marked resolved.");
         router.refresh();
@@ -31,15 +32,26 @@ export function ResolveButton({ errorId }: Props) {
     });
   }
 
-  if (!showInput) {
+  if (!showNote) {
     return (
-      <button
-        type="button"
-        onClick={() => setShowInput(true)}
-        className="text-[10px] font-bold uppercase tracking-wide text-[#cd8b76] hover:text-[#b3412e]"
-      >
-        Mark resolved
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => resolve(defaultNote)}
+          disabled={pending}
+          className="text-[10px] font-bold uppercase tracking-wide text-white bg-[#143643] hover:bg-[#11242e] disabled:opacity-40 px-3 h-7 rounded"
+        >
+          {pending ? "..." : "Mark resolved"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowNote(true)}
+          disabled={pending}
+          className="text-[10px] text-[#5a6a72] hover:text-[#11242e] underline"
+        >
+          add note
+        </button>
+      </div>
     );
   }
 
@@ -49,13 +61,13 @@ export function ResolveButton({ errorId }: Props) {
         type="text"
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="How did you fix it?"
+        placeholder="Optional note"
         disabled={pending}
         className="text-[10px] border border-[#dad4cb] rounded px-2 h-7 bg-white text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76] w-48"
       />
       <button
         type="button"
-        onClick={handleResolve}
+        onClick={() => resolve(note.trim() || defaultNote)}
         disabled={pending}
         className="h-7 px-2 text-[10px] font-bold uppercase tracking-wide rounded bg-[#143643] text-white hover:bg-[#11242e] disabled:opacity-40"
       >
@@ -63,7 +75,7 @@ export function ResolveButton({ errorId }: Props) {
       </button>
       <button
         type="button"
-        onClick={() => { setShowInput(false); setNote(""); }}
+        onClick={() => { setShowNote(false); setNote(""); }}
         disabled={pending}
         className="text-[10px] text-[#5a6a72] hover:text-[#11242e]"
       >

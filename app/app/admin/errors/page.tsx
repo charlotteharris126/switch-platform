@@ -274,9 +274,8 @@ export default async function ErrorsPage() {
         }
       />
 
-      <ReconciliationCard data={reconciliation} />
-
-      <LeadReconciliationCard
+      <ReconciliationCard
+        data={reconciliation}
         metaReported={metaReported30d}
         dbDistinct={dbDistinct30d}
         windowStartDate={reconcileCutoffDate}
@@ -294,13 +293,17 @@ export default async function ErrorsPage() {
         <>
           <Card className="bg-[#fef9f5] border-[#cd8b76]/40">
             <CardContent className="pt-4 text-xs text-[#11242e] space-y-2">
-              <p>Errors are grouped by what they actually need from you:</p>
+              <p>
+                <strong>What these are:</strong> background sync failures (sheet appends, Brevo upserts, audit back-fills). Every lead is still in the database — none of these have stopped a lead from reaching a provider. Each card below explains exactly what failed and what (if anything) needs doing.
+              </p>
               <ul className="space-y-1 ml-3">
-                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#b3412e] text-white font-bold mr-2">ACTION NEEDED</span> Something&rsquo;s broken — open the lead and fix it.</li>
-                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#cd8b76] text-white font-bold mr-2">JUST CLEAN UP</span> Self-resolves; bulk-mark them done.</li>
-                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#dad4cb] text-[#11242e] font-bold mr-2">INFORMATIONAL</span> Audit rows, not real errors. Bulk-clean.</li>
+                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#b3412e] text-white font-bold mr-2">ACTION NEEDED</span> Open the lead, follow the steps in the card, then click <em>Mark resolved</em>.</li>
+                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#cd8b76] text-white font-bold mr-2">JUST CLEAN UP</span> Safe to clear in bulk — the system catches up automatically.</li>
+                <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#dad4cb] text-[#11242e] font-bold mr-2">INFORMATIONAL</span> Audit rows, not real errors. Bulk-clean any time.</li>
               </ul>
-              <p className="text-[#5a6a72]">Marking resolved doesn&rsquo;t trigger anything. It&rsquo;s just acknowledging you&rsquo;ve seen the row.</p>
+              <p className="text-[#5a6a72]">
+                <strong>About &ldquo;Mark resolved&rdquo;:</strong> it&rsquo;s an acknowledgement, not a re-run. One click clears the row from this list — it does not retry the underlying sync. If you need a retry, the per-row card tells you where.
+              </p>
             </CardContent>
           </Card>
 
@@ -393,7 +396,10 @@ export default async function ErrorsPage() {
                               {isStale ? <Badge variant="destructive" className="ml-0 mt-1 text-[9px]">Stale</Badge> : null}
                             </TableCell>
                             <TableCell>
-                              <ResolveButton errorId={r.id} />
+                              <ResolveButton
+                                errorId={r.id}
+                                defaultNote={`Acknowledged — ${explanation.headline.toLowerCase()}.`}
+                              />
                             </TableCell>
                           </TableRow>
                         );
@@ -464,55 +470,144 @@ interface ReconciliationData {
   rapid_fire_dupes: number;
 }
 
-function ReconciliationCard({ data }: { data: ReconciliationData }) {
+function ReconciliationCard({
+  data,
+  metaReported,
+  dbDistinct,
+  windowStartDate,
+}: {
+  data: ReconciliationData;
+  metaReported: number;
+  dbDistinct: number;
+  windowStartDate: string;
+}) {
   const gap = data.routing_log_rows - data.unique_people_routed;
   const accountedFor = data.archived_routed_rows + data.linked_reapplications + data.rapid_fire_dupes;
-  const reconciles = gap === accountedFor;
+  const dbReconciles = gap === accountedFor;
+
+  const windowLabel = new Date(windowStartDate + "T00:00:00Z").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
+  let leadStatus: "ok" | "meta_low" | "db_low" | "no_data";
+  let leadLabel: string;
+  let leadDetail: string;
+
+  if (metaReported === 0 && dbDistinct === 0) {
+    leadStatus = "no_data";
+    leadLabel = "No data yet";
+    leadDetail = "Either Meta ingestion hasn't run or no leads in the last 30 days.";
+  } else if (metaReported === 0) {
+    leadStatus = "no_data";
+    leadLabel = "Awaiting Meta ingestion";
+    leadDetail = `${dbDistinct} DB leads logged. Meta numbers will appear here after the daily ingest runs.`;
+  } else {
+    const dbVsMeta = (dbDistinct - metaReported) / metaReported;
+    if (dbVsMeta < -0.05) {
+      leadStatus = "db_low";
+      leadLabel = "DB undercounting";
+      leadDetail = `DB count (${dbDistinct}) is ${Math.abs(Math.round(dbVsMeta * 100))}% below Meta's count (${metaReported}). This should never happen — every form submit lands in our DB directly. Investigate the webhook path.`;
+    } else if (metaReported < dbDistinct * 0.75) {
+      leadStatus = "meta_low";
+      leadLabel = "Meta tracking degraded";
+      leadDetail = `Meta is reporting ${metaReported} leads, our DB has ${dbDistinct}. Meta normally under-counts by 10-25% (cookie blocking, iOS), but ${Math.round(((dbDistinct - metaReported) / dbDistinct) * 100)}% is high. Check the Meta pixel and CAPI on the funded funnel.`;
+    } else {
+      leadStatus = "ok";
+      leadLabel = "Aligned";
+      leadDetail = `Within normal range. Meta reports ${metaReported}, DB has ${dbDistinct} (gap is the expected cookie-blocking shortfall).`;
+    }
+  }
+
+  const everythingReconciles = dbReconciles && (leadStatus === "ok" || leadStatus === "no_data");
+  const anyDrift = !dbReconciles || leadStatus === "db_low";
+
+  const cardCls = anyDrift
+    ? "border-[#b3412e]/40 bg-[#b3412e]/5"
+    : everythingReconciles
+      ? "border-emerald-200"
+      : "border-[#cd8b76]/40 bg-[#fef9f5]";
+
+  const overallBadge = anyDrift
+    ? { cls: "bg-[#b3412e] text-white hover:bg-[#b3412e]", label: "Drift, investigate" }
+    : everythingReconciles
+      ? { cls: "bg-emerald-600 text-white hover:bg-emerald-600", label: "All reconciled ✓" }
+      : { cls: "bg-[#cd8b76] text-white hover:bg-[#cd8b76]", label: leadLabel };
+
+  const leadBadge =
+    leadStatus === "db_low"
+      ? "bg-[#b3412e] text-white hover:bg-[#b3412e]"
+      : leadStatus === "meta_low"
+        ? "bg-[#cd8b76] text-white hover:bg-[#cd8b76]"
+        : leadStatus === "ok"
+          ? "bg-emerald-600 text-white hover:bg-emerald-600"
+          : "bg-[#dad4cb] text-[#11242e] hover:bg-[#dad4cb]";
 
   return (
-    <Card className={reconciles ? "border-emerald-200" : "border-[#b3412e]/40 bg-[#b3412e]/5"}>
+    <Card className={cardCls}>
       <CardHeader>
         <CardTitle className="text-sm flex items-center gap-2">
-          Database reconciliation
-          {reconciles ? (
-            <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">Match ✓</Badge>
-          ) : (
-            <Badge className="text-[10px] bg-[#b3412e] text-white hover:bg-[#b3412e]">Drift, investigate</Badge>
-          )}
+          Reconciliation
+          <Badge className={`text-[10px] ${overallBadge.cls}`}>{overallBadge.label}</Badge>
         </CardTitle>
-        <p className="text-xs text-[#5a6a72] mt-2">
-          What this measures: every time we send a lead to a provider, we log it in the database. The same person can be sent more than once (came back for another course; submitted twice in a row by accident). The dashboard counts <strong>unique people</strong>, not raw sends. This card shows whether those numbers reconcile and explains any difference.
+        <p className="text-xs text-[#5a6a72] mt-1">
+          Two sanity checks: do our internal counts add up, and do they match what Meta reports.
         </p>
       </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs">
-          <Metric label="Times we sent a lead" value={data.routing_log_rows} />
-          <Metric label="Unique people sent" value={data.unique_people_routed} highlight />
-          <Metric label="Difference to explain" value={gap} />
-        </div>
-        <div className="mt-5 border-t border-[#dad4cb] pt-4">
-          <p className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold mb-2">Where the difference comes from</p>
-          <ul className="text-xs text-[#11242e] space-y-1.5">
+      <CardContent className="space-y-5">
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <h3 className="text-[10px] font-bold uppercase tracking-[2px] text-[#11242e]">Database</h3>
+            {dbReconciles ? (
+              <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">Match</Badge>
+            ) : (
+              <Badge className="text-[10px] bg-[#b3412e] text-white hover:bg-[#b3412e]">Drift</Badge>
+            )}
+          </div>
+          <p className="text-xs text-[#5a6a72] mb-3">
+            Every send to a provider is logged. The same person can appear more than once (re-applied for a different course; double-submitted by accident). Unique-people count must equal raw sends minus known duplicates.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs">
+            <Metric label="Sends logged" value={data.routing_log_rows} />
+            <Metric label="Unique people" value={data.unique_people_routed} highlight />
+            <Metric label="Difference" value={gap} />
+          </div>
+          <ul className="text-xs text-[#11242e] mt-3 space-y-1">
             {data.archived_routed_rows > 0 && (
               <li>
-                <strong>{data.archived_routed_rows}</strong> archived test rows (sent at the time, since soft-deleted from the live set).
+                <strong>{data.archived_routed_rows}</strong> archived test rows (sent at the time, soft-deleted from the live set).
               </li>
             )}
             <li>
-              <strong>{data.linked_reapplications}</strong> re-applications (same person came back for a different course).
+              <strong>{data.linked_reapplications}</strong> re-applications (same person, different course).
             </li>
             <li>
-              <strong>{data.rapid_fire_dupes}</strong> rapid-fire duplicates (same person submitted multiple times in a short window before the dedupe could catch up).
+              <strong>{data.rapid_fire_dupes}</strong> rapid-fire duplicates (same person, multiple submits before the dedupe caught up).
             </li>
           </ul>
-          <p className="text-xs text-[#11242e] mt-3">
-            {reconciles ? (
-              <>The numbers reconcile: <strong>{data.routing_log_rows}</strong> sends = <strong>{data.unique_people_routed}</strong> unique people + <strong>{accountedFor}</strong> known duplicates.</>
-            ) : (
-              <>Total accounted for: <strong>{accountedFor}</strong>. Remaining: <strong className="text-[#b3412e]">{gap - accountedFor}</strong> row(s) need investigating.</>
-            )}
+          {!dbReconciles && (
+            <p className="text-xs text-[#b3412e] mt-2">
+              <strong>{gap - accountedFor}</strong> row(s) unexplained — needs investigation.
+            </p>
+          )}
+        </section>
+
+        <section className="border-t border-[#dad4cb] pt-5">
+          <div className="flex items-center gap-2 mb-2">
+            <h3 className="text-[10px] font-bold uppercase tracking-[2px] text-[#11242e]">Meta vs DB (since {windowLabel})</h3>
+            <Badge className={`text-[10px] ${leadBadge}`}>{leadLabel}</Badge>
+          </div>
+          <p className="text-xs text-[#5a6a72] mb-3">
+            Every lead in our DB (ground truth) should also be visible to Meta&rsquo;s tracking. Meta normally under-counts 10-25% (cookie blocking, iOS). The reverse — DB lower than Meta — means our form pipeline is dropping leads.
           </p>
-        </div>
+          <div className="grid grid-cols-3 gap-4 text-xs mb-2">
+            <Metric label="DB leads (truth)" value={dbDistinct} highlight />
+            <Metric label="Meta-reported" value={metaReported} />
+            <Metric label="Difference" value={dbDistinct - metaReported} />
+          </div>
+          <p className="text-xs text-[#11242e]">{leadDetail}</p>
+        </section>
       </CardContent>
     </Card>
   );
@@ -524,104 +619,6 @@ function Metric({ label, value, highlight }: { label: string; value: number; hig
       <div className={`text-2xl font-bold ${highlight ? "text-[#cd8b76]" : "text-[#143643]"}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold mt-1">{label}</div>
     </div>
-  );
-}
-
-// Lead reconciliation: Meta-reported leads vs our DB count, last 30 days.
-//
-// Meta typically under-counts (cookie blocking, iOS Mail Privacy Protection,
-// CAPI gaps). DB is ground truth: every form submission lands here directly.
-//
-// Status logic:
-//   - DB count materially LOWER than Meta's by >5%: red. Our database should
-//     never undercount the form. Real system bug.
-//   - Meta count materially LOWER than DB's by >25%: orange. Meta tracking
-//     degraded; CAPI / pixel needs attention.
-//   - Within range: green. Normal.
-//   - No data either side: grey.
-function LeadReconciliationCard({
-  metaReported,
-  dbDistinct,
-  windowStartDate,
-}: {
-  metaReported: number;
-  dbDistinct: number;
-  windowStartDate: string;
-}) {
-  const windowLabel = new Date(windowStartDate + "T00:00:00Z").toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-  let status: "ok" | "meta_low" | "db_low" | "no_data";
-  let label: string;
-  let detail: string;
-
-  if (metaReported === 0 && dbDistinct === 0) {
-    status = "no_data";
-    label = "No data yet";
-    detail = "Either Meta ingestion hasn't run or no leads in the last 30 days.";
-  } else if (metaReported === 0) {
-    status = "no_data";
-    label = "Awaiting Meta ingestion";
-    detail = `${dbDistinct} DB leads logged. Meta numbers will appear here after the daily ingest runs.`;
-  } else {
-    const dbVsMeta = metaReported > 0 ? (dbDistinct - metaReported) / metaReported : 0;
-    if (dbVsMeta < -0.05) {
-      status = "db_low";
-      label = "System issue, our DB is undercounting";
-      detail = `DB count (${dbDistinct}) is ${Math.abs(Math.round(dbVsMeta * 100))}% below Meta's count (${metaReported}). This should never happen — every form submit lands in our DB directly. Investigate the webhook path.`;
-    } else if (metaReported < dbDistinct * 0.75) {
-      status = "meta_low";
-      label = "Meta tracking degraded";
-      detail = `Meta is reporting ${metaReported} leads, our DB has ${dbDistinct}. Meta normally under-counts by 10-25% (cookie blocking, iOS), but ${Math.round(((dbDistinct - metaReported) / dbDistinct) * 100)}% is high. Check the Meta pixel and CAPI on the funded funnel.`;
-    } else {
-      status = "ok";
-      label = "Aligned";
-      detail = `Within normal range. Meta reports ${metaReported}, our DB has ${dbDistinct} (gap is the expected cookie-blocking shortfall).`;
-    }
-  }
-
-  const cardCls =
-    status === "db_low"
-      ? "border-[#b3412e]/40 bg-[#b3412e]/5"
-      : status === "meta_low"
-        ? "border-[#cd8b76]/40 bg-[#fef9f5]"
-        : status === "ok"
-          ? "border-emerald-200"
-          : "border-[#dad4cb]";
-
-  const badgeCls =
-    status === "db_low"
-      ? "bg-[#b3412e] text-white hover:bg-[#b3412e]"
-      : status === "meta_low"
-        ? "bg-[#cd8b76] text-white hover:bg-[#cd8b76]"
-        : status === "ok"
-          ? "bg-emerald-600 text-white hover:bg-emerald-600"
-          : "bg-[#dad4cb] text-[#11242e] hover:bg-[#dad4cb]";
-
-  return (
-    <Card className={cardCls}>
-      <CardHeader>
-        <CardTitle className="text-sm flex items-center gap-2">
-          Lead reconciliation
-          <Badge className={`text-[10px] ${badgeCls}`}>{label}</Badge>
-        </CardTitle>
-        <p className="text-xs text-[#5a6a72] mt-2">
-          What this measures: every lead in our database (ground truth) should also be visible to Meta&rsquo;s tracking
-          (pixel + CAPI). Meta normally under-counts by 10-25% due to cookie blocking and iOS privacy. The reverse
-          (DB lower than Meta) means our form pipeline is dropping leads, which should never happen. Window: since {windowLabel}.
-        </p>
-      </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-3 gap-4 text-xs mb-4">
-          <Metric label="DB leads (truth)" value={dbDistinct} highlight />
-          <Metric label="Meta-reported" value={metaReported} />
-          <Metric label="Difference" value={dbDistinct - metaReported} />
-        </div>
-        <p className="text-xs text-[#11242e]">{detail}</p>
-      </CardContent>
-    </Card>
   );
 }
 

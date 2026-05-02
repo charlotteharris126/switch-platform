@@ -34,7 +34,65 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     .select("leads_last_7d, unrouted_over_48h, errors_over_7d, errors_unresolved_total, needs_status_update_count");
   const health = (healthRows?.[0] as Health | undefined) ?? null;
 
-  return <AdminShell user={{ email: user.email }} health={health}>{children}</AdminShell>;
+  // Sidebar nav badges. "Actions" sums every section the /actions page surfaces
+  // so the dot reflects what owner will actually see on the page. "Data health"
+  // mirrors errors_unresolved_total. Six HEAD counts is cheap and side-steps
+  // adding another DB view this session.
+  const fiveDaysAgoISO = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+  const twelveDaysAgoISO = new Date(Date.now() - 12 * 24 * 3600 * 1000).toISOString();
+
+  const [
+    unroutedCount,
+    approachingFlipCount,
+    presumedEnrolledCount,
+    pendingAiCount,
+    needsChasingCount,
+    cannotReachNoChaserCount,
+  ] = await Promise.all([
+    supabase.schema("leads").from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("is_dq", false)
+      .is("primary_routed_to", null)
+      .is("archived_at", null),
+    supabase.schema("crm").from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open")
+      .lt("sent_to_provider_at", twelveDaysAgoISO),
+    supabase.schema("crm").from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "presumed_enrolled"),
+    supabase.schema("crm").from("pending_updates")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending"),
+    supabase.schema("crm").from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open")
+      .not("last_chaser_at", "is", null)
+      .lt("last_chaser_at", fiveDaysAgoISO),
+    supabase.schema("crm").from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "cannot_reach")
+      .is("last_chaser_at", null),
+  ]);
+
+  const actionsCount =
+    (unroutedCount.count ?? 0) +
+    (approachingFlipCount.count ?? 0) +
+    (presumedEnrolledCount.count ?? 0) +
+    (pendingAiCount.count ?? 0) +
+    (needsChasingCount.count ?? 0) +
+    (cannotReachNoChaserCount.count ?? 0);
+
+  const navBadges = {
+    "/actions": actionsCount,
+    "/errors": health?.errors_unresolved_total ?? 0,
+  };
+
+  return (
+    <AdminShell user={{ email: user.email }} health={health} navBadges={navBadges}>
+      {children}
+    </AdminShell>
+  );
 }
 
 interface Health {

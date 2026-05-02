@@ -14,6 +14,8 @@ import { PageHeader } from "@/components/page-header";
 import { formatDateTime, formatAgo } from "@/lib/format";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { PendingActions } from "../sheet-activity/pending-actions";
+import { InlineOutcomeButtons } from "./inline-outcome-buttons";
+import { InlineChaserButton } from "./inline-chaser-button";
 
 // One page that surfaces every actionable lead state, so Charlotte never
 // has to skim the full leads list to find what needs doing.
@@ -35,7 +37,16 @@ import { PendingActions } from "../sheet-activity/pending-actions";
 export default async function ActionsPage() {
   const supabase = await createClient();
 
-  const [unroutedRes, approachingFlipRes, presumedEnrolledRes, pendingAiRes] = await Promise.all([
+  const fiveDaysAgoISO = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+
+  const [
+    unroutedRes,
+    approachingFlipRes,
+    presumedEnrolledRes,
+    pendingAiRes,
+    needsChasingRes,
+    cannotReachNoChaserRes,
+  ] = await Promise.all([
     supabase
       .schema("leads")
       .from("submissions")
@@ -69,6 +80,31 @@ export default async function ActionsPage() {
       .select("id, enrolment_id, current_status, suggested_status, ai_summary, ai_confidence, created_at")
       .eq("status", "pending")
       .order("created_at", { ascending: false }),
+
+    // Needs another chase: status still 'open' but the last provider chaser
+    // fired 5+ days ago with no resolution since. Either the provider has
+    // gone quiet or the learner has — owner decides whether to re-chase or
+    // mark cannot_reach.
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id, submission_id, provider_id, status, last_chaser_at, status_updated_at")
+      .eq("status", "open")
+      .not("last_chaser_at", "is", null)
+      .lt("last_chaser_at", fiveDaysAgoISO)
+      .order("last_chaser_at", { ascending: true }),
+
+    // Cannot reach but no chaser ever fired. The SF2 Brevo chaser escalates
+    // to the learner directly — should fire whenever a provider hits the
+    // tried-no-answer wall. If status is cannot_reach with last_chaser_at
+    // null, that escalation hasn't happened yet.
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id, submission_id, provider_id, status, status_updated_at")
+      .eq("status", "cannot_reach")
+      .is("last_chaser_at", null)
+      .order("status_updated_at", { ascending: true }),
   ]);
 
   const unrouted = (unroutedRes.data ?? []) as Array<{
@@ -112,6 +148,23 @@ export default async function ActionsPage() {
     created_at: string;
   }>;
 
+  const needsChasing = (needsChasingRes.data ?? []) as Array<{
+    id: number;
+    submission_id: number;
+    provider_id: string;
+    status: string;
+    last_chaser_at: string;
+    status_updated_at: string;
+  }>;
+
+  const cannotReachNoChaser = (cannotReachNoChaserRes.data ?? []) as Array<{
+    id: number;
+    submission_id: number;
+    provider_id: string;
+    status: string;
+    status_updated_at: string;
+  }>;
+
   // Hydrate enrolment + submission context for pending AI suggestions.
   const pendingEnrolmentIds = pendingAi.map((p) => p.enrolment_id);
   const pendingEnrolMap = new Map<number, { id: number; submission_id: number; provider_id: string }>();
@@ -132,6 +185,8 @@ export default async function ActionsPage() {
     new Set([
       ...approachingFlip.map((r) => r.submission_id),
       ...presumedEnrolled.map((r) => r.submission_id),
+      ...needsChasing.map((r) => r.submission_id),
+      ...cannotReachNoChaser.map((r) => r.submission_id),
       ...Array.from(pendingEnrolMap.values()).map((e) => e.submission_id),
     ])
   );
@@ -162,7 +217,15 @@ export default async function ActionsPage() {
     }
   }
 
-  const totalActions = unrouted.length + approachingFlip.length + presumedEnrolled.length + pendingAi.length;
+  const allSections = [
+    pendingAi,
+    unrouted,
+    needsChasing,
+    cannotReachNoChaser,
+    approachingFlip,
+    presumedEnrolled,
+  ];
+  const totalActions = allSections.reduce((sum, s) => sum + s.length, 0);
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -181,18 +244,18 @@ export default async function ActionsPage() {
             <span>Nothing pending. Inbox zero.</span>
           ) : (
             <span>
-              {totalActions} {totalActions === 1 ? "item" : "items"} across {countActiveSections([pendingAi, unrouted, approachingFlip, presumedEnrolled])} {countActiveSections([pendingAi, unrouted, approachingFlip, presumedEnrolled]) === 1 ? "section" : "sections"}.
+              {totalActions} {totalActions === 1 ? "item" : "items"} across {countActiveSections(allSections)} {countActiveSections(allSections) === 1 ? "section" : "sections"}.
             </span>
           )
         }
       />
 
-      {/* SECTION 0 — Pending AI suggestions (sheet Notes interpretations awaiting approval) */}
+      {/* SECTION 0 — Awaiting your call: AI-suggested status changes from sheet Notes that need your decision */}
       {pendingAi.length > 0 ? (
         <Card>
           <CardHeader>
             <CardTitle className="text-sm flex items-center gap-2">
-              AI suggestions
+              Awaiting your call
               <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
                 {pendingAi.length}
               </Badge>
@@ -380,7 +443,7 @@ export default async function ActionsPage() {
             )}
           </CardTitle>
           <p className="text-xs text-[#5a6a72] mt-1">
-            Auto-flipped after 14 days of provider silence. Resolve to <em>enrolled</em> (triggers billing) or <em>lost</em> (closes without billing). If the provider rebuts the flip, mark <em>disputed</em> on the lead — that pauses billing while you investigate. Open the lead and use the Enrolment outcome form.
+            Auto-flipped after 14 days of provider silence. Mark <em>enrolled</em> (triggers billing) or <em>lost</em> right here. If the provider rebuts the flip, open the lead to record a dispute (pauses billing while you investigate).
           </p>
         </CardHeader>
         <CardContent className="p-0">
@@ -396,6 +459,7 @@ export default async function ActionsPage() {
                   <TableHead>Flipped</TableHead>
                   <TableHead>Dispute deadline</TableHead>
                   <TableHead>Notes</TableHead>
+                  <TableHead>Outcome</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -425,6 +489,125 @@ export default async function ActionsPage() {
                       </TableCell>
                       <TableCell className="text-xs text-[#5a6a72]">
                         {r.disputed_reason ?? r.notes ?? "—"}
+                      </TableCell>
+                      <TableCell>
+                        <InlineOutcomeButtons submissionId={r.submission_id} currentStatus={r.status} />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SECTION 4 — Needs chasing (open + last chaser 5+ days ago) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            Needs another chase
+            {needsChasing.length > 0 && (
+              <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
+                {needsChasing.length}
+              </Badge>
+            )}
+          </CardTitle>
+          <p className="text-xs text-[#5a6a72] mt-1">
+            Last provider chaser fired 5+ days ago, lead still <em>open</em>. Re-fire the chaser or mark <em>cannot reach</em> if the provider has given up.
+          </p>
+        </CardHeader>
+        <CardContent className="p-0">
+          {needsChasing.length === 0 ? (
+            <p className="text-xs text-[#5a6a72] p-4">Nothing waiting on a re-chase.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">Lead</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Last chased</TableHead>
+                  <TableHead>Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {needsChasing.map((r) => {
+                  const sub = submissionsById.get(r.submission_id);
+                  return (
+                    <TableRow key={r.id} className="hover:bg-[#f4f1ed]/60">
+                      <TableCell className="font-mono text-xs">
+                        <Link href={`/leads/${r.submission_id}`} className="text-[#cd8b76] hover:text-[#b3412e] font-semibold">
+                          {r.submission_id}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {sub ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || "—" : "—"}
+                      </TableCell>
+                      <TableCell className="text-xs">{r.provider_id}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap" title={formatDateTime(r.last_chaser_at)}>
+                        {formatAgo(r.last_chaser_at)}
+                      </TableCell>
+                      <TableCell>
+                        <InlineChaserButton submissionId={r.submission_id} label="Re-chase" />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SECTION 5 — Cannot reach with no chaser ever fired */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            Cannot reach, no chaser sent
+            {cannotReachNoChaser.length > 0 && (
+              <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
+                {cannotReachNoChaser.length}
+              </Badge>
+            )}
+          </CardTitle>
+          <p className="text-xs text-[#5a6a72] mt-1">
+            Provider marked <em>cannot reach</em> but the SF2 learner-side chaser never fired. Send it now — gives the learner one last nudge before closing.
+          </p>
+        </CardHeader>
+        <CardContent className="p-0">
+          {cannotReachNoChaser.length === 0 ? (
+            <p className="text-xs text-[#5a6a72] p-4">Every cannot-reach lead has been chased.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">Lead</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Marked</TableHead>
+                  <TableHead>Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {cannotReachNoChaser.map((r) => {
+                  const sub = submissionsById.get(r.submission_id);
+                  return (
+                    <TableRow key={r.id} className="hover:bg-[#f4f1ed]/60">
+                      <TableCell className="font-mono text-xs">
+                        <Link href={`/leads/${r.submission_id}`} className="text-[#cd8b76] hover:text-[#b3412e] font-semibold">
+                          {r.submission_id}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {sub ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || "—" : "—"}
+                      </TableCell>
+                      <TableCell className="text-xs">{r.provider_id}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap" title={formatDateTime(r.status_updated_at)}>
+                        {formatAgo(r.status_updated_at)}
+                      </TableCell>
+                      <TableCell>
+                        <InlineChaserButton submissionId={r.submission_id} />
                       </TableCell>
                     </TableRow>
                   );
