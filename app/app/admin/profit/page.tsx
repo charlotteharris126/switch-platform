@@ -269,7 +269,8 @@ export default async function ProfitPage({
   }
   const buckets = Array.from(bucketMap.entries()).sort(([a], [b]) => b.localeCompare(a));
 
-  const trackerLabel = period === "custom" ? window.label : PERIOD_LABEL[period].toLowerCase();
+  const windowLabel = period === "custom" ? window.label : PERIOD_LABEL[period].toLowerCase();
+  const trackerLabel = `${bucket === "week" ? "weekly" : "monthly"}, ${windowLabel}`;
 
   return (
     <div className="max-w-6xl space-y-6">

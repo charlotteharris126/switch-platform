@@ -101,6 +101,62 @@ const SOURCE_EXPLANATIONS: Record<string, SourceExplanation> = {
     bulkNote: "Bulk cleanup — chaser failures, learner contacted manually or no longer in scope.",
     safeBecause: "These are failed escalation attempts. The lead state on our side is correct. Bulk-dismissing only removes the failure log.",
   },
+  netlify_forms: {
+    headline: "Form submission couldn't be saved",
+    severity: "fix",
+    what: "A learner submitted the form on switchable.org.uk but our webhook couldn't write the lead to the database. The lead may still exist in Netlify's form store (the hourly reconcile cron back-fills from there), but it bypassed the live routing path — provider hasn't been notified.",
+    whatToDo: "Check the Why-it-failed message — common causes are DB connection blips or a payload that doesn't match the expected schema. Open the lead if back-filled (look for a matching `reconcile_backfill` row), then route manually. If no back-fill row exists, the lead is in Netlify only — pull it from the Netlify forms dashboard and route by hand.",
+  },
+  netlify_audit: {
+    headline: "Form webhook drift detected",
+    severity: "fix",
+    what: "The hourly Netlify-forms-audit cron found a mismatch between the live webhook config on Netlify and our allowlist. Could be a webhook deleted by accident, a wrong URL, or a new form on Netlify not in the allowlist. The risk is silent lead loss if a form is feeding nowhere.",
+    whatToDo: "Read the Why-it-failed message for the specific drift kind. Open Netlify → Forms → check the named form. Reinstate the webhook (URL is in `https://switchable.org.uk/data/form-allowlist.json`) or update the allowlist if a new form is legitimate.",
+  },
+  edge_function_provider_email: {
+    headline: "Provider notification email failed",
+    severity: "fix",
+    what: "Lead was saved, routed, and appended to the provider's sheet — but the \"new enquiry, check your sheet\" email to the provider didn't send. The provider doesn't know a lead landed unless they look at the sheet manually.",
+    whatToDo: "Open the lead, check the routing log — the row reached the provider's sheet. Email the provider directly with the lead reference so they pick it up. Then mark resolved with a note like \"emailed provider manually\".",
+  },
+  edge_function_crm_push: {
+    headline: "CRM push failed (HubSpot etc)",
+    severity: "clean",
+    what: "Lead is fine in our database — only the push to a provider's external CRM (HubSpot for Courses Direct) failed. Doesn't affect routing or billing on our side; provider may need to refresh the lead manually in their CRM.",
+    whatToDo: "Bulk-clean — failed CRM pushes don't block anything. If the provider depends on the CRM sync for follow-up, ping them with the lead reference so they can pull it manually until we restore the integration.",
+    bulkNote: "Bulk cleanup — CRM push failures, leads still routed correctly.",
+    safeBecause: "The lead is in our DB and visible to the provider via their sheet. The CRM push is a downstream convenience, not a load-bearing path.",
+  },
+  edge_function_meta_ingest_api: {
+    headline: "Meta API returned an error",
+    severity: "clean",
+    what: "The daily Meta ads ingest cron called the Meta Marketing API and got an error response (auth failure, rate limit, malformed query). Yesterday's spend / lead numbers won't be in the dashboard until the next successful run picks them up.",
+    whatToDo: "If it's a one-off, the next 08:00 UTC run will catch up automatically (rolling 7-day window, idempotent). If it's recurring, check `META_ACCESS_TOKEN` validity in Supabase Vault and the ad account ID. Bulk-clean once today's numbers look right on the Profit tracker.",
+    bulkNote: "Bulk cleanup — Meta API errors, next ingest run back-fills.",
+    safeBecause: "The cron's rolling 7-day window is idempotent — the next successful run picks up missed days. Bulk-dismissing only clears the failure log.",
+  },
+  edge_function_meta_ingest_fetch: {
+    headline: "Couldn't reach Meta API (network)",
+    severity: "clean",
+    what: "Same as above but the network call itself failed — Meta unreachable, DNS hiccup, or function timeout. Recovers automatically on the next daily run.",
+    whatToDo: "Wait for tomorrow's 08:00 UTC ingest. If it keeps failing, check Supabase Edge Function logs for the timeout pattern. Bulk-clean once numbers look right.",
+    bulkNote: "Bulk cleanup — transient Meta fetch errors, ingest self-heals.",
+    safeBecause: "Rolling-window idempotent ingest covers gaps automatically.",
+  },
+  edge_function_meta_ingest_parse: {
+    headline: "Meta returned non-JSON",
+    severity: "clean",
+    what: "Meta returned a response we couldn't parse as JSON (usually a 5xx error page or a rate-limit HTML). Same recovery path as the other Meta ingest errors — next run fixes it.",
+    whatToDo: "Bulk-clean. If it persists for >2 days, check Meta API status and the Edge Function logs.",
+    bulkNote: "Bulk cleanup — Meta parse errors, ingest self-heals.",
+    safeBecause: "Rolling-window idempotent ingest covers gaps automatically.",
+  },
+  edge_function_meta_ingest_upsert: {
+    headline: "Meta data couldn't be written to DB",
+    severity: "fix",
+    what: "Meta returned valid data but the write to `ads_switchable.meta_daily` failed — usually a schema mismatch (Meta added a field), a DB role permission gap, or a constraint violation.",
+    whatToDo: "Read the Why-it-failed message — Postgres error codes point at the exact issue. Most likely a schema/grant fix in a migration. Don't bulk-dismiss without resolving, since the data isn't backed up anywhere else.",
+  },
 };
 
 const DEFAULT_EXPLANATION: SourceExplanation = {
