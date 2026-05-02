@@ -30,7 +30,7 @@ const NAV_SECTIONS: Array<{
     items: [
       { href: "/analytics", label: "Analytics" },
       { href: "/social/drafts", label: "Social" },
-      { href: "/ads", label: "Ad spend" },
+      { href: "/profit", label: "Profit tracker" },
       { href: "/agents", label: "Agents" },
       { href: "/errors", label: "Data health" },
     ],

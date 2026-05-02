@@ -342,7 +342,7 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
                   ? deltaCurrency(metaSpendThis, metaSpendLast)
                   : { sign: "flat", label: "Click to add daily totals" }
             }
-            href={metaIngestionLive ? "/ads" : "/ads"}
+            href="/profit"
           />
         </div>
       </section>
