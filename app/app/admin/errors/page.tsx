@@ -380,7 +380,12 @@ export default async function ErrorsPage() {
 
   const now = Date.now();
   const unresolved = rows.filter((r) => !r.replayed_at);
-  const resolved = rows.filter((r) => r.replayed_at);
+  // Recent resolved capped to past 5 days. Beyond that it's audit history,
+  // not "did I dismiss this?" memory aid — query the DB directly if needed.
+  const fiveDaysAgo = now - 5 * 24 * 3600 * 1000;
+  const resolved = rows.filter(
+    (r) => r.replayed_at && new Date(r.replayed_at).getTime() >= fiveDaysAgo,
+  );
   const over7d = unresolved.filter(
     (r) => now - new Date(r.received_at).getTime() > 7 * 24 * 3600 * 1000
   ).length;
@@ -449,7 +454,10 @@ export default async function ErrorsPage() {
             return ordered;
           })().map(([source, sourceRows]) => {
             const explanation = SOURCE_EXPLANATIONS[source] ?? DEFAULT_EXPLANATION;
-            const showBulk = explanation.severity === "clean" || explanation.severity === "info";
+            // Bulk button now appears on every card. fix → "Flag all N for
+            // Claude" with the audit-trail prefix; clean/info → straight
+            // bulk-dismiss with the source-specific note.
+            const isFlagBulk = explanation.severity === "fix";
             return (
               <Card key={source}>
                 <CardHeader>
@@ -463,20 +471,19 @@ export default async function ErrorsPage() {
                   </CardTitle>
                   <p className="text-xs text-[#5a6a72] mt-2"><strong className="text-[#11242e]">What this is:</strong> {explanation.what}</p>
                   <p className="text-xs text-[#5a6a72] mt-1"><strong className="text-[#11242e]">What to do:</strong> {explanation.whatToDo}</p>
-                  {showBulk ? (
-                    <div className="mt-3 space-y-2">
-                      <BulkResolveButton
-                        source={source}
-                        count={sourceRows.length}
-                        defaultNote={explanation.bulkNote ?? `Bulk cleanup — ${explanation.headline.toLowerCase()}.`}
-                      />
-                      {explanation.safeBecause ? (
-                        <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
-                          <strong>Safe to dismiss without per-row review:</strong> {explanation.safeBecause}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
+                  <div className="mt-3 space-y-2">
+                    <BulkResolveButton
+                      source={source}
+                      count={sourceRows.length}
+                      defaultNote={explanation.bulkNote ?? `Bulk cleanup — ${explanation.headline.toLowerCase()}.`}
+                      isFlag={isFlagBulk}
+                    />
+                    {explanation.safeBecause ? (
+                      <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                        <strong>Safe to dismiss without per-row review:</strong> {explanation.safeBecause}
+                      </p>
+                    ) : null}
+                  </div>
                 </CardHeader>
                 <CardContent className="p-0">
                   <Table>
@@ -575,8 +582,8 @@ export default async function ErrorsPage() {
       {resolved.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">Resolved (recent)</CardTitle>
-            <p className="text-xs text-[#5a6a72] mt-1">For audit reference. Includes auto-replays and manual resolutions.</p>
+            <CardTitle className="text-sm">Resolved (last 5 days)</CardTitle>
+            <p className="text-xs text-[#5a6a72] mt-1">For short-term audit reference only. Older history lives in the database.</p>
           </CardHeader>
           <CardContent className="p-0">
             <Table>
