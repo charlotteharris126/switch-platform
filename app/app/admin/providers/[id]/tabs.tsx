@@ -7,7 +7,7 @@ interface Props {
 
 const TABS: Array<{ key: "overview" | "catch-up" | "trust"; label: string; hrefSuffix: string }> = [
   { key: "overview", label: "Overview", hrefSuffix: "" },
-  { key: "catch-up", label: "Catch-up", hrefSuffix: "/catch-up" },
+  { key: "catch-up", label: "Reporting", hrefSuffix: "/catch-up" },
   { key: "trust", label: "Trust content", hrefSuffix: "/trust" },
 ];
 

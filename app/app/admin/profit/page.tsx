@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -10,6 +9,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { CustomRangeForm } from "./custom-range-form";
+
+// Force dynamic. Without this, page data fetches can be cached across
+// navigations even when searchParams change — Custom date Apply would
+// update the URL but reuse the prior render's figures.
+export const dynamic = "force-dynamic";
 
 type Period = "2d" | "7d" | "14d" | "30d" | "lifetime" | "custom";
 type Bucket = "week" | "month";
@@ -434,53 +439,6 @@ function BucketToggle({
         );
       })}
     </div>
-  );
-}
-
-function CustomRangeForm({
-  currentFrom,
-  currentTo,
-  bucket,
-}: {
-  currentFrom?: string;
-  currentTo?: string;
-  bucket: Bucket;
-}) {
-  return (
-    <Card>
-      <CardContent className="pt-4 pb-4">
-        <form method="GET" action="/profit" className="flex flex-wrap items-end gap-3">
-          <input type="hidden" name="period" value="custom" />
-          <input type="hidden" name="bucket" value={bucket} />
-          <div>
-            <label className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold">From</label>
-            <input
-              type="date"
-              name="from"
-              defaultValue={currentFrom}
-              required
-              className="block mt-1 px-3 py-1.5 border border-[#dad4cb] rounded text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold">To</label>
-            <input
-              type="date"
-              name="to"
-              defaultValue={currentTo}
-              required
-              className="block mt-1 px-3 py-1.5 border border-[#dad4cb] rounded text-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            className="bg-[#143643] text-white px-4 py-1.5 rounded text-sm font-semibold hover:bg-[#11242e]"
-          >
-            Apply
-          </button>
-        </form>
-      </CardContent>
-    </Card>
   );
 }
 

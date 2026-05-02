@@ -147,6 +147,139 @@ export default async function ProviderCatchUpPage({
       .not("disputed_at", "is", null),
   ]);
 
+  // -----------------------------------------------------------------
+  // Meta spend + weekly tracker — cross-provider data needed to do
+  // proportional attribution of Meta spend.
+  //
+  // Attribution model: leads-driven proportion. Every Switchable Meta
+  // lead is delivered to one provider via auto-routing; each provider's
+  // share of spend in week W is total_spend(W) * provider_leads(W) /
+  // total_leads(W). Total leads = submissions submitted_at in W with
+  // is_dq=false (the same denominator the global Profit tracker uses
+  // so the two views reconcile).
+  // -----------------------------------------------------------------
+  const reportingFromDate = "2026-04-01"; // covers all Meta ingest history with margin
+  const reportingFromISO = new Date(reportingFromDate + "T00:00:00Z").toISOString();
+
+  const [spendDailyRes, allLeadsRes, providerLeadsRes, providerEnrolmentsAllRes] = await Promise.all([
+    supabase
+      .schema("ads_switchable")
+      .from("meta_daily")
+      .select("date, spend")
+      .gte("date", reportingFromDate),
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id, submitted_at, primary_routed_to")
+      .eq("is_dq", false)
+      .is("archived_at", null)
+      .gte("submitted_at", reportingFromISO),
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id, submitted_at")
+      .eq("is_dq", false)
+      .is("archived_at", null)
+      .eq("primary_routed_to", providerId)
+      .gte("submitted_at", reportingFromISO),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id, submission_id, status, status_updated_at")
+      .eq("provider_id", providerId),
+  ]);
+
+  type SpendRow = { date: string; spend: number | null };
+  type LeadRow = { id: number; submitted_at: string; primary_routed_to?: string | null };
+
+  const spendRows = (spendDailyRes.data ?? []) as SpendRow[];
+  const allLeadRows = (allLeadsRes.data ?? []) as LeadRow[];
+  const providerLeadRows = (providerLeadsRes.data ?? []) as LeadRow[];
+  const providerEnrolmentRowsAll = (providerEnrolmentsAllRes.data ?? []) as Array<{
+    id: number;
+    submission_id: number;
+    status: string;
+    status_updated_at: string | null;
+  }>;
+
+  // ISO-week bucketing (Monday). Returns YYYY-MM-DD of the Monday.
+  function weekKey(d: Date): string {
+    const out = new Date(d);
+    const day = out.getUTCDay();
+    const diff = (day + 6) % 7;
+    out.setUTCDate(out.getUTCDate() - diff);
+    return out.toISOString().slice(0, 10);
+  }
+  function weekLabel(key: string): string {
+    const start = new Date(key + "T00:00:00Z");
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 6);
+    const s = start.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    const e = end.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    return `${s} to ${e}`;
+  }
+
+  type WeekStats = {
+    spend: number;
+    totalLeads: number;
+    providerLeads: number;
+    enrolled: number;
+    lost: number;
+  };
+  const weekMap = new Map<string, WeekStats>();
+  function ensureWeek(k: string): WeekStats {
+    if (!weekMap.has(k)) weekMap.set(k, { spend: 0, totalLeads: 0, providerLeads: 0, enrolled: 0, lost: 0 });
+    return weekMap.get(k)!;
+  }
+  for (const r of spendRows) {
+    const k = weekKey(new Date(r.date + "T00:00:00Z"));
+    ensureWeek(k).spend += Number(r.spend ?? 0);
+  }
+  for (const r of allLeadRows) {
+    const k = weekKey(new Date(r.submitted_at));
+    ensureWeek(k).totalLeads += 1;
+  }
+  for (const r of providerLeadRows) {
+    const k = weekKey(new Date(r.submitted_at));
+    ensureWeek(k).providerLeads += 1;
+  }
+  // Enrolled / lost attributed to the week the outcome was recorded (not the
+  // week the lead was routed) — matches how owner thinks about weekly
+  // performance ("how many enrolments did we close this week").
+  for (const e of providerEnrolmentRowsAll) {
+    if (!e.status_updated_at) continue;
+    const k = weekKey(new Date(e.status_updated_at));
+    if (e.status === "enrolled") ensureWeek(k).enrolled += 1;
+    else if (e.status === "lost" || e.status === "cannot_reach" || e.status === "not_enrolled") ensureWeek(k).lost += 1;
+  }
+
+  const weeklyRows = Array.from(weekMap.entries())
+    .map(([key, v]) => {
+      const attributedSpend = v.totalLeads > 0 ? v.spend * (v.providerLeads / v.totalLeads) : 0;
+      const costPerEnrol = v.enrolled > 0 ? attributedSpend / v.enrolled : null;
+      return { key, ...v, attributedSpend, costPerEnrol };
+    })
+    .sort((a, b) => b.key.localeCompare(a.key));
+
+  // Lifetime totals for the headline tile row.
+  const lifetimeSpend = spendRows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
+  const lifetimeAllLeads = allLeadRows.length;
+  const lifetimeProviderLeads = providerLeadRows.length;
+  const lifetimeAttributedSpend =
+    lifetimeAllLeads > 0 ? lifetimeSpend * (lifetimeProviderLeads / lifetimeAllLeads) : 0;
+  const lifetimeProviderEnrolled = providerEnrolmentRowsAll.filter((e) => e.status === "enrolled").length;
+  const lifetimeCostPerEnrol =
+    lifetimeProviderEnrolled > 0 ? lifetimeAttributedSpend / lifetimeProviderEnrolled : null;
+
+  function gbp(n: number | null): string {
+    if (n === null || !Number.isFinite(n)) return "—";
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }).format(n);
+  }
+  function gbp2(n: number | null): string {
+    if (n === null || !Number.isFinite(n)) return "—";
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 2 }).format(n);
+  }
+
   type EnrolmentRow = {
     id: number;
     submission_id: number;
@@ -323,7 +456,7 @@ export default async function ProviderCatchUpPage({
   if (talkingPoints.length === 0) {
     talkingPoints.push({
       kind: "good",
-      text: `No flags. Standard catch-up: lead quality, blockers, what would help next week.`,
+      text: `No flags. Standard reporting: lead quality, blockers, what would help next week.`,
     });
   }
 
@@ -453,6 +586,84 @@ export default async function ProviderCatchUpPage({
           </CardContent>
         </Card>
       </div>
+
+      {/* Section: Meta spend (attributed) — proportional to this provider's share of leads */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Meta spend, attributed</CardTitle>
+          <p className="text-xs text-[#5a6a72] mt-1">
+            Switchable Meta ads drive learner leads, then auto-routing decides which provider gets each one. Spend here is this provider&rsquo;s proportional share of total ad spend, weighted by the leads they received. Lifetime window since {new Date(reportingFromDate + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-white border border-[#dad4cb] rounded-xl p-3">
+              <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Total Meta spend</p>
+              <p className="text-2xl font-extrabold mt-1 tracking-tight text-[#11242e]">{gbp(lifetimeSpend)}</p>
+              <p className="text-[10px] text-[#5a6a72] mt-1">across all providers</p>
+            </div>
+            <div className="bg-white border border-[#dad4cb] rounded-xl p-3">
+              <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Attributed to this provider</p>
+              <p className="text-2xl font-extrabold mt-1 tracking-tight text-[#143643]">{gbp(lifetimeAttributedSpend)}</p>
+              <p className="text-[10px] text-[#5a6a72] mt-1">
+                {lifetimeProviderLeads}/{lifetimeAllLeads} leads = {lifetimeAllLeads > 0 ? Math.round((lifetimeProviderLeads / lifetimeAllLeads) * 100) : 0}% of spend
+              </p>
+            </div>
+            <div className="bg-white border-2 border-[#cd8b76] rounded-xl p-3">
+              <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Cost per enrolment</p>
+              <p className="text-2xl font-extrabold mt-1 tracking-tight text-[#cd8b76]">{gbp2(lifetimeCostPerEnrol)}</p>
+              <p className="text-[10px] text-[#5a6a72] mt-1">{lifetimeProviderEnrolled} enrolled</p>
+            </div>
+            <div className="bg-white border border-[#dad4cb] rounded-xl p-3">
+              <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Cost per lead</p>
+              <p className="text-2xl font-extrabold mt-1 tracking-tight text-[#11242e]">
+                {gbp2(lifetimeProviderLeads > 0 ? lifetimeAttributedSpend / lifetimeProviderLeads : null)}
+              </p>
+              <p className="text-[10px] text-[#5a6a72] mt-1">attributed CPL</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Section: Weekly tracker */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Weekly tracker</CardTitle>
+          <p className="text-xs text-[#5a6a72] mt-1">
+            Per ISO week (Monday-Sunday). Spend is attributed proportionally; outcomes are bucketed by the week the status was set. Most recent at the top.
+          </p>
+        </CardHeader>
+        <CardContent className="p-0">
+          {weeklyRows.length === 0 ? (
+            <p className="text-xs text-[#5a6a72] p-4">No data in window.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Week</TableHead>
+                  <TableHead className="text-right">Leads</TableHead>
+                  <TableHead className="text-right">Enrolled</TableHead>
+                  <TableHead className="text-right">Lost / no-go</TableHead>
+                  <TableHead className="text-right">Spend (attributed)</TableHead>
+                  <TableHead className="text-right">Cost / enrol</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {weeklyRows.map((r) => (
+                  <TableRow key={r.key}>
+                    <TableCell className="text-xs whitespace-nowrap font-semibold">{weekLabel(r.key)}</TableCell>
+                    <TableCell className="text-xs text-right font-bold">{r.providerLeads}</TableCell>
+                    <TableCell className="text-xs text-right font-bold text-emerald-700">{r.enrolled}</TableCell>
+                    <TableCell className="text-xs text-right text-[#5a6a72]">{r.lost}</TableCell>
+                    <TableCell className="text-xs text-right font-bold">{gbp(r.attributedSpend)}</TableCell>
+                    <TableCell className="text-xs text-right font-bold">{gbp2(r.costPerEnrol)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Section: Talking points */}
       <Card>

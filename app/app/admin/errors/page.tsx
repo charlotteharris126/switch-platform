@@ -48,57 +48,66 @@ interface SourceExplanation {
   what: string;
   whatToDo: string;
   bulkNote?: string;
+  // Plain-English reassurance for clean/info severities, shown next to the
+  // bulk button so owner can see WHY it's safe to dismiss without per-row
+  // review.
+  safeBecause?: string;
 }
 
 const SOURCE_EXPLANATIONS: Record<string, SourceExplanation> = {
   edge_function_sheet_append: {
     headline: "Sheet append failed",
     severity: "fix",
-    what: "The lead was saved to our database and emailed to you, but the row didn't make it into the provider's Google Sheet. The lead is fine on our side. The provider just can't see it on their tracker yet.",
-    whatToDo: "Open the lead and re-trigger routing manually (this retries the sheet append). If it keeps failing, the provider's webhook URL is probably wrong — check it on their edit page. Mark resolved once the row is in their sheet.",
+    what: "The lead was saved to our database and emailed to you, but the row didn't make it into the provider's Google Sheet — so the provider can't see it on their tracker yet.",
+    whatToDo: "Click Open lead → re-trigger routing manually (this retries the sheet append). If it still fails, the provider's sheet webhook URL is probably wrong — fix it on the provider edit page. Once the row is in the sheet, click \"I've handled this\" and note what you did.",
   },
   reconcile_backfill: {
     headline: "Lead recovered from Netlify",
     severity: "info",
-    what: "Not a real error. The hourly safety-net cron noticed a lead in Netlify's submission store that was missing from our database and back-filled it. The lead now exists, but it bypassed the live webhook, so routing may not have triggered.",
-    whatToDo: "Open each linked lead and confirm it routed. If it didn't, route it manually. Once it's in the right state, mark resolved with a short note like \"verified routed\".",
+    what: "Not a real error. The hourly safety-net cron noticed a lead in Netlify's form store that was missing from our database, and back-filled it. The lead now exists, but it bypassed the live webhook so routing may not have triggered.",
+    whatToDo: "Open each linked lead and confirm it routed. If not, route it manually. Once verified, bulk-clean.",
     bulkNote: "Bulk cleanup — Netlify back-fill audit rows, leads verified.",
+    safeBecause: "These rows are audit trails for back-fills that already succeeded. The lead is in the database — dismissing the dead-letter row only clears it from this list. Verify routing happened on the lead itself if unsure.",
   },
   edge_function_partial_capture: {
     headline: "Partial-form capture failed",
     severity: "info",
-    what: "Someone started filling the form but didn't submit. Their progress failed to save. Doesn't affect submitted leads — only breaks funnel-drop analytics.",
-    whatToDo: "Self-resolves on the next attempt. Bulk-clean any over 24h old.",
+    what: "Someone started filling the form but didn't submit. Saving their progress failed. Submitted leads are unaffected — this only breaks funnel-drop analytics for the abandoned session.",
+    whatToDo: "Self-resolves on the next attempt. Bulk-clean any time.",
     bulkNote: "Bulk cleanup — partial-capture failures don't affect any submitted lead.",
+    safeBecause: "Partials are abandoned-form attempts — there is no lead to lose. Worst case you lose one row of analytics on someone who never finished the form.",
   },
   edge_function_brevo_upsert: {
     headline: "Brevo contact sync failed",
     severity: "clean",
-    what: "Lead saved fine in our database — only the push to Brevo (the email tool) failed. The lead can still be routed and emailed manually. The Brevo contact may be missing or have stale attributes; future activity will normally repair it.",
-    whatToDo: "If the lead is hot, open it and click \"Resync to Brevo\" on the lead detail page. Otherwise bulk-mark these resolved — Brevo catches up on the next contact event.",
+    what: "Lead saved fine in our database — only the push to Brevo (email tool) failed. The lead can still be routed and emailed. The Brevo contact may be missing or stale; the next contact event will normally repair it.",
+    whatToDo: "If the lead is hot right now, open it and click \"Resync to Brevo\". Otherwise bulk-clean — Brevo catches up on the next status change or chaser.",
     bulkNote: "Bulk cleanup — Brevo upsert errors, contacts will resync on next activity.",
+    safeBecause: "The lead is safe in our database. Brevo is eventually consistent: the next status update or chaser fire will trigger a resync. Bulk-dismissing here doesn't lose the lead, only the audit of this one failed sync.",
   },
   edge_function_brevo_upsert_no_match: {
     headline: "Brevo sync ran without a course match",
     severity: "info",
-    what: "Lead saved fine, contact pushed to Brevo, but the course wasn't in our routing matrix so course-tailored emails won't trigger. Usually means the course slug isn't in matrix.json yet, or the lead came from a generic landing page.",
-    whatToDo: "If the course is real and you want it in the funnel, add it to matrix.json. Otherwise bulk-clean — these are informational only.",
+    what: "Lead saved fine, contact pushed to Brevo, but the course wasn't in our routing matrix so course-tailored emails won't trigger. Usually means the course slug isn't in matrix.json, or the lead came from a generic landing page.",
+    whatToDo: "If the course is real and you want it in the funnel, add it to matrix.json. Otherwise bulk-clean.",
     bulkNote: "Bulk cleanup — no matrix match, leads not affected.",
+    safeBecause: "Lead is in the DB and synced to Brevo. Only impact is that the course-specific email sequence didn't fire. If the course matters, add it to matrix.json — that's a code change, not a dead-letter fix.",
   },
   edge_function_brevo_chase: {
     headline: "Provider chaser failed to fire",
     severity: "clean",
-    what: "You clicked \"Send chaser\" on a lead, but Brevo refused to add the contact to the chaser list — usually because the contact doesn't exist in Brevo yet, or has unsubscribed. The \"Last chaser\" timestamp on the lead was still recorded, so the system knows you tried.",
-    whatToDo: "If the chaser email genuinely needs to go out, email the learner directly. Otherwise mark resolved — clicking the chaser button again won't help.",
+    what: "You clicked \"Send chaser\" on a lead, but Brevo refused to add the contact to the chaser list — usually because the contact doesn't exist in Brevo yet, or has unsubscribed. The Last chaser timestamp on the lead was still stamped, so the system knows you tried.",
+    whatToDo: "If the chaser genuinely needs to go out, email the learner directly. Otherwise bulk-clean — re-clicking the chaser button won't help.",
     bulkNote: "Bulk cleanup — chaser failures, learner contacted manually or no longer in scope.",
+    safeBecause: "These are failed escalation attempts. The lead state on our side is correct. Bulk-dismissing only removes the failure log.",
   },
 };
 
 const DEFAULT_EXPLANATION: SourceExplanation = {
   headline: "Unknown ingestion error",
   severity: "fix",
-  what: "An ingestion or webhook step failed for an unknown reason. New error type — needs a human look.",
-  whatToDo: "Inspect the error context and raw payload below. Replay manually if appropriate, or mark resolved with a note. Then ping me to add a plain-English explanation for this source.",
+  what: "An ingestion or webhook step failed for a reason we don't have a plain-English explanation for yet. The exact failure is in the Why-it-failed column on the row.",
+  whatToDo: "Read the error message in the row. If a lead is linked, click Open lead to inspect. If it's a system error (auth/config/network), check the relevant Edge Function logs in Supabase. Once you've handled it, click \"I've handled this\" and note what you did.",
 };
 
 const SEVERITY_LABEL: Record<Severity, string> = {
@@ -333,12 +342,17 @@ export default async function ErrorsPage() {
                   <p className="text-xs text-[#5a6a72] mt-2"><strong className="text-[#11242e]">What this is:</strong> {explanation.what}</p>
                   <p className="text-xs text-[#5a6a72] mt-1"><strong className="text-[#11242e]">What to do:</strong> {explanation.whatToDo}</p>
                   {showBulk ? (
-                    <div className="mt-3">
+                    <div className="mt-3 space-y-2">
                       <BulkResolveButton
                         source={source}
                         count={sourceRows.length}
                         defaultNote={explanation.bulkNote ?? `Bulk cleanup — ${explanation.headline.toLowerCase()}.`}
                       />
+                      {explanation.safeBecause ? (
+                        <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                          <strong>Safe to dismiss without per-row review:</strong> {explanation.safeBecause}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                 </CardHeader>
@@ -347,7 +361,7 @@ export default async function ErrorsPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Lead</TableHead>
-                        <TableHead>Form</TableHead>
+                        <TableHead>Why it failed</TableHead>
                         <TableHead>State</TableHead>
                         <TableHead>Received</TableHead>
                         <TableHead>Action</TableHead>
@@ -364,6 +378,8 @@ export default async function ErrorsPage() {
                         const lead = sid != null ? subsById.get(sid) : undefined;
                         const formName =
                           (r.raw_payload as { form_name?: string } | null)?.form_name ?? "—";
+                        const errMsg = (r.error_context ?? "").split("\n")[0] || "—";
+                        const errShort = errMsg.length > 140 ? errMsg.slice(0, 140) + "…" : errMsg;
                         return (
                           <TableRow key={r.id} className={isStale ? "bg-[#b3412e]/5" : ""}>
                             <TableCell className="text-xs">
@@ -377,9 +393,15 @@ export default async function ErrorsPage() {
                               <div className="text-[10px] text-[#5a6a72] font-mono">
                                 {sid != null ? `#${sid}` : `dead-letter #${r.id}`}
                                 {lead?.email ? ` · ${lead.email}` : ""}
+                                {formName !== "—" ? ` · ${formName}` : ""}
                               </div>
                             </TableCell>
-                            <TableCell className="text-xs whitespace-nowrap text-[#5a6a72]">{formName}</TableCell>
+                            <TableCell
+                              className="text-[11px] text-[#11242e] font-mono leading-tight"
+                              title={r.error_context ?? undefined}
+                            >
+                              {errShort}
+                            </TableCell>
                             <TableCell className="text-xs whitespace-nowrap">
                               <span className={
                                 lead?.archived_at ? "text-[#5a6a72]" :
@@ -396,10 +418,21 @@ export default async function ErrorsPage() {
                               {isStale ? <Badge variant="destructive" className="ml-0 mt-1 text-[9px]">Stale</Badge> : null}
                             </TableCell>
                             <TableCell>
-                              <ResolveButton
-                                errorId={r.id}
-                                defaultNote={`Acknowledged — ${explanation.headline.toLowerCase()}.`}
-                              />
+                              <div className="flex flex-col gap-1">
+                                {explanation.severity === "fix" && sid != null && (
+                                  <Link
+                                    href={`/leads/${sid}`}
+                                    className="text-[10px] font-bold uppercase tracking-wide text-white bg-[#cd8b76] hover:bg-[#b3412e] px-3 h-7 rounded inline-flex items-center justify-center"
+                                  >
+                                    Open lead
+                                  </Link>
+                                )}
+                                <ResolveButton
+                                  errorId={r.id}
+                                  defaultNote={`Acknowledged — ${explanation.headline.toLowerCase()}.`}
+                                  requireNote={explanation.severity === "fix"}
+                                />
+                              </div>
                             </TableCell>
                           </TableRow>
                         );

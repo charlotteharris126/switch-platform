@@ -34,16 +34,23 @@ export async function markErrorResolved(deadLetterId: number, note: string): Pro
 
   const annotated = `${existing.error_context ?? ""}\n[manually resolved ${new Date().toISOString()}]: ${note}`.trim();
 
-  const { error: updateErr } = await supabase
+  // .select() so we get the affected row back. RLS UPDATE without policy
+  // returns 0 rows silently — we'd otherwise return ok=true with nothing
+  // changed. Bit Charlotte 2 May 2026.
+  const { data: updated, error: updateErr } = await supabase
     .schema("leads")
     .from("dead_letter")
     .update({
       replayed_at: new Date().toISOString(),
       error_context: annotated,
     })
-    .eq("id", deadLetterId);
+    .eq("id", deadLetterId)
+    .select("id");
 
   if (updateErr) return { ok: false, error: updateErr.message };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: "Update blocked by access policy. Re-deploy migration 0051?" };
+  }
 
   revalidatePath("/errors");
   return { ok: true };
@@ -81,13 +88,14 @@ export async function bulkMarkSourceResolved(
   let resolved = 0;
   for (const r of rows) {
     const annotated = `${r.error_context ?? ""}${annotation}`.trim();
-    const { error: updateErr } = await supabase
+    const { data: updated, error: updateErr } = await supabase
       .schema("leads")
       .from("dead_letter")
       .update({ replayed_at: stamp, error_context: annotated })
       .eq("id", r.id)
-      .is("replayed_at", null);
-    if (!updateErr) resolved += 1;
+      .is("replayed_at", null)
+      .select("id");
+    if (!updateErr && updated && updated.length > 0) resolved += 1;
   }
 
   revalidatePath("/errors");

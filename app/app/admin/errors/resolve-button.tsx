@@ -8,19 +8,24 @@ import { markErrorResolved } from "./actions";
 interface Props {
   errorId: number;
   defaultNote: string;
+  // requireNote = true forces the typed-note flow (used for ACTION NEEDED
+  // rows so owner has to acknowledge what they actually did to fix it,
+  // rather than blind-dismiss real errors). false = one-click for clean/
+  // info rows where dismissal is genuinely safe.
+  requireNote?: boolean;
 }
 
-// One-click resolve. Clicking the button immediately marks the row resolved
-// using `defaultNote` (severity-appropriate text passed in by the parent).
-// "Add note" reveals an optional textbox for owners who want to record more
-// context — but the common case is one click and done.
-export function ResolveButton({ errorId, defaultNote }: Props) {
+export function ResolveButton({ errorId, defaultNote, requireNote = false }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [showNote, setShowNote] = useState(false);
   const [note, setNote] = useState("");
 
   function resolve(noteText: string) {
+    if (requireNote && !noteText.trim()) {
+      toast.warning("Add a note describing how you handled it.");
+      return;
+    }
     startTransition(async () => {
       const result = await markErrorResolved(errorId, noteText);
       if (result.ok) {
@@ -33,6 +38,18 @@ export function ResolveButton({ errorId, defaultNote }: Props) {
   }
 
   if (!showNote) {
+    if (requireNote) {
+      return (
+        <button
+          type="button"
+          onClick={() => setShowNote(true)}
+          disabled={pending}
+          className="text-[10px] font-bold uppercase tracking-wide text-[#11242e] bg-white border border-[#dad4cb] hover:border-[#cd8b76]/60 px-2 h-7 rounded"
+        >
+          I&rsquo;ve handled this
+        </button>
+      );
+    }
     return (
       <div className="flex items-center gap-2">
         <button
@@ -61,7 +78,7 @@ export function ResolveButton({ errorId, defaultNote }: Props) {
         type="text"
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="Optional note"
+        placeholder={requireNote ? "What did you do?" : "Optional note"}
         disabled={pending}
         className="text-[10px] border border-[#dad4cb] rounded px-2 h-7 bg-white text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76] w-48"
       />
