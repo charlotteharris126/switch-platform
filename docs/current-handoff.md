@@ -2,80 +2,104 @@
 
 ## Current state
 
-Profit tracker custom-date bug fixed and Enrolment rate metric added. Data health page now shows actual error messages inline, requires a typed note for ACTION NEEDED dismissal, and Mark resolved finally persists (RLS gap closed by migration 0051). Action centre gained inline outcome buttons on Presumed enrolled rows plus two new sections (Needs another chase, Cannot reach no chaser sent). Sidebar carries pill badges that count only owner-clearable items. Provider page renamed Catch-up to Reporting and gained a Meta spend (proportionally attributed) section plus a per-provider Weekly tracker. Iris activation brief drafted and relayed to switchable/ads — three of her five P1/P2 automations can run now, P2.1 parked on platform's `meta_daily` field delta.
+Big UX session on `/admin/profit`, `/admin/errors`, `/admin/actions`, `/admin/providers/[id]`. Three production deploys + two production migrations. Errors page reframed around "Flag for Claude" (owner cannot fix code-level errors directly, just flags them) with plain-English translations of common technical messages. Action centre gained inline outcome buttons + two new chase sections. Sidebar carries pill badges. Provider page renamed Catch-up to Reporting and gained per-provider Meta spend (proportionally attributed) plus a weekly tracker. A latent bug surfaced and was fixed: `ads_switchable.meta_daily.ctr` was undersized, causing 10 dead-letter rows that have now been cleared. Iris activation brief relayed and same-day actioned by switchable/ads — four of her five P1/P2 automations now active.
 
 ## What was done this session
 
-- Profit tracker (`/admin/profit`):
-  - Fixed Custom date crash. `resolveWindow` was throwing on `period=custom` without dates because `PERIOD_DAYS["custom"]` was undefined → NaN date → toISOString throw → 500 before form rendered.
-  - Pre-populated Custom date inputs with last-30d defaults so first click shows usable values.
-  - Replaced GET form with a client component using `router.push()` plus `export const dynamic = "force-dynamic"`. Stale-DOM defaultValue issue meant subsequent applies didn't refresh data.
-  - Added Enrolment rate tile (enrolled / leads as %) and Enrol % column in the weekly/monthly tracker. Tile grid 5→6, broke into `md:grid-cols-3 lg:grid-cols-6`.
-- Data health (`/admin/errors`):
-  - Combined Database recon and Lead recon into one Reconciliation card with two sub-sections.
-  - Migration 0051 applied: `GRANT UPDATE ON leads.dead_letter` + `admin_update_dead_letter` policy gated on `admin.is_admin()`. Closed the RLS gap that made Mark resolved silently no-op.
-  - Hardened `markErrorResolved` and `bulkMarkSourceResolved`: now `.select()` the affected rows and surface 0-rows-updated as an explicit error instead of false success.
-  - ACTION NEEDED rows now: show the actual `error_context` inline as a Why-it-failed column, surface an Open lead button when a submission_id is linked, and require a typed note before dismissal so real errors aren't blind-cleared.
-  - CLEAN UP / INFORMATIONAL bulk buttons gained per-source `safeBecause` reassurance lines.
-  - Default explanation rewritten to point at error_context + Edge Function logs.
-- Action centre (`/admin/actions`):
-  - Inline `Re-open / Enrolled / Lost` pill buttons on Presumed enrolled rows. Lost expands the four reason pills inline before firing.
-  - New section: Needs another chase (status=open AND last_chaser_at < now-5d). One-click Re-chase wired to `crm.fire_provider_chaser`.
-  - New section: Cannot reach, no chaser sent (status=cannot_reach AND last_chaser_at IS NULL). One-click Send chaser.
-  - Renamed "AI suggestions" to "Awaiting your call".
-  - New client components: `inline-outcome-buttons.tsx`, `inline-chaser-button.tsx`.
-- Sidebar (`components/admin-shell.tsx` + `app/admin/layout.tsx`):
-  - Pill badge appears next to Actions (count) and Data health (errors_unresolved_total) when count > 0.
-  - Counts only sections owner can actually clear: Awaiting your call, Presumed enrolled, Needs another chase, Cannot reach (no chaser sent). Skips Unrouted and Approaching auto-flip per owner ask.
-- Provider reporting (`/admin/providers/[id]/catch-up`):
-  - Tab and inline copy renamed Catch-up → Reporting. URL kept as `/catch-up` to preserve bookmarks.
-  - New Meta spend section: total spend, attributed to provider, cost per enrolment, attributed CPL. Attribution = total_spend × (provider_leads / all_leads), matching the Profit tracker denominator so the views reconcile.
-  - New Weekly tracker per provider: leads, enrolled, lost, attributed spend, cost / enrol per ISO week.
-- Iris activation: scoped which automations can run now (P1.1 weekly brief, P1.2 fatigue, P2.2 CPL anomaly, P2.3 pixel/CAPI drift) using inline SQL against raw tables, vs blocked (P2.1 daily health needs platform's `meta_daily` field delta). Relayed to owner for hand-off to switchable/ads.
-- Two production deploys this session: commit `84e0c75` (first batch — profit tracker enrolment rate, data health, action centre), commit `73b6e60` (this batch — bug fixes + provider reporting + migration 0051).
+### Profit tracker (`/admin/profit`)
+- Fixed Custom date crash (`resolveWindow` threw NaN on `period=custom` without dates).
+- Pre-populated Custom date inputs with last-30d defaults.
+- Replaced GET form with client component using `router.push()` plus `export const dynamic = "force-dynamic"`.
+- Added Enrolment rate tile (enrolled / leads as %) and Enrol % tracker column.
+- Tracker section heading reduced to "Tracker, weekly" / "Tracker, monthly" (the windowed suffix was confusing because rows are bucketed).
+
+### Data health (`/admin/errors`)
+- Combined Database recon and Lead recon into one Reconciliation card.
+- Migration 0051 applied via SQL editor: `GRANT UPDATE ON leads.dead_letter` + `admin_update_dead_letter` policy gated on `admin.is_admin()`. Closed the RLS gap that made Mark resolved silently no-op.
+- Hardened `markErrorResolved` and `bulkMarkSourceResolved` with `.select()` to surface 0-rows-updated as explicit error.
+- Added plain-English explanations for 8 previously-unmapped sources (`netlify_forms`, `netlify_audit`, `edge_function_provider_email`, `edge_function_crm_push`, `edge_function_meta_ingest_api/fetch/parse/upsert`). They no longer fall back to the generic "Unknown ingestion error".
+- New `translateError()` helper turns common Postgres / fetch / rate-limit / auth / constraint patterns into plain English in the row itself; the technical message stays beneath in mono for the audit trail.
+- Severity label "Action needed" renamed to "Flag for Claude" with reworded copy throughout. Owner cannot fix code-level errors directly; the action is to flag.
+- `ResolveButton` for fix-severity rows is now a one-click `Flag for Claude` button (red), with optional "add context first" link. The audit note is auto-prefixed with "Flagged for next session" so it's greppable.
+- `BulkResolveButton` gains an `isFlag` prop; appears on every card now (fix and clean/info). Lets owner clear an entire batch in one action.
+- Resolved (recent) capped to past 5 days. Older history stays in the DB.
+- `safeBecause` reassurance line per-source on bulk buttons clarifies why bulk dismissal is safe for clean/info severities.
+
+### Action centre (`/admin/actions`)
+- Inline `Re-open / Enrolled / Lost` pill buttons on Presumed enrolled rows. Lost expands the four reason pills inline before firing.
+- New section: Needs another chase (status=open AND last_chaser_at < now-5d). One-click Re-chase wired to `crm.fire_provider_chaser`.
+- New section: Cannot reach, no chaser sent (status=cannot_reach AND last_chaser_at IS NULL). One-click Send chaser.
+- Renamed "AI suggestions" to "Awaiting your call".
+- New client components: `inline-outcome-buttons.tsx`, `inline-chaser-button.tsx`.
+
+### Sidebar (`components/admin-shell.tsx` + `app/admin/layout.tsx`)
+- Pill badge appears next to Actions and Data health when count > 0.
+- Counts only sections owner can actually clear: Awaiting your call, Presumed enrolled, Needs another chase, Cannot reach (no chaser sent). Skips Unrouted and Approaching auto-flip.
+
+### Provider reporting (`/admin/providers/[id]/catch-up`)
+- Tab and inline copy renamed Catch-up → Reporting. URL kept as `/catch-up`.
+- New Meta spend section: total Meta spend, attributed to provider, cost per enrolment, attributed CPL. Attribution = total_spend × (provider_leads / all_leads), matching the Profit tracker denominator.
+- New Weekly tracker per provider: leads, enrolled, lost, attributed spend, cost / enrol per ISO week.
+
+### Bug fix: meta_daily.ctr column overflow
+- 10 dead-letter rows surfaced (ids 142-151) all `edge_function_meta_ingest_upsert` with `PostgresError: numeric field overflow`. Root cause: `ctr` was `NUMERIC(6, 5)` in migration 0001 (max 9.99999), but Meta returns CTR as a percentage so any low-impression ad with one click overflows.
+- Migration 0052 written and applied via SQL editor: `ALTER COLUMN ctr TYPE NUMERIC(8, 5)`.
+- The 10 historical dead-letter rows cleared via direct SQL UPDATE (the new bulk-flag UI shipped post-clear; either path works for next time).
+
+### Iris activation
+- Scoped which automations Iris can run today (P1.1 weekly brief, P1.2 fatigue, P2.2 CPL anomaly, P2.3 pixel/CAPI drift) using inline SQL against raw tables.
+- Owner relayed to switchable/ads same-session; ads side activated all four automations on Iris's persona, scheduled the daily 08:30 UTC pass, and updated `agent.md`. P2.1 daily health remains parked on platform's `meta_daily` field delta.
+- ClickUp tickets opened: 869d4ubwq (Ask 3, schema delta), 869d4ubxc (Ask 1, v_ad_to_routed), 869d4ubxv (Ask 2, v_ad_baselines).
+
+### Production deploys
+- `84e0c75` — first batch (profit tracker + data health + action centre + provider reporting).
+- `73b6e60` — second batch (bug fixes + migration 0051).
+- `fcd26ea` — 8 unmapped sources + tracker label v1.
+- `80e7344` — Flag for Claude reframe + translateError + migration 0052 + tracker label v2.
+- `962fb27` — bulk Flag for Claude button + 5-day resolved cap.
+- `de342fd` — handoff (this doc, original write before later commits).
 
 ## Next steps
 
-1. Iris three platform asks (next platform session, owner-passed-on per `iris-platform-delta.md`):
-   1. Confirm Ask 3 first: scope `meta_daily` field delta for `daily_budget` (campaign + adset), `delivery_state` (campaign), `status` (ad), `headline`, `primary_text`. Not a one-line ALTER — the ingest function needs an extra fetch loop per entity per day. Decide: schema-only with raw_payload fallback, or full ingest + dedicated columns.
-   2. Build view `ads_switchable.v_ad_to_routed`. Closed-loop join of `meta_daily` to `leads.submissions` (via `utm_content` = `ad_id`) to `leads.routing_log`. Returned columns per spec.
-   3. Build view `ads_switchable.v_ad_baselines`. Per-ad rolling baselines: launch_date, launch_ctr_baseline (first 7 days), rolling_7d_ctr, rolling_7d_cpl, rolling_30d_ctr, current_frequency.
-2. Sanity-check this session's deploys once Netlify settles (commit `73b6e60`):
-   - Mark resolved actually persists on a Just-clean-up row.
-   - ACTION NEEDED row shows the error message inline and requires the note before dismissing.
-   - Profit tracker Custom dates change figures.
-   - Sidebar pill counts dropped (no longer counting Unrouted / Approaching auto-flip).
-   - Provider page tab says Reporting and Meta spend + Weekly tracker render with correct attribution.
-3. Migration tracking drift: CLI shows 0048, 0049, 0050 as not-applied to remote even though 0048 and 0050 are live (0049 is intentionally unapplied per HubSpot pause). `supabase migration repair --status applied 0048 0050` would sync without touching 0049. Do this before the next migration push so 0052+ via `supabase db push` works cleanly. 0051 was applied via SQL editor today, same drift now extends to it.
-4. Update `infrastructure-manifest.md` with the new cron `meta-ads-ingest-daily` row (carry-over from Session 22 next-step #3) and `secrets-rotation.md` for `META_ACCESS_TOKEN` rotation procedure.
-5. Document the Exposed Schemas dashboard setting in `supabase/README.md` (carry-over from Session 22 next-step #4).
-6. HubSpot two-way still paused awaiting Ranjit at Courses Direct (per project memory).
+1. **Iris three platform asks** (per `iris-platform-delta.md` sequencing):
+   1. ClickUp 869d4ubwq — confirm Ask 3 first: scope `meta_daily` field delta for `daily_budget` (campaign + adset), `delivery_state` (campaign), `status` (ad), `headline`, `primary_text`. Open question: widen `meta_daily` (per-day, every row repeats config) vs sibling tables (`meta_ads`, `meta_adsets`, `meta_campaigns` refreshed on a separate cadence and joined at view level). Sibling-table approach is cleaner because daily_budget and status aren't per-day metrics.
+   2. ClickUp 869d4ubxc — build view `ads_switchable.v_ad_to_routed`. Closed-loop join of `meta_daily` to `leads.submissions` (via `utm_content` = `ad_id`) to `leads.routing_log`.
+   3. ClickUp 869d4ubxv — build view `ads_switchable.v_ad_baselines`. Per-ad rolling baselines: launch_date, launch_ctr_baseline (first 7 days), rolling_7d_ctr, rolling_7d_cpl, rolling_30d_ctr, current_frequency.
+2. **Sanity-check the post-handoff deploys** (commits `fcd26ea`, `80e7344`, `962fb27`):
+   - `/errors`: every card has a per-source explanation (no "Unknown ingestion error"), Flag-for-Claude one-click works, bulk flag works.
+   - `/profit`: tracker heading reads "Tracker, weekly" / "Tracker, monthly".
+3. **Sidebar urgent-error count** (ClickUp 869d4unth, low priority). Surface fix-severity dead_letter count on Actions page + sidebar badge so owner sees urgent errors alongside other actionable items. Bundle with the next bigger Actions or Data health change rather than its own deploy.
+4. **Migration tracking drift** (ClickUp 869d4uby9). Run `supabase migration repair --status applied 0048 0050 0051 0052` before the next migration push so `supabase db push` works cleanly. Do NOT include 0049 (HubSpot, intentionally remote-pending).
+5. **Update `infrastructure-manifest.md`** with the `meta-ads-ingest-daily` cron row (carry-over from Session 22). Update `secrets-rotation.md` for `META_ACCESS_TOKEN` rotation procedure.
+6. **Document the Exposed Schemas dashboard setting** in `supabase/README.md` (carry-over from Session 22).
+7. **HubSpot two-way** still paused awaiting Ranjit at Courses Direct (per project memory).
 
 ## Decisions and open questions
 
 **Decisions made:**
-- Mark resolved is one-click for CLEAN/INFO rows (severity-appropriate default note auto-applied), but FIX-severity rows require a typed note. Reason: fix rows are real errors; one-click dismissal was dangerous because it made them feel optional.
-- Surface actual `error_context` in a Why-it-failed column instead of hiding it behind a tooltip. Reason: owner reported "no idea what these errors are" — the explanation card alone wasn't enough, the per-row truth had to be visible.
-- Sidebar action badge counts only clearable sections. Reason: Approaching auto-flip is informational (cron handles flip regardless), Unrouted is largely auto-routed; counting them meant the badge would never reach zero, which trains the owner to ignore it.
-- Per-provider Meta spend uses leads-driven proportional attribution (provider_leads / all_leads × total_spend). Reason: Switchable ad account isn't tagged per provider; this is the only sensible fair share. Matches Profit tracker denominator so the two views reconcile.
-- Provider tab kept the URL `/catch-up` while only the label changed to "Reporting". Reason: avoids breaking any saved bookmarks; URL rename can come later if it becomes confusing.
-- Migration 0051 applied via Supabase SQL editor (paste-the-block) rather than `supabase db push`. Reason: CLI tracking is out of sync with prod and `db push` would also try 0048 and 0050 (and worse, 0049 which is intentionally unapplied per HubSpot pause).
+- Flag for Claude framing on fix-severity rows. Reason: owner is non-technical; "Action needed" implied they had to debug Postgres errors. The new framing makes it explicit that Claude handles the code/migration fix and the owner just flags. Bulk button means a batch (e.g. 10 numeric-overflow rows from one root cause) clears in one click.
+- `translateError()` lives in `app/admin/errors/page.tsx` rather than as a shared module. Reason: it's only used in one place today; extract when a second consumer appears.
+- Resolved (recent) capped to past 5 days, not configurable. Reason: long-tail audit history belongs in the DB, not the dashboard.
+- `meta_daily.ctr` widened to `NUMERIC(8, 5)`, not changed to `NUMERIC` (unbounded). Reason: keeping precision tight surfaces obvious-bad data fast (a CTR of 9999 is still wrong, but caught at write time). 8.5 has 999.99999 headroom which is past any plausible real value.
+- Profit tracker tracker label dropped the windowed suffix. Reason: rows are bucketed (week / month) but the heading said "last 30 days", which made owner question whether the bucket label was wrong.
+- Migration 0052 applied via SQL editor, not `supabase db push`. Reason: same CLI tracking drift as 0051 — push would also try 0048-0050 and the intentionally-unapplied 0049.
+- The 10 numeric-overflow rows cleared via direct SQL (`UPDATE leads.dead_letter SET replayed_at = now()...`) rather than waiting for the bulk-flag UI deploy. Reason: faster path, owner had already run other SQL today, and the new bulk button isn't needed until next batch lands.
 
 **Open questions:**
-- Does the Iris Ask 3 schema delta belong as a `meta_daily` widening (add columns, ingest pulls them) or a sibling table (`meta_ads`/`meta_adsets`/`meta_campaigns` with periodic refresh, joined at view level)? Sibling table is cleaner because daily_budget and status aren't per-day metrics. Decide before building Ask 3.
-- Profit tracker Custom date now defaults to last-30d when no dates are set — confirm that's the right default vs e.g. matching the prior period selection.
-- Sidebar badge updates per-navigation, not realtime. If owner is on the Actions page when a new lead lands, the badge won't tick until next nav. Acceptable, or wire to RealtimeRefresh layer?
+- Iris Ask 3 sibling-table vs widen-`meta_daily` decision. Sibling table cleaner conceptually (config not per-day metrics), but adds another ingest path to maintain. Decide before building.
+- Profit tracker Custom date now defaults to last-30d when no dates are set — confirm that's the right default.
+- Sidebar badge updates per-navigation, not realtime. Acceptable, or wire to RealtimeRefresh layer next iteration?
+- `translateError()` patterns are based on what's been seen so far. New error patterns will fall through to the generic "Technical error from an external system" line. Decide whether to grow patterns reactively (when owner reports a confusing message) or proactively (bulk-add common Edge Function error shapes).
 
 ## Watch items
 
-- Daily cron `meta-ads-ingest-daily`. First run was scheduled 08:00 UTC 2026-05-03. Verify next session via `SELECT id, status_code FROM net._http_response ORDER BY created DESC LIMIT 5;` after 08:01 UTC.
-- Migration 0051 RLS policy applied via SQL editor. CLI tracking does not yet reflect it — pair with the 0048/0050 repair next session.
-- Commit `73b6e60` deploying on Netlify. Verify the five sanity-checks listed in Next steps.
-- HubSpot integration paused awaiting Ranjit (no platform action this session, but carries forward).
-- `CLAUDE.md` and `agent.md` still uncommitted on disk per Session 22 — decision deferred again this session, both untouched.
+- Daily cron `meta-ads-ingest-daily`. Tomorrow's 08:00 UTC run is the test for migration 0052 — should write the previously-failing high-CTR rows successfully and back-fill the missing days via the rolling 7-day window. Verify next session via `SELECT id, status_code FROM net._http_response ORDER BY created DESC LIMIT 5;` after 08:01 UTC, and check Profit tracker for the 2 May spend numbers landing.
+- Migrations 0051 and 0052 applied via SQL editor; CLI tracking still drifted. Repair next session (ClickUp 869d4uby9).
+- `CLAUDE.md` and `agent.md` still uncommitted on disk per Session 22 — decision deferred again.
+- Latest deploys (`fcd26ea`, `80e7344`, `962fb27`) — confirm they landed and the new errors-page UX behaves as expected.
 
 ## Next session
 
 - **Folder:** `platform/`
-- **First task:** Tackle Iris Ask 3 first per `iris-platform-delta.md` sequencing. Decide schema delta shape (widen `meta_daily` vs sibling tables) and scope the ingest loop, then build views 1 and 2.
-- **Cross-project:** `switchable/ads/` — relayed Iris activation brief to owner this session. Iris can now begin P1.1 weekly brief, P1.2 fatigue, P2.2 CPL anomaly, P2.3 pixel/CAPI drift using inline SQL against `meta_daily` + `leads.submissions` + `leads.routing_log` via `readonly_analytics` MCP. P2.1 daily health is parked on this platform's Ask 3 delta. Push appended to `switchable/ads/docs/current-handoff.md` in step 5 of this handoff.
+- **First task:** Iris Ask 3 (ClickUp 869d4ubwq). Decide schema delta shape — widen `meta_daily` vs sibling tables (`meta_ads`, `meta_adsets`, `meta_campaigns`) — and scope the ingest loop. Then build views 1 and 2 (Asks 1 and 2).
+- **Cross-project:** `switchable/ads/` — Iris activation already relayed and actioned same-day in Session 23. No new push this turn. When platform delivers the Iris views and meta_daily delta, return to ads handoff to swap Iris's inline SQL for the views and unblock P2.1 daily health.
