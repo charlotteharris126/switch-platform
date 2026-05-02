@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -42,21 +43,52 @@ export default async function AdsPage() {
   const supabase = await createClient();
 
   // Pull last 30 days. Manual rows + (eventually) API rows in one set.
-  const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-  const { data, error } = await supabase
-    .schema("ads_switchable")
-    .from("meta_daily")
-    .select("id, date, ad_account_id, spend, leads, impressions, clicks, cost_per_lead, fetched_at")
-    .gte("date", cutoff)
-    .order("date", { ascending: false });
+  const cutoffDate = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const cutoffISO = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
 
+  const [adsRes, dbLeadsRes] = await Promise.all([
+    supabase
+      .schema("ads_switchable")
+      .from("meta_daily")
+      .select("id, date, ad_account_id, spend, leads, impressions, clicks, cost_per_lead, fetched_at")
+      .gte("date", cutoffDate)
+      .order("date", { ascending: false }),
+    // Qualified leads in our DB, same 30-day window. True CPL denominator.
+    // Pilot assumption: Meta is the dominant paid channel, so total qualified
+    // leads ≈ Meta-attributable leads. Filter on attribution once SwitchLeads
+    // ads or organic ramp.
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("email")
+      .eq("is_dq", false)
+      .is("archived_at", null)
+      .gte("submitted_at", cutoffISO),
+  ]);
+
+  const { data, error } = adsRes;
   const rows = (data ?? []) as AdSpendRow[];
   const manualRows = rows.filter((r) => r.ad_account_id === "manual_paste");
   const apiRows = rows.filter((r) => r.ad_account_id !== "manual_paste");
 
   const totalSpend = rows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
-  const totalLeads = rows.reduce((s, r) => s + Number(r.leads ?? 0), 0);
-  const blendedCpl = totalLeads > 0 ? totalSpend / totalLeads : null;
+  const metaReportedLeads = rows.reduce((s, r) => s + Number(r.leads ?? 0), 0);
+  const metaCpl = metaReportedLeads > 0 ? totalSpend / metaReportedLeads : null;
+
+  // True CPL: Meta spend ÷ qualified leads in our DB (distinct emails).
+  const dbLeadRows = (dbLeadsRes.data ?? []) as Array<{ email: string | null }>;
+  const dbDistinctLeads = new Set(
+    dbLeadRows.map((r) => r.email?.toLowerCase().trim() ?? "").filter((e) => e.length > 0)
+  ).size;
+  const trueCpl = dbDistinctLeads > 0 ? totalSpend / dbDistinctLeads : null;
+
+  // Variance: how much higher True CPL is than Meta CPL. Meta typically
+  // under-reports leads (cookie blocking, iOS), so True CPL > Meta CPL is
+  // normal. The reverse direction (DB undercount) signals a system issue.
+  const variancePct =
+    metaCpl !== null && trueCpl !== null && metaCpl > 0
+      ? ((trueCpl - metaCpl) / metaCpl) * 100
+      : null;
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -81,12 +113,31 @@ export default async function AdsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Tile label="30-day spend" value={gbp(totalSpend)} />
-          <Tile label="30-day leads" value={intFmt(totalLeads)} />
-          <Tile label="Blended CPL" value={gbp(blendedCpl)} />
-          <Tile label="Days logged" value={`${rows.length} of 30`} />
-        </div>
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Tile label="30-day spend" value={gbp(totalSpend)} />
+            <Tile label="True CPL" value={gbp(trueCpl)} note={`Spend ÷ ${intFmt(dbDistinctLeads)} DB leads`} highlight />
+            <Tile label="Meta-reported CPL" value={gbp(metaCpl)} note={`Spend ÷ ${intFmt(metaReportedLeads)} Meta leads`} />
+            <Tile
+              label="Variance"
+              value={variancePct === null ? "—" : `${variancePct >= 0 ? "+" : ""}${variancePct.toFixed(0)}%`}
+              note={
+                variancePct === null
+                  ? "Need both numbers"
+                  : variancePct > 0
+                    ? "Meta under-reports (normal)"
+                    : variancePct < -5
+                      ? "DB under-reports — investigate"
+                      : "Aligned"
+              }
+            />
+          </div>
+          <p className="text-[10px] text-[#5a6a72] italic">
+            <strong>True CPL</strong> uses our database lead count (ground truth). <strong>Meta-reported</strong> uses
+            Meta&rsquo;s pixel/CAPI count. Meta typically under-counts due to cookie blocking and iOS, so True CPL is
+            usually higher. Lead reconciliation lives on <Link href="/errors" className="underline">Data health</Link>.
+          </p>
+        </>
       )}
 
       <section>
@@ -139,11 +190,24 @@ export default async function AdsPage() {
   );
 }
 
-function Tile({ label, value }: { label: string; value: string }) {
+function Tile({
+  label,
+  value,
+  note,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+  highlight?: boolean;
+}) {
+  const border = highlight ? "border-2 border-[#cd8b76]" : "border border-[#dad4cb]";
+  const valueCls = highlight ? "text-[#cd8b76]" : "text-[#11242e]";
   return (
-    <div className="bg-white border border-[#dad4cb] rounded-xl p-4">
+    <div className={`bg-white ${border} rounded-xl p-4`}>
       <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">{label}</p>
-      <p className="text-2xl font-extrabold mt-2 tracking-tight text-[#11242e]">{value}</p>
+      <p className={`text-2xl font-extrabold mt-2 tracking-tight ${valueCls}`}>{value}</p>
+      {note ? <p className="text-[10px] text-[#5a6a72] mt-1">{note}</p> : null}
     </div>
   );
 }

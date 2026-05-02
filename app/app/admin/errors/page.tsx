@@ -132,7 +132,20 @@ function leadStateLabel(s: SubmissionLite | undefined): string {
 export default async function ErrorsPage() {
   const supabase = await createClient();
 
-  const [deadLetterRes, routingLogRes, liveRoutedRes, archivedRes, childCount] = await Promise.all([
+  // Lead reconciliation window: align to Meta's earliest data so we're
+  // comparing the same period on both sides. Falls back to last 30 days if
+  // Meta has no rows yet.
+  const earliestMetaRes = await supabase
+    .schema("ads_switchable")
+    .from("meta_daily")
+    .select("date")
+    .order("date", { ascending: true })
+    .limit(1);
+  const earliestMetaDate = (earliestMetaRes.data?.[0] as { date: string } | undefined)?.date ?? null;
+  const reconcileCutoffDate = earliestMetaDate ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const reconcileCutoffISO = new Date(reconcileCutoffDate + "T00:00:00Z").toISOString();
+
+  const [deadLetterRes, routingLogRes, liveRoutedRes, archivedRes, childCount, metaLeadsRes, dbLeadsRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("dead_letter")
@@ -164,7 +177,32 @@ export default async function ErrorsPage() {
       .not("primary_routed_to", "is", null)
       .not("parent_submission_id", "is", null)
       .is("archived_at", null),
+    // Meta-reported leads (last 30 days, sum across all rows).
+    supabase
+      .schema("ads_switchable")
+      .from("meta_daily")
+      .select("leads")
+      .gte("date", reconcileCutoffDate),
+    // DB qualified leads (last 30 days). Distinct emails to match the
+    // de-duped count we use elsewhere.
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("email")
+      .eq("is_dq", false)
+      .is("archived_at", null)
+      .gte("submitted_at", reconcileCutoffISO),
   ]);
+
+  const metaReported30d = ((metaLeadsRes.data ?? []) as Array<{ leads: number | null }>).reduce(
+    (s, r) => s + Number(r.leads ?? 0),
+    0,
+  );
+  const dbDistinct30d = new Set(
+    ((dbLeadsRes.data ?? []) as Array<{ email: string | null }>)
+      .map((r) => r.email?.toLowerCase().trim() ?? "")
+      .filter((e) => e.length > 0),
+  ).size;
 
   const routingLogRows = ((routingLogRes.data ?? []) as Array<{ submission_id: number }>).map((r) => r.submission_id);
   const archivedIds = new Set(((archivedRes.data ?? []) as Array<{ id: number }>).map((r) => r.id));
@@ -237,6 +275,12 @@ export default async function ErrorsPage() {
       />
 
       <ReconciliationCard data={reconciliation} />
+
+      <LeadReconciliationCard
+        metaReported={metaReported30d}
+        dbDistinct={dbDistinct30d}
+        windowStartDate={reconcileCutoffDate}
+      />
 
       <ErrorsSectionHeader unresolvedCount={unresolved.length} resolvedCount={resolved.length} over7dCount={over7d} />
 
@@ -480,6 +524,104 @@ function Metric({ label, value, highlight }: { label: string; value: number; hig
       <div className={`text-2xl font-bold ${highlight ? "text-[#cd8b76]" : "text-[#143643]"}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold mt-1">{label}</div>
     </div>
+  );
+}
+
+// Lead reconciliation: Meta-reported leads vs our DB count, last 30 days.
+//
+// Meta typically under-counts (cookie blocking, iOS Mail Privacy Protection,
+// CAPI gaps). DB is ground truth: every form submission lands here directly.
+//
+// Status logic:
+//   - DB count materially LOWER than Meta's by >5%: red. Our database should
+//     never undercount the form. Real system bug.
+//   - Meta count materially LOWER than DB's by >25%: orange. Meta tracking
+//     degraded; CAPI / pixel needs attention.
+//   - Within range: green. Normal.
+//   - No data either side: grey.
+function LeadReconciliationCard({
+  metaReported,
+  dbDistinct,
+  windowStartDate,
+}: {
+  metaReported: number;
+  dbDistinct: number;
+  windowStartDate: string;
+}) {
+  const windowLabel = new Date(windowStartDate + "T00:00:00Z").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  let status: "ok" | "meta_low" | "db_low" | "no_data";
+  let label: string;
+  let detail: string;
+
+  if (metaReported === 0 && dbDistinct === 0) {
+    status = "no_data";
+    label = "No data yet";
+    detail = "Either Meta ingestion hasn't run or no leads in the last 30 days.";
+  } else if (metaReported === 0) {
+    status = "no_data";
+    label = "Awaiting Meta ingestion";
+    detail = `${dbDistinct} DB leads logged. Meta numbers will appear here after the daily ingest runs.`;
+  } else {
+    const dbVsMeta = metaReported > 0 ? (dbDistinct - metaReported) / metaReported : 0;
+    if (dbVsMeta < -0.05) {
+      status = "db_low";
+      label = "System issue, our DB is undercounting";
+      detail = `DB count (${dbDistinct}) is ${Math.abs(Math.round(dbVsMeta * 100))}% below Meta's count (${metaReported}). This should never happen — every form submit lands in our DB directly. Investigate the webhook path.`;
+    } else if (metaReported < dbDistinct * 0.75) {
+      status = "meta_low";
+      label = "Meta tracking degraded";
+      detail = `Meta is reporting ${metaReported} leads, our DB has ${dbDistinct}. Meta normally under-counts by 10-25% (cookie blocking, iOS), but ${Math.round(((dbDistinct - metaReported) / dbDistinct) * 100)}% is high. Check the Meta pixel and CAPI on the funded funnel.`;
+    } else {
+      status = "ok";
+      label = "Aligned";
+      detail = `Within normal range. Meta reports ${metaReported}, our DB has ${dbDistinct} (gap is the expected cookie-blocking shortfall).`;
+    }
+  }
+
+  const cardCls =
+    status === "db_low"
+      ? "border-[#b3412e]/40 bg-[#b3412e]/5"
+      : status === "meta_low"
+        ? "border-[#cd8b76]/40 bg-[#fef9f5]"
+        : status === "ok"
+          ? "border-emerald-200"
+          : "border-[#dad4cb]";
+
+  const badgeCls =
+    status === "db_low"
+      ? "bg-[#b3412e] text-white hover:bg-[#b3412e]"
+      : status === "meta_low"
+        ? "bg-[#cd8b76] text-white hover:bg-[#cd8b76]"
+        : status === "ok"
+          ? "bg-emerald-600 text-white hover:bg-emerald-600"
+          : "bg-[#dad4cb] text-[#11242e] hover:bg-[#dad4cb]";
+
+  return (
+    <Card className={cardCls}>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          Lead reconciliation
+          <Badge className={`text-[10px] ${badgeCls}`}>{label}</Badge>
+        </CardTitle>
+        <p className="text-xs text-[#5a6a72] mt-2">
+          What this measures: every lead in our database (ground truth) should also be visible to Meta&rsquo;s tracking
+          (pixel + CAPI). Meta normally under-counts by 10-25% due to cookie blocking and iOS privacy. The reverse
+          (DB lower than Meta) means our form pipeline is dropping leads, which should never happen. Window: since {windowLabel}.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-3 gap-4 text-xs mb-4">
+          <Metric label="DB leads (truth)" value={dbDistinct} highlight />
+          <Metric label="Meta-reported" value={metaReported} />
+          <Metric label="Difference" value={dbDistinct - metaReported} />
+        </div>
+        <p className="text-xs text-[#11242e]">{detail}</p>
+      </CardContent>
+    </Card>
   );
 }
 

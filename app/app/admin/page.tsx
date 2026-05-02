@@ -155,16 +155,16 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
       supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "enrolled"),
       "status_updated_at",
     ),
-    // Meta ad spend
+    // Meta ad spend (and Meta-reported leads, used for the secondary CPL line).
     days === null
-      ? supabase.schema("ads_switchable").from("meta_daily").select("spend")
-      : supabase.schema("ads_switchable").from("meta_daily").select("spend").gte("date", thisStart!.slice(0, 10)),
+      ? supabase.schema("ads_switchable").from("meta_daily").select("spend, leads")
+      : supabase.schema("ads_switchable").from("meta_daily").select("spend, leads").gte("date", thisStart!.slice(0, 10)),
     days === null
-      ? Promise.resolve({ data: [] as Array<{ spend: number | null }> })
+      ? Promise.resolve({ data: [] as Array<{ spend: number | null; leads: number | null }> })
       : supabase
           .schema("ads_switchable")
           .from("meta_daily")
-          .select("spend")
+          .select("spend, leads")
           .gte("date", lastStart!.slice(0, 10))
           .lt("date", thisStart!.slice(0, 10)),
     // Lifetime: total routed, confirmed enrolments, presumed enrolments
@@ -246,12 +246,16 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
   }
 
   // Meta ad spend
-  const metaSpendThisRows = (metaSpendThisRes.data ?? []) as Array<{ spend: number | null }>;
-  const metaSpendLastRows = (metaSpendLastRes.data ?? []) as Array<{ spend: number | null }>;
+  const metaSpendThisRows = (metaSpendThisRes.data ?? []) as Array<{ spend: number | null; leads: number | null }>;
+  const metaSpendLastRows = (metaSpendLastRes.data ?? []) as Array<{ spend: number | null; leads: number | null }>;
   const metaSpendThis = metaSpendThisRows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
   const metaSpendLast = metaSpendLastRows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
+  const metaLeadsThis = metaSpendThisRows.reduce((s, r) => s + Number(r.leads ?? 0), 0);
   const metaIngestionLive = metaSpendThisRows.length > 0 || metaSpendLastRows.length > 0;
+  // True CPL: Meta spend ÷ qualified leads in our DB.
   const cplThisPeriod = metaIngestionLive && leadsThis > 0 ? metaSpendThis / leadsThis : null;
+  // Meta-reported CPL: what Meta thinks each lead costs (pixel/CAPI count).
+  const metaCplThisPeriod = metaIngestionLive && metaLeadsThis > 0 ? metaSpendThis / metaLeadsThis : null;
   // Profit/loss this period: revenue earned this period (currently null until
   // billable enrolments confirm in-period) minus ad spend this period.
   // Once revenue starts flowing this becomes meaningful per period.
@@ -377,9 +381,15 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
             note={revenueIncomplete ? "Incl. presumed; plus % of CD" : "Incl. presumed enrolments"}
           />
           <MoneyTile
-            label="Cost per lead"
+            label="True CPL"
             value={cplThisPeriod === null ? "—" : gbp(cplThisPeriod)}
-            note={metaIngestionLive ? `Meta spend ÷ leads, ${PERIOD_LABEL[period].toLowerCase()}` : "Awaiting Meta ingestion"}
+            note={
+              !metaIngestionLive
+                ? "Awaiting Meta ingestion"
+                : metaCplThisPeriod === null
+                  ? `Spend ÷ ${leadsThis} DB leads`
+                  : `Meta reports ${gbp(metaCplThisPeriod)} (cookie-blocked)`
+            }
           />
           <MoneyTile
             label="First billable hits"

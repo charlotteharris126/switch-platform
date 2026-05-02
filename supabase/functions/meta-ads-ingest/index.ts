@@ -243,12 +243,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
 function sumActionLeads(actions: Array<{ action_type: string; value: string }> | undefined): number {
   if (!actions) return 0;
-  // Meta exposes lead conversions under several action_type values depending
-  // on event source (pixel, CAPI, on-Facebook lead form). Sum them all.
-  const leadTypes = new Set(["lead", "onsite_conversion.lead", "offsite_conversion.fb_pixel_lead", "leadgen.other"]);
+  // Meta returns both an umbrella `lead` count AND per-source breakdowns
+  // (`offsite_conversion.fb_pixel_lead`, `onsite_conversion.lead`, etc.) for
+  // the same conversion. Summing all action_types = exactly 2x the real
+  // count, since `lead` is the deduped roll-up of the others. Prefer the
+  // umbrella when present; fall back to specific sources only if it isn't.
+  const umbrella = actions.find((a) => a.action_type === "lead");
+  if (umbrella) return Number(umbrella.value) || 0;
+  const specificTypes = new Set([
+    "onsite_conversion.lead",
+    "offsite_conversion.fb_pixel_lead",
+    "leadgen.other",
+  ]);
   let total = 0;
   for (const a of actions) {
-    if (leadTypes.has(a.action_type)) total += Number(a.value) || 0;
+    if (specificTypes.has(a.action_type)) total += Number(a.value) || 0;
   }
   return total;
 }
