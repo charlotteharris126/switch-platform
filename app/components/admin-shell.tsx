@@ -33,6 +33,7 @@ const NAV_SECTIONS: Array<{
       { href: "/experiments", label: "Experiments" },
       { href: "/social/drafts", label: "Social" },
       { href: "/profit", label: "Profit tracker" },
+      { href: "/ads", label: "Ads" },
       { href: "/iris-flags", label: "Iris flags" },
       { href: "/agents", label: "Agents" },
       { href: "/errors", label: "Data health" },
