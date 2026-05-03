@@ -4,6 +4,65 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-02: Migration 0054 — wire referral eligible-flip into enrolment-confirmation paths
+
+**Type:** Function body refresh on two existing crm functions. No new tables, no new columns.
+
+**Status:** Migration written, not yet applied. Apply after 0053 lands.
+
+**Why:** Migration 0053 added `leads.flip_referral_eligible(submission_id)` but nothing in the enrolment-confirmation pipeline calls it. Without 0054, every confirmed enrolment leaves matching referrals stuck in `pending` forever — voucher never fires. 0054 wires both confirmation paths (owner-driven outcome + 14-day auto-flip cron) into the helper.
+
+**Changes:**
+- `crm.upsert_enrolment_outcome` body refreshed: when the new outcome is `enrolled` OR `presumed_enrolled`, fires `leads.flip_referral_eligible(p_submission_id)` after the audit log, before RETURN
+- `crm.run_enrolment_auto_flip` body refreshed: alongside the existing `crm.sync_leads_to_brevo` bulk call, loops over `v_flipped_ids` and fires `leads.flip_referral_eligible` for each. Idempotent (no-op when no pending referral exists)
+
+Both functions remain CREATE OR REPLACE — no signature change, no caller change. Body diff vs migration 0022 (upsert) and migration 0045 (auto-flip) is the new PERFORM calls only.
+
+**Companion Edge Function patch (not in migration):**
+- `netlify-lead-router/index.ts` extended to capture `?ref=` from form payload (hidden field), look up referrer by `referral_code`, run anti-fraud (self-referral by email/phone/address/postcode/LA, duplicate-email already in funnel), and INSERT a `leads.referrals` row in `pending` (or `fraud_rejected` with `fraud_reason`). Runs as `EdgeRuntime.waitUntil` background task per Session 3.3 architecture.
+
+**Open follow-up:**
+- `netlify-leads-reconcile` does NOT yet apply the same referral processing. Reconcile-path leads (rare, fast-path-miss only) lose their referral attribution. Either move the helper to `_shared/referral.ts` and wire reconcile, or document the gap and accept it. Decide before launch.
+- `payout-referral-voucher` Edge Function (separate ticket [869d4vygz](https://app.clickup.com/t/869d4vygz)) reads `eligible` rows and fires Tremendous. Gated on owner Tremendous account + funded balance + API key in Supabase secrets.
+
+**Owner sign-off:** referral programme scope confirmed 2026-05-02 in platform session.
+
+---
+
+## 2026-05-02: Migration 0053 — Switchable referral programme (data model + payout trigger)
+
+**Type:** Schema change. Additive on `leads.submissions`, new table `leads.referrals`, three new functions, one trigger, two RLS policies.
+
+**Status:** Migration written, not yet applied. Pending owner-triggered `/ultrareview` then production apply.
+
+**Why:** Referral programme is the single biggest CPL lever available to Switchable inside SAC Employment constraints. Effective cost-per-referred-enrolment caps at the £50 voucher (vs ~£50-100 paid social per enrolment). Owner-approved 2026-05-02. Email and site sides are gated on this data model landing first.
+
+**Changes:**
+- `leads.submissions` extended: `referral_code` TEXT NOT NULL UNIQUE (8-char Crockford base32, auto-generated via BEFORE INSERT trigger, backfilled for all existing rows), `referrer_lead_id` BIGINT nullable FK self-ref
+- New table `leads.referrals` with status machine (pending → eligible → paid, terminal fraud_rejected). One row per referred lead. Voucher amount stored per-row (default £50 / 5000 pence).
+- Soft cap enforced as `needs_manual_review` flag, not block. 10 successful referrals per 90 days auto-flags for owner review.
+- New functions: `leads.generate_referral_code()`, `leads.set_referral_code_default()` (trigger fn), `leads.flip_referral_eligible(submission_id)` (called from enrolment-confirmation path; idempotent)
+- New RLS policies on `leads.referrals`: `admin_read_referrals`, `admin_update_referrals`. `readonly_analytics` granted SELECT.
+- Schema version bumped: `leads.submissions` rows v1.2 → v1.3.
+
+**Voucher delivery:** Tremendous (B2B payout API). Cleaner setup than Amazon Incentives direct, ~$0.50 per payout fee. Edge Function `payout-referral-voucher` (forthcoming) reads eligible-and-not-flagged rows and fires the API call.
+
+**Anti-fraud (enforced in `netlify-lead-router` Edge Function, not the migration):**
+- Self-referral block: same email/phone/address as referrer
+- Duplicate-email block: friend's email already exists in `leads.submissions`
+- Soft cap: 10 successful referrals per 90 days flags `needs_manual_review`
+
+**Impact assessment:** `platform/docs/impact-assessment-2026-05-02-referrals.md`. Backfill is single UPDATE (volatile `random()` per row, then UNIQUE constraint added). Existing readers unaffected (additive columns). Edge Function changes ship separately.
+
+**Cross-project:**
+- Switchable email (ClickUp 869d4udfg): launch email + voucher fulfilment automation, blocked on this migration
+- Switchable site (ClickUp 869d4udm6): `/refer` page + `?ref=` URL handling on funded + self-funded course finders, blocked on this migration
+- Accounts/legal (Clara): privacy policy paragraph + new T&Cs page + friend-side notice on the qualifying form, separate ticket forthcoming
+
+**Owner sign-off:** Charlotte 2026-05-02 (£50 voucher, switchable.org.uk URLs, soft cap as flag-not-block, Tremendous, automate from day one with backfill campaign).
+
+---
+
 ## 2026-04-30: Switchable `data-complaint-switchable` form added to allowlist
 
 **Type:** New Netlify form name registered for the `/data-complaint/` page on switchable.org.uk.

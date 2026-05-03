@@ -1,105 +1,77 @@
-# Platform Handoff, Session 23, 2026-05-02
+# Platform Handoff, Session 24, 2026-05-03
 
 ## Current state
 
-Big UX session on `/admin/profit`, `/admin/errors`, `/admin/actions`, `/admin/providers/[id]`. Three production deploys + two production migrations. Errors page reframed around "Flag for Claude" (owner cannot fix code-level errors directly, just flags them) with plain-English translations of common technical messages. Action centre gained inline outcome buttons + two new chase sections. Sidebar carries pill badges. Provider page renamed Catch-up to Reporting and gained per-provider Meta spend (proportionally attributed) plus a weekly tracker. A latent bug surfaced and was fixed: `ads_switchable.meta_daily.ctr` was undersized, causing 10 dead-letter rows that have now been cleared. Iris activation brief relayed and same-day actioned by switchable/ads — four of her five P1/P2 automations now active.
+Switchable referral programme platform side built and live. Migration 0053 applied (referral data model: `referral_code` + `referrer_lead_id` on `leads.submissions`, new `leads.referrals` table with state machine, three helper functions, two RLS policies, schema bumped to 1.3 across all rows). `netlify-lead-router` deployed with `?ref=` capture, anti-fraud, and referral-row insert running as a `waitUntil` background task. Migration 0054 (eligible-flip hooks into `crm.upsert_enrolment_outcome` + `crm.run_enrolment_auto_flip`) written and provided as paste-ready SQL — application status uncertain, owner indicated "ok done" but no verification was run before close. Eight new ClickUp tickets opened across two strands (5 for the Iris dashboard build per the consolidated `ads-dashboard-scope.md`, 3 for referral programme follow-ups: Clara legal, Tremendous payout function, Iris's 1g paid-lead audit fix).
 
 ## What was done this session
 
-### Profit tracker (`/admin/profit`)
-- Fixed Custom date crash (`resolveWindow` threw NaN on `period=custom` without dates).
-- Pre-populated Custom date inputs with last-30d defaults.
-- Replaced GET form with client component using `router.push()` plus `export const dynamic = "force-dynamic"`.
-- Added Enrolment rate tile (enrolled / leads as %) and Enrol % tracker column.
-- Tracker section heading reduced to "Tracker, weekly" / "Tracker, monthly" (the windowed suffix was confusing because rows are bucketed).
+### Iris dashboard tickets (consolidated scope)
+- Five new tickets opened against the 5-stage `switchable/ads/docs/ads-dashboard-scope.md` (replaced the deleted `iris-platform-delta.md` and `-delta-2.md`):
+  - [869d4vty3](https://app.clickup.com/t/869d4vty3) Stage 1a, `iris_flags` table
+  - [869d4vtz2](https://app.clickup.com/t/869d4vtz2) Stage 1e, `funding_segment` fix
+  - [869d4vu0h](https://app.clickup.com/t/869d4vu0h) Stage 2, `iris-daily-flags` Edge Function
+  - [869d4vu18](https://app.clickup.com/t/869d4vu18) Stage 3, Action Centre integration
+  - [869d4vu3x](https://app.clickup.com/t/869d4vu3x) Stage 4, `/admin/ads` section
+- Existing tickets 869d4ubwq, 869d4ubxc, 869d4ubxv map to stage 1d, 1b, 1c (left as-is, descriptions still reference deleted `iris-platform-delta.md` — flagged but not patched).
+- Iris's 1g audit (paid-lead count `parent_submission_id IS NULL` filter) ticketed as [869d4vyjv](https://app.clickup.com/t/869d4vyjv) — affects `/admin/profit`, `/admin/errors`, True CPL calcs. Live business defect (CPL artificially low right now).
 
-### Data health (`/admin/errors`)
-- Combined Database recon and Lead recon into one Reconciliation card.
-- Migration 0051 applied via SQL editor: `GRANT UPDATE ON leads.dead_letter` + `admin_update_dead_letter` policy gated on `admin.is_admin()`. Closed the RLS gap that made Mark resolved silently no-op.
-- Hardened `markErrorResolved` and `bulkMarkSourceResolved` with `.select()` to surface 0-rows-updated as explicit error.
-- Added plain-English explanations for 8 previously-unmapped sources (`netlify_forms`, `netlify_audit`, `edge_function_provider_email`, `edge_function_crm_push`, `edge_function_meta_ingest_api/fetch/parse/upsert`). They no longer fall back to the generic "Unknown ingestion error".
-- New `translateError()` helper turns common Postgres / fetch / rate-limit / auth / constraint patterns into plain English in the row itself; the technical message stays beneath in mono for the audit trail.
-- Severity label "Action needed" renamed to "Flag for Claude" with reworded copy throughout. Owner cannot fix code-level errors directly; the action is to flag.
-- `ResolveButton` for fix-severity rows is now a one-click `Flag for Claude` button (red), with optional "add context first" link. The audit note is auto-prefixed with "Flagged for next session" so it's greppable.
-- `BulkResolveButton` gains an `isFlag` prop; appears on every card now (fix and clean/info). Lets owner clear an entire batch in one action.
-- Resolved (recent) capped to past 5 days. Older history stays in the DB.
-- `safeBecause` reassurance line per-source on bulk buttons clarifies why bulk dismissal is safe for clean/info severities.
+### Referral programme — platform build
+- Migration 0053 written, reviewed, patched, and applied via Supabase SQL editor. Verified: 0 missing codes, 0 duplicates, 1 distinct schema_version (1.3), `leads.referrals` table exists.
+- Migration 0054 written, paste-ready SQL provided to owner. Application status not verified before close.
+- `netlify-lead-router/index.ts` extended with `extractRefCode`, `processReferral`, normalisation helpers. Deployed clean (`supabase functions deploy netlify-lead-router --no-verify-jwt`).
+- Anti-fraud rules at submission: self-referral by email / phone / postcode-or-LA, duplicate-email already in funnel (with `parent_submission_id IS NULL` filter to allow legitimate re-applications). Flag for soft cap (10 successful per 90 days) sits in `leads.flip_referral_eligible`, not at insert.
+- `platform/docs/data-architecture.md` updated: leads.submissions block extended, new `leads.referrals` section, header notes 0053 + schema bump.
+- `platform/docs/impact-assessment-2026-05-02-referrals.md` written (Section 8 of data-infrastructure rule).
+- `platform/docs/changelog.md` entries for 0053 and 0054.
+- Two-pass manual review (no `/ultrareview` available) — one agent on SQL safety, one on doc-to-migration alignment. Surfaced 11 drift items + 3 migration blockers, all patched: BEGIN/COMMIT wrap added, defensive backfill loop, full DOWN block with policy/grant/schema_version reverts, schema_version covers all prior versions, constraint rename for accuracy.
 
-### Action centre (`/admin/actions`)
-- Inline `Re-open / Enrolled / Lost` pill buttons on Presumed enrolled rows. Lost expands the four reason pills inline before firing.
-- New section: Needs another chase (status=open AND last_chaser_at < now-5d). One-click Re-chase wired to `crm.fire_provider_chaser`.
-- New section: Cannot reach, no chaser sent (status=cannot_reach AND last_chaser_at IS NULL). One-click Send chaser.
-- Renamed "AI suggestions" to "Awaiting your call".
-- New client components: `inline-outcome-buttons.tsx`, `inline-chaser-button.tsx`.
-
-### Sidebar (`components/admin-shell.tsx` + `app/admin/layout.tsx`)
-- Pill badge appears next to Actions and Data health when count > 0.
-- Counts only sections owner can actually clear: Awaiting your call, Presumed enrolled, Needs another chase, Cannot reach (no chaser sent). Skips Unrouted and Approaching auto-flip.
-
-### Provider reporting (`/admin/providers/[id]/catch-up`)
-- Tab and inline copy renamed Catch-up → Reporting. URL kept as `/catch-up`.
-- New Meta spend section: total Meta spend, attributed to provider, cost per enrolment, attributed CPL. Attribution = total_spend × (provider_leads / all_leads), matching the Profit tracker denominator.
-- New Weekly tracker per provider: leads, enrolled, lost, attributed spend, cost / enrol per ISO week.
-
-### Bug fix: meta_daily.ctr column overflow
-- 10 dead-letter rows surfaced (ids 142-151) all `edge_function_meta_ingest_upsert` with `PostgresError: numeric field overflow`. Root cause: `ctr` was `NUMERIC(6, 5)` in migration 0001 (max 9.99999), but Meta returns CTR as a percentage so any low-impression ad with one click overflows.
-- Migration 0052 written and applied via SQL editor: `ALTER COLUMN ctr TYPE NUMERIC(8, 5)`.
-- The 10 historical dead-letter rows cleared via direct SQL UPDATE (the new bulk-flag UI shipped post-clear; either path works for next time).
-
-### Iris activation
-- Scoped which automations Iris can run today (P1.1 weekly brief, P1.2 fatigue, P2.2 CPL anomaly, P2.3 pixel/CAPI drift) using inline SQL against raw tables.
-- Owner relayed to switchable/ads same-session; ads side activated all four automations on Iris's persona, scheduled the daily 08:30 UTC pass, and updated `agent.md`. P2.1 daily health remains parked on platform's `meta_daily` field delta.
-- ClickUp tickets opened: 869d4ubwq (Ask 3, schema delta), 869d4ubxc (Ask 1, v_ad_to_routed), 869d4ubxv (Ask 2, v_ad_baselines).
-
-### Production deploys
-- `84e0c75` — first batch (profit tracker + data health + action centre + provider reporting).
-- `73b6e60` — second batch (bug fixes + migration 0051).
-- `fcd26ea` — 8 unmapped sources + tracker label v1.
-- `80e7344` — Flag for Claude reframe + translateError + migration 0052 + tracker label v2.
-- `962fb27` — bulk Flag for Claude button + 5-day resolved cap.
-- `de342fd` — handoff (this doc, original write before later commits).
+### Cross-project scope alignment
+- `strategy/docs/referral-programme-scope.md` updated end-to-end: £25 → £50 throughout, two-sided rejected, switchable.careers → switchable.org.uk segmented (`/find-funded-courses/?ref=` for funded, `/find-your-course/?ref=` for self-funded), 10-per-quarter → 10-per-90-days rolling soft cap as flag-not-block, payout cadence flipped from manual fulfilment to Tremendous from launch, Brevo voucher webhook removed (Tremendous handles delivery).
+- Three existing programme tickets prepended with `## SCOPE UPDATE 2026-05-02` blocks correcting £25→£50, two-sided→one-sided framing, Brevo→Tremendous, switchable.careers→switchable.org.uk: parent [869d4ud8t](https://app.clickup.com/t/869d4ud8t), email [869d4udfg](https://app.clickup.com/t/869d4udfg), site [869d4udm6](https://app.clickup.com/t/869d4udm6).
+- Three new programme tickets opened: Clara legal [869d4vyfe](https://app.clickup.com/t/869d4vyfe), Tremendous payout function [869d4vygz](https://app.clickup.com/t/869d4vygz), paid-lead audit [869d4vyjv](https://app.clickup.com/t/869d4vyjv).
 
 ## Next steps
 
-1. **Iris three platform asks** (per `iris-platform-delta.md` sequencing):
-   1. ClickUp 869d4ubwq — confirm Ask 3 first: scope `meta_daily` field delta for `daily_budget` (campaign + adset), `delivery_state` (campaign), `status` (ad), `headline`, `primary_text`. Open question: widen `meta_daily` (per-day, every row repeats config) vs sibling tables (`meta_ads`, `meta_adsets`, `meta_campaigns` refreshed on a separate cadence and joined at view level). Sibling-table approach is cleaner because daily_budget and status aren't per-day metrics.
-   2. ClickUp 869d4ubxc — build view `ads_switchable.v_ad_to_routed`. Closed-loop join of `meta_daily` to `leads.submissions` (via `utm_content` = `ad_id`) to `leads.routing_log`.
-   3. ClickUp 869d4ubxv — build view `ads_switchable.v_ad_baselines`. Per-ad rolling baselines: launch_date, launch_ctr_baseline (first 7 days), rolling_7d_ctr, rolling_7d_cpl, rolling_30d_ctr, current_frequency.
-2. **Sanity-check the post-handoff deploys** (commits `fcd26ea`, `80e7344`, `962fb27`):
-   - `/errors`: every card has a per-source explanation (no "Unknown ingestion error"), Flag-for-Claude one-click works, bulk flag works.
-   - `/profit`: tracker heading reads "Tracker, weekly" / "Tracker, monthly".
-3. **Sidebar urgent-error count** (ClickUp 869d4unth, low priority). Surface fix-severity dead_letter count on Actions page + sidebar badge so owner sees urgent errors alongside other actionable items. Bundle with the next bigger Actions or Data health change rather than its own deploy.
-4. **Migration tracking drift** (ClickUp 869d4uby9). Run `supabase migration repair --status applied 0048 0050 0051 0052` before the next migration push so `supabase db push` works cleanly. Do NOT include 0049 (HubSpot, intentionally remote-pending).
-5. **Update `infrastructure-manifest.md`** with the `meta-ads-ingest-daily` cron row (carry-over from Session 22). Update `secrets-rotation.md` for `META_ACCESS_TOKEN` rotation procedure.
-6. **Document the Exposed Schemas dashboard setting** in `supabase/README.md` (carry-over from Session 22).
-7. **HubSpot two-way** still paused awaiting Ranjit at Courses Direct (per project memory).
+1. **Verify migration 0054 applied.** Run `SELECT pg_get_functiondef('crm.upsert_enrolment_outcome'::regprocedure)` and grep for `flip_referral_eligible`. If missing, paste the 0054 SQL block from session-23-end into the SQL editor.
+2. **Move `processReferral` and helpers to `_shared/referral.ts`, wire into `netlify-leads-reconcile`.** The fast-path coverage is live but reconcile-path leads (rare, fast-path-miss) currently lose referral attribution. ~10 min, single-session fix.
+3. **Build `payout-referral-voucher` Edge Function** ([869d4vygz](https://app.clickup.com/t/869d4vygz)). Hourly cron reads `leads.referrals WHERE voucher_status = 'eligible' AND needs_manual_review = false AND voucher_paid_at IS NULL`, calls Tremendous API, updates row to `paid` with `vendor_payment_id` and `vendor_payload`. Gated on owner Tremendous setup (account + funded balance + `TREMENDOUS_API_KEY` and `TREMENDOUS_PRODUCT_ID_AMAZON_UK` in Supabase secrets).
+4. **Iris dashboard, stage 1a** ([869d4vty3](https://app.clickup.com/t/869d4vty3)). Foundation, unblocks stages 2 and 3. Single migration: `ads_switchable.iris_flags` table + indexes + RLS + new `iris_writer` role. Then 1b, 1c, 1d (existing tickets) can ship as a second migration. 1e (funding_segment) is independent.
+5. **Apply Iris's 1g audit fix** ([869d4vyjv](https://app.clickup.com/t/869d4vyjv)). Add `AND parent_submission_id IS NULL` to every paid-lead count in the dashboard codebase (`/admin/profit`, `/admin/errors`, True CPL calcs). Live business defect — CPL artificially low until fixed.
+6. **Run `supabase migration repair --status applied 0048 0050 0051 0052 0053 0054`** before the next migration push so `supabase db push` works cleanly. Do NOT include 0049 (HubSpot, intentionally remote-pending).
+7. **Update `infrastructure-manifest.md`** with `meta-ads-ingest-daily` cron row (carry-over from Session 22).
+8. **Update `secrets-rotation.md`** for `META_ACCESS_TOKEN`, plus add `TREMENDOUS_API_KEY` once that lands.
+9. **Document Exposed Schemas dashboard setting** in `supabase/README.md` (carry-over from Session 22).
+10. **HubSpot two-way** still paused awaiting Ranjit at Courses Direct (per project memory, no change).
 
 ## Decisions and open questions
 
-**Decisions made:**
-- Flag for Claude framing on fix-severity rows. Reason: owner is non-technical; "Action needed" implied they had to debug Postgres errors. The new framing makes it explicit that Claude handles the code/migration fix and the owner just flags. Bulk button means a batch (e.g. 10 numeric-overflow rows from one root cause) clears in one click.
-- `translateError()` lives in `app/admin/errors/page.tsx` rather than as a shared module. Reason: it's only used in one place today; extract when a second consumer appears.
-- Resolved (recent) capped to past 5 days, not configurable. Reason: long-tail audit history belongs in the DB, not the dashboard.
-- `meta_daily.ctr` widened to `NUMERIC(8, 5)`, not changed to `NUMERIC` (unbounded). Reason: keeping precision tight surfaces obvious-bad data fast (a CTR of 9999 is still wrong, but caught at write time). 8.5 has 999.99999 headroom which is past any plausible real value.
-- Profit tracker tracker label dropped the windowed suffix. Reason: rows are bucketed (week / month) but the heading said "last 30 days", which made owner question whether the bucket label was wrong.
-- Migration 0052 applied via SQL editor, not `supabase db push`. Reason: same CLI tracking drift as 0051 — push would also try 0048-0050 and the intentionally-unapplied 0049.
-- The 10 numeric-overflow rows cleared via direct SQL (`UPDATE leads.dead_letter SET replayed_at = now()...`) rather than waiting for the bulk-flag UI deploy. Reason: faster path, owner had already run other SQL today, and the new bulk button isn't needed until next batch lands.
+**Decisions made this session:**
+- **Voucher amount £50, one-sided to referrer only.** Two-sided £30/£30 split rejected — adds fraud surface and risks attracting voucher-shoppers rather than course-curious leads. Friend's incentive is the funded course itself.
+- **Soft cap 10 successful in 90 days (rolling), enforced as `needs_manual_review` flag, not block.** Genuine super-referrers stay un-blocked; only suspect patterns get gated. Cap evaluated at eligible-flip moment, not at submission.
+- **Tremendous for voucher delivery from launch.** Reasoning: ships in days vs Amazon Incentives Direct (weeks of corporate setup), API-driven, supports UK Amazon vouchers, ~$0.50 per payout fee, recipient picks reward. Brevo's role narrows to lifecycle CTAs only — no voucher delivery via Brevo.
+- **switchable.org.uk segmented URLs.** Funded leads link to `/find-funded-courses/?ref=CODE`; self-funded link to `/find-your-course/?ref=CODE`. Same-segment friends cluster in same eligibility bracket; meaningfully stronger than a generic `/refer` page. `/refer` still built as fallback explainer, not primary CTA destination.
+- **Anti-fraud at form submission only blocks self-referral and duplicate-email.** Soft cap enforced at eligible-flip, not at submission, so the cap window is rolling and accurate at the time the voucher would actually fire.
+- **Crockford base32 (no 0/1/I/L/O) 8-char codes.** ~10^12 codes, no human ambiguity. Auto-generated via BEFORE INSERT trigger; backfilled for all existing rows in 0053.
+- **Migration applied via Supabase SQL editor with explicit BEGIN/COMMIT wrap, not `supabase db push`.** Editor doesn't auto-wrap; the explicit wrap makes partial failure impossible. Same call for 0054.
+- **Vendor field on `leads.referrals` is generic TEXT, not enum.** Tremendous in v1; field stays generic so we can swap to Amazon Incentives or Tango without migration if economics shift.
 
 **Open questions:**
-- Iris Ask 3 sibling-table vs widen-`meta_daily` decision. Sibling table cleaner conceptually (config not per-day metrics), but adds another ingest path to maintain. Decide before building.
-- Profit tracker Custom date now defaults to last-30d when no dates are set — confirm that's the right default.
-- Sidebar badge updates per-navigation, not realtime. Acceptable, or wire to RealtimeRefresh layer next iteration?
-- `translateError()` patterns are based on what's been seen so far. New error patterns will fall through to the generic "Technical error from an external system" line. Decide whether to grow patterns reactively (when owner reports a confusing message) or proactively (bulk-add common Edge Function error shapes).
+- Migration 0054 application status. Owner said "ok done" but verification not run. Step 1 of next steps clears this up.
+- `netlify-leads-reconcile` referral gap — proper fix is to extract helper to `_shared/referral.ts`. Defer or land now? Bias: land now while context is fresh.
+- The complementary "your voucher is on the way" Brevo email (touchpoint 6 in [869d4udfg](https://app.clickup.com/t/869d4udfg)) — useful, or duplicate noise on top of Tremendous's own email? Decide on email build.
+- Three existing Iris stage tickets (869d4ubwq, 869d4ubxc, 869d4ubxv) still reference deleted `iris-platform-delta.md`. Patch with addendum or leave (stage labels in the new doc map cleanly).
 
 ## Watch items
 
-- Daily cron `meta-ads-ingest-daily`. Tomorrow's 08:00 UTC run is the test for migration 0052 — should write the previously-failing high-CTR rows successfully and back-fill the missing days via the rolling 7-day window. Verify next session via `SELECT id, status_code FROM net._http_response ORDER BY created DESC LIMIT 5;` after 08:01 UTC, and check Profit tracker for the 2 May spend numbers landing.
-- Migrations 0051 and 0052 applied via SQL editor; CLI tracking still drifted. Repair next session (ClickUp 869d4uby9).
-- `CLAUDE.md` and `agent.md` still uncommitted on disk per Session 22 — decision deferred again.
-- Latest deploys (`fcd26ea`, `80e7344`, `962fb27`) — confirm they landed and the new errors-page UX behaves as expected.
+- **First production lead with `?ref=`** exercises the new router code end-to-end. No fixture test was run; the deploy itself is "compiles and ships". When the first one lands, verify: `leads.referrals` row exists with correct `referrer_lead_id` and `voucher_status`; `leads.submissions.referrer_lead_id` populated on the new row; logs show the expected `referral: lead=N ref_code=X referrer=M → pending` or `→ fraud_rejected (reason)` line.
+- **Migration 0054 application** — until verified, the eligible-flip is silent. Friends enrolling produce no voucher.
+- **CLI migration tracking** still drifted across 0048, 0050, 0051, 0052, 0053, 0054. Repair before next `supabase db push`.
+- **Tomorrow's 08:00 UTC `meta-ads-ingest-daily` cron** (carryover from Session 23). Migration 0052 widened `meta_daily.ctr` so the previously-failing high-CTR rows should now write cleanly. Verify `SELECT id, status_code FROM net._http_response ORDER BY created DESC LIMIT 5` after 08:01 UTC and check `/admin/profit` for 2-3 May spend numbers.
+- **`platform/CLAUDE.md` and `platform/agent.md` still uncommitted on disk** per Session 22 watch item. Decision deferred again.
 
 ## Next session
 
 - **Folder:** `platform/`
-- **First task:** Iris Ask 3 (ClickUp 869d4ubwq). Decide schema delta shape — widen `meta_daily` vs sibling tables (`meta_ads`, `meta_adsets`, `meta_campaigns`) — and scope the ingest loop. Then build views 1 and 2 (Asks 1 and 2).
-- **Cross-project:** `switchable/ads/` — Iris activation already relayed and actioned same-day in Session 23. No new push this turn. When platform delivers the Iris views and meta_daily delta, return to ads handoff to swap Iris's inline SQL for the views and unblock P2.1 daily health.
+- **First task:** Verify migration 0054 applied (Step 1 above), then move `processReferral` to `_shared/referral.ts` and wire into `netlify-leads-reconcile`. After that, Iris stage 1a if the Tremendous account is still pending; or `payout-referral-voucher` Edge Function if Tremendous is live.
+- **Cross-project:** Three programme tickets pushed to other folders' work surfaces this session (Clara, Mable, switchable email). Pushes added to those projects' handoffs in step 5 of this `/handoff` run.
