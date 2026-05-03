@@ -49,14 +49,17 @@ function formatMetric(automation: string, value: number, threshold: number): str
   return `${value} vs ${threshold}`;
 }
 
-// Compact server-rendered section showing active Iris flags. Used on /admin
-// overview as a top-of-page card. Owner sees the same row count + queue
-// here that they'd see on the full /admin/iris-flags page.
+// Compact server-rendered section showing active ad signals (the iris_flags
+// table internally; surfaced as "Ad signals" in the UI per the brand
+// architecture: Iris is the agent name, not the product surface). Used on
+// /admin overview as a top-of-page card and on /admin/analytics/ads as the
+// embedded signals row. Owner sees the same row count + queue here that
+// they'd see on the full /admin/analytics/signals page.
 //
 // Limit to 5 rows visible by default; "view all" link goes to the full page.
 // Empty state shows the "all clear" message + green dot so a quiet day reads
 // as positive feedback rather than a missing widget.
-export async function IrisFlagsSection({ compact = false }: { compact?: boolean } = {}) {
+export async function AdSignalsSection({ compact = false }: { compact?: boolean } = {}) {
   const supabase = await createClient();
 
   const limit = compact ? 5 : 100;
@@ -79,9 +82,9 @@ export async function IrisFlagsSection({ compact = false }: { compact?: boolean 
     return (
       <section className="bg-white border border-[#dad4cb] rounded-xl p-5 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
         <div className="flex items-baseline gap-3 mb-2">
-          <h2 className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Iris signals</h2>
+          <h2 className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Ad signals</h2>
         </div>
-        <p className="text-xs text-[#b3412e]">Error loading flags: {error.message}</p>
+        <p className="text-xs text-[#b3412e]">Error loading signals: {error.message}</p>
       </section>
     );
   }
@@ -90,7 +93,7 @@ export async function IrisFlagsSection({ compact = false }: { compact?: boolean 
     <section className="bg-white border border-[#dad4cb] rounded-xl p-5 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
       <div className="flex items-baseline justify-between mb-3">
         <div className="flex items-baseline gap-3">
-          <h2 className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Iris signals</h2>
+          <h2 className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Ad signals</h2>
           {totalCount > 0 ? (
             <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FBE5CB] text-[#b3412e]">
               {totalCount} active
@@ -105,7 +108,7 @@ export async function IrisFlagsSection({ compact = false }: { compact?: boolean 
         <div className="flex items-center gap-2">
           {totalCount > 1 ? <ResolveAllButton count={totalCount} /> : null}
           {compact && totalCount > 5 ? (
-            <Link href="/iris-flags" className="text-[11px] text-[#cd8b76] hover:underline">
+            <Link href="/analytics/signals" className="text-[11px] text-[#cd8b76] hover:underline">
               View all →
             </Link>
           ) : null}
@@ -114,7 +117,7 @@ export async function IrisFlagsSection({ compact = false }: { compact?: boolean 
 
       {totalCount === 0 ? (
         <p className="text-xs text-[#5a6a72] italic">
-          No active flags from Iris. Daily check runs at 09:30 BST.
+          No active ad signals. Daily check runs at 09:30 BST.
         </p>
       ) : (
         <div className="space-y-2">

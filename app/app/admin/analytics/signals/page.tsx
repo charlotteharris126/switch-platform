@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { IrisFlagsSection } from "./section";
+import { AdSignalsSection } from "./_components/section";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +53,7 @@ function formatMetric(automation: string, value: number, threshold: number): str
   return `${value} / ${threshold}`;
 }
 
-export default async function IrisFlagsPage() {
+export default async function AdSignalsPage() {
   const supabase = await createClient();
 
   // Recent history: last 30 days, all flags including resolved + suppressed
@@ -89,17 +89,21 @@ export default async function IrisFlagsPage() {
   return (
     <div className="max-w-6xl space-y-8">
       <PageHeader
-        eyebrow="Tools"
-        title="Iris flags"
+        eyebrow="Analytics"
+        title="Ad signals"
         subtitle={
           historyError ? (
             <span className="text-[#b3412e]">Error loading history: {historyError.message}</span>
           ) : (
             <>
-              Daily ads-performance flag history. Iris runs at 09:30 BST and writes to{" "}
-              <code className="text-[11px]">ads_switchable.iris_flags</code>. Active flags also surface on the{" "}
+              Daily ad-performance signal history. The check runs at 09:30 BST. Active signals also
+              surface on the{" "}
               <Link href="/" className="text-[#cd8b76] hover:underline">
                 overview
+              </Link>{" "}
+              and on the{" "}
+              <Link href="/analytics/ads" className="text-[#cd8b76] hover:underline">
+                Ads view
               </Link>
               .
             </>
@@ -108,7 +112,7 @@ export default async function IrisFlagsPage() {
       />
 
       {/* Live active queue, mark-resolved actions live here too */}
-      <IrisFlagsSection compact={false} />
+      <AdSignalsSection compact={false} />
 
       {/* Per-automation summary */}
       <section>

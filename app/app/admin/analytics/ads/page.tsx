@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { IrisFlagsSection } from "../iris-flags/section";
+import { AdSignalsSection } from "../signals/_components/section";
 
 export const dynamic = "force-dynamic";
 
@@ -132,19 +132,18 @@ export default async function AdsPage({ searchParams }: PageProps) {
   else fromISO = new Date(Date.now() - PERIOD_DAYS[period] * 24 * 3600 * 1000).toISOString();
   const fromDate = fromISO.slice(0, 10);
 
-  // SwitchLeads tab: dormant. Bail early with placeholder until ads_switchleads
-  // schema populates (see master plan + scope doc).
+  // SwitchLeads brand: dormant. Bail early with placeholder until
+  // ads_switchleads schema populates. Brand selector lives in the layout.
   if (brand === "switchleads") {
     return (
       <div className="max-w-6xl space-y-6">
         <PageHeader
-          eyebrow="Tools"
-          title="Ads"
-          subtitle="SwitchLeads B2B ads not yet active. Tab placeholder until ads_switchleads schema populates."
+          eyebrow="Analytics"
+          title="Ads — SwitchLeads"
+          subtitle="SwitchLeads B2B ads not yet active. Brand placeholder until ads_switchleads schema populates."
         />
-        <BrandTabs active={brand} />
         <p className="text-xs text-[#5a6a72] italic">
-          When the SwitchLeads ad account ships, this tab will mirror the Switchable view from
+          When the SwitchLeads ad account ships, this view will mirror the Switchable layout from
           ads_switchleads.meta_daily.
         </p>
       </div>
@@ -275,7 +274,7 @@ export default async function AdsPage({ searchParams }: PageProps) {
   return (
     <div className="max-w-6xl space-y-6">
       <PageHeader
-        eyebrow="Tools"
+        eyebrow="Analytics"
         title="Ads"
         subtitle={
           <>
@@ -284,16 +283,15 @@ export default async function AdsPage({ searchParams }: PageProps) {
             <Link href="/profit" className="underline">
               /profit
             </Link>
-            . Iris signals link through to{" "}
-            <Link href="/iris-flags" className="underline">
-              flag history
+            . Ad signals link through to{" "}
+            <Link href="/analytics/signals" className="underline">
+              signal history
             </Link>
             .
           </>
         }
       />
 
-      <BrandTabs active={brand} />
       <FilterBar period={period} brand={brand} funding={funding} />
 
       {/* Headline tiles */}
@@ -305,8 +303,8 @@ export default async function AdsPage({ searchParams }: PageProps) {
         <Tile label="True CPL" value={gbp(headlineCpl)} highlight />
       </div>
 
-      {/* Iris signals card — reuse the same compact section */}
-      <IrisFlagsSection compact />
+      {/* Ad signals card — reuse the same compact section */}
+      <AdSignalsSection compact />
 
       {/* Performance table */}
       <section>
@@ -347,7 +345,7 @@ export default async function AdsPage({ searchParams }: PageProps) {
                     <TableRow key={a.ad_id}>
                       <TableCell className="text-xs max-w-[220px]">
                         <Link
-                          href={`/ads/${a.ad_id}${period === "30d" ? "" : `?period=${period}`}`}
+                          href={`/analytics/ads/${a.ad_id}${period === "30d" ? "" : `?period=${period}`}`}
                           className="font-semibold text-[#11242e] hover:text-[#cd8b76] block truncate"
                           title={a.ad_name ?? ""}
                         >
@@ -398,7 +396,7 @@ export default async function AdsPage({ searchParams }: PageProps) {
                       </TableCell>
                       <TableCell className="text-center">
                         {a.active_signals > 0 ? (
-                          <Link href="/iris-flags" title={`${a.active_signals} active flag(s)`}>
+                          <Link href="/analytics/signals" title={`${a.active_signals} active flag(s)`}>
                             <span className="inline-block w-2 h-2 rounded-full bg-[#cd8b76]" />
                           </Link>
                         ) : (
@@ -445,33 +443,7 @@ function Tile({
   );
 }
 
-function BrandTabs({ active }: { active: Brand }) {
-  return (
-    <div className="flex gap-2">
-      {(["switchable", "switchleads"] as const).map((b) => {
-        const isActive = b === active;
-        const usp = new URLSearchParams();
-        if (b !== "switchable") usp.set("brand", b);
-        const href = usp.toString() ? `/ads?${usp.toString()}` : "/ads";
-        const label = b === "switchable" ? "Switchable" : "SwitchLeads";
-        return (
-          <Link
-            key={b}
-            href={href}
-            className={
-              isActive
-                ? "px-4 py-1.5 text-xs font-bold uppercase tracking-wide rounded-full bg-[#143643] text-white border border-[#143643]"
-                : "px-4 py-1.5 text-xs font-bold uppercase tracking-wide rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#143643]/40"
-            }
-          >
-            {label}
-            {b === "switchleads" ? <span className="ml-2 text-[9px] opacity-60">(no data)</span> : null}
-          </Link>
-        );
-      })}
-    </div>
-  );
-}
+// BrandTabs removed: brand selector now lives in the analytics layout.
 
 function FilterBar({ period, brand, funding }: { period: Period; brand: Brand; funding: FundingFilter }) {
   function buildHref(opts: { period?: Period; funding?: FundingFilter }): string {
@@ -482,7 +454,7 @@ function FilterBar({ period, brand, funding }: { period: Period; brand: Brand; f
     if (p !== "30d") usp.set("period", p);
     if (f !== "all") usp.set("funding", f);
     const qs = usp.toString();
-    return qs ? `/ads?${qs}` : "/ads";
+    return qs ? `/analytics/ads?${qs}` : "/analytics/ads";
   }
 
   const periods: Period[] = ["24h", "7d", "30d", "lifetime"];

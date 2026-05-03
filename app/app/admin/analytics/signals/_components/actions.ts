@@ -8,9 +8,9 @@ export interface ActionResult {
   error?: string;
 }
 
-// Mark an Iris flag as resolved (read by owner). Stamps read_by_owner_at = now().
-// Idempotent: re-resolving an already-resolved flag is a no-op (the WHERE clause
-// filters to read_by_owner_at IS NULL only).
+// Mark an ad signal (iris_flags row) as resolved (read by owner). Stamps
+// read_by_owner_at = now(). Idempotent: re-resolving an already-resolved row
+// is a no-op (the WHERE clause filters to read_by_owner_at IS NULL only).
 export async function markFlagResolved(input: { flagId: number }): Promise<ActionResult> {
   const supabase = await createClient();
 
@@ -26,11 +26,12 @@ export async function markFlagResolved(input: { flagId: number }): Promise<Actio
   }
 
   revalidatePath("/");
-  revalidatePath("/iris-flags");
+  revalidatePath("/analytics/signals");
+  revalidatePath("/analytics/ads");
   return { ok: true };
 }
 
-// Bulk mark all currently-active notified flags as resolved. Used by the
+// Bulk mark all currently-active notified ad signals as resolved. Used by the
 // "Resolve all" action when owner has scanned the queue and decided nothing
 // needs follow-up. Returns the count of rows updated.
 export async function markAllFlagsResolved(): Promise<ActionResult & { count?: number }> {
@@ -49,6 +50,7 @@ export async function markAllFlagsResolved(): Promise<ActionResult & { count?: n
   }
 
   revalidatePath("/");
-  revalidatePath("/iris-flags");
+  revalidatePath("/analytics/signals");
+  revalidatePath("/analytics/ads");
   return { ok: true, count: data?.length ?? 0 };
 }

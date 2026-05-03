@@ -2,7 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
-import { IrisFlagsSection } from "./iris-flags/section";
+import { AdSignalsSection } from "./analytics/signals/_components/section";
 
 interface ProviderBillingRow {
   provider_id: string;
@@ -308,8 +308,8 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
 
       <PeriodPills active={period} />
 
-      {/* Iris signals — top of page so daily flags get max visibility */}
-      <IrisFlagsSection compact />
+      {/* Ad signals — top of page so daily signals get max visibility */}
+      <AdSignalsSection compact />
 
       {/* Section 1: Pace */}
       <section>

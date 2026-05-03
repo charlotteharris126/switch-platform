@@ -224,11 +224,11 @@ export default async function AdDetailPage({ params, searchParams }: PageProps) 
 
   return (
     <div className="max-w-6xl space-y-6">
-      <Link href={`/ads?period=${period}`} className="text-xs text-[#cd8b76] hover:underline inline-block">
-        ← Back to Ads
+      <Link href={`/analytics/ads?period=${period}`} className="text-xs text-[#cd8b76] hover:underline inline-block">
+        ← Back to Ads view
       </Link>
       <PageHeader
-        eyebrow="Ad detail"
+        eyebrow="Analytics · Ads"
         title={adName}
         subtitle={
           <>
@@ -315,13 +315,13 @@ export default async function AdDetailPage({ params, searchParams }: PageProps) 
         </section>
       ) : null}
 
-      {/* Iris flag history for this ad */}
+      {/* Ad signal history for this ad */}
       <section>
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">
-            Iris flag history
+            Ad signal history
           </h2>
-          <Link href="/iris-flags" className="text-[10px] text-[#cd8b76] hover:underline">
+          <Link href="/analytics/signals" className="text-[10px] text-[#cd8b76] hover:underline">
             All flags →
           </Link>
         </div>
@@ -489,7 +489,7 @@ function PeriodPills({ active, ad_id }: { active: Period; ad_id: string }) {
     <div className="flex flex-wrap gap-2">
       {periods.map((p) => {
         const isActive = p === active;
-        const href = p === "30d" ? `/ads/${ad_id}` : `/ads/${ad_id}?period=${p}`;
+        const href = p === "30d" ? `/analytics/ads/${ad_id}` : `/analytics/ads/${ad_id}?period=${p}`;
         return (
           <Link
             key={p}
