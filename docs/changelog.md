@@ -4,6 +4,17 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-03: `/admin/experiments` page live (Switchable A/B test analytics)
+
+- **Type:** New admin route in `platform/app/`. No schema change. Reads `leads.submissions` via the existing supabase-ssr server client.
+- **Change:** New `app/app/admin/experiments/page.tsx` plus an "Experiments" entry in `components/admin-shell.tsx` Tools nav (between Analytics and Social). Pulls every submission with `experiment_id IS NOT NULL` and `parent_submission_id IS NULL`, groups by experiment + variant in JS, renders a section per experiment with submission count, qualified count (DQ-excluded), DQ rate, date range, lift (B vs A) on qualified deltas, and a confidence flag (≥30 qualified per side before reading the lift).
+- **Why:** Closes the loop on the Switchable A/B test infrastructure (sessions 1-5 today). Owner needs a UI to read variant performance without writing SQL. Sits alongside the existing `/admin/analytics` funnel page; doesn't bloat that page with experiment-specific concerns.
+- **Status:** Deployed (commit 0e5459b on switch-platform/main). Empty state until a Switchable page YAML carries an `experiment:` block and starts collecting leads. First reader of the migration 0061 columns.
+- **Related:** Migration 0061 (the columns this page reads), `switchable/site/docs/funded-funnel-architecture.md` (the producer side), commits 4437855 + e8953f3 on switchable-site (Meta dedup fix shipped in same session — separate concern, mentioned for cross-context).
+- **Signed off:** Owner.
+
+---
+
 ## 2026-05-03: Migration 0064 — RLS read policy on iris_flags for readonly_analytics
 
 **Type:** Access policy. New SELECT policy on `ads_switchable.iris_flags` for `readonly_analytics`.
