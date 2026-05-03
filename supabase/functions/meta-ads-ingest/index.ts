@@ -69,6 +69,11 @@ interface InsightsResponse {
   error?: { message: string; type: string; code: number };
 }
 
+// Stage 1d metadata types (AdMeta / AdsResponse / AdSetsResponse) and the
+// fetchAdMeta + fetchAdsetBudgets helpers were removed in the 2026-05-03
+// rollback. Re-add when restoring stage 1d after Business Verification + App
+// Review clear with Meta. See git history for the prior implementation.
+
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
@@ -169,6 +174,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
     url = body.paging?.next;
     pagesFetched += 1;
   }
+
+  // Stage 1d metadata fetches (delivery_state / daily_budget / status / headline /
+  // primary_text from /act_X/ads and /act_X/adsets) ROLLED BACK 2026-05-03 after
+  // they triggered Meta's "API access blocked" gate on the newly-published app.
+  // The /ads endpoint reads creative content which sits at a higher trust tier
+  // than /insights; calling it from a still-being-trusted app refires the
+  // verification cycle. Re-add after Business Verification + App Review clear.
+  // Until then, columns delivery_state / daily_budget / status / headline /
+  // primary_text stay NULL on every meta_daily row, and Iris's P2.1 stays parked.
 
   // Upsert
   let upserted = 0;
