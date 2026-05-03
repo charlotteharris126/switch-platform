@@ -4,6 +4,41 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-03: Migration 0065 — Iris stage 5: ads_switchable.v_ad_to_enrolment view (closed-loop attribution)
+
+**Type:** Schema change. New view extending v_ad_to_routed with enrolment counts + revenue + cost-per-enrolment.
+
+**Status:** Migration written. Not yet applied.
+
+**Why:** Closed-loop attribution. Powers the cost-per-enrolment tile on `/admin/ads` and feeds Iris's planned P3.1 closed-loop CPA flag. View ships now even though `crm.enrolments` is empty at pilot scale; returns zero enrolments per ad until real revenue data lands.
+
+**Changes:**
+- New view `ads_switchable.v_ad_to_enrolment`. Extends `v_ad_to_routed` (per-ad daily spend ↔ leads ↔ routed) with `leads_enrolled` (count of enrolled + presumed_enrolled), `revenue` (SUM of `crm.enrolments.billed_amount`), and `cost_per_enrolment` (spend ÷ enrolled).
+- Schema-spec note: scope doc speculated `invoice_amount_pence` but production column is `crm.enrolments.billed_amount` (NUMERIC, in £). View uses the actual column.
+- Only `enrolled` and `presumed_enrolled` statuses contribute to revenue; `lost / cannot_reach / open` excluded.
+- Grants: SELECT to `authenticated` (dashboard) and `iris_writer` (future Iris P3.1).
+
+**Owner sign-off:** stage 5 scope confirmed in this session.
+
+---
+
+## 2026-05-03: Iris stages 3 + 4a + 4b — dashboard surfaces for the iris_flags table
+
+**Type:** New admin routes. No schema change. All three reuse the same `IrisFlagsSection` component for consistency.
+
+**Status:** Built and committed. Visible after deploy.
+
+**Why:** Stage 2 (iris-daily-flags Edge Function, deployed earlier today) writes flags to `ads_switchable.iris_flags` but had no surface to display them. Stages 3-4 close that loop:
+- **Stage 3 — `/admin/iris-flags`**: full audit history (last 30 days), per-automation summary tiles (active/resolved/suppressed), full table with severity badges, server actions for mark-resolved + bulk resolve-all. Active flags also surface as a top-of-page card on `/admin` overview.
+- **Stage 4a — `/admin/ads`**: per-ad performance dashboard. Period pills (24h/7d/30d/lifetime), brand tabs (Switchable | SwitchLeads dormant), funding-segment filter, 5 headline tiles, embedded Iris signals card, 11-column performance table sorted by qualified leads desc + CPL asc. Signal dots link to /iris-flags.
+- **Stage 4b — `/admin/ads/[ad_id]`**: per-ad drill-down. Lead funnel tiles (delivered → DB total → qualified → routed → enrolled), cost tiles (True CPL, cost per enrolment, revenue, CTR), inline SVG bars chart for daily spend, per-provider breakdown table, this ad's Iris flag history, recent leads list with link-through to /leads/[id].
+
+**Sidebar nav:** Added "Ads" + "Iris flags" under Tools (between Profit tracker and Agents).
+
+**Stage 4b not built (deferred):** Per-ad CPL trend over time as a second axis on the chart (currently spend bars only). Acceptable at pilot scale; revisit if pattern-spotting requires it.
+
+---
+
 ## 2026-05-03: `/admin/experiments` page live (Switchable A/B test analytics)
 
 - **Type:** New admin route in `platform/app/`. No schema change. Reads `leads.submissions` via the existing supabase-ssr server client.

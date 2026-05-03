@@ -346,9 +346,13 @@ export default async function AdsPage({ searchParams }: PageProps) {
                   return (
                     <TableRow key={a.ad_id}>
                       <TableCell className="text-xs max-w-[220px]">
-                        <div className="font-semibold truncate" title={a.ad_name ?? ""}>
+                        <Link
+                          href={`/ads/${a.ad_id}${period === "30d" ? "" : `?period=${period}`}`}
+                          className="font-semibold text-[#11242e] hover:text-[#cd8b76] block truncate"
+                          title={a.ad_name ?? ""}
+                        >
                           {a.ad_name ?? a.ad_id}
-                        </div>
+                        </Link>
                         <div className="text-[10px] text-[#5a6a72] truncate" title={a.campaign_name ?? ""}>
                           {a.campaign_name ?? "—"}
                         </div>
