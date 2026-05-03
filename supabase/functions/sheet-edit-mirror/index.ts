@@ -119,14 +119,14 @@ interface EnrolmentRow {
 }
 
 interface AiSuggestion {
-  implied_status: "contacted" | "enrolled" | "not_enrolled" | "disputed" | null;
+  implied_status: "open" | "enrolled" | "presumed_enrolled" | "cannot_reach" | "lost" | null;
   confidence: "high" | "medium" | "low";
   summary: string;
   rationale: string;
   should_surface: boolean;
 }
 
-const PROMPT_VERSION = "v1";
+const PROMPT_VERSION = "v2";  // 2026-05-03 — aligned to migration 0028 canonical enum (open/enrolled/presumed_enrolled/cannot_reach/lost), removed contacted/not_enrolled/disputed
 
 // ---- Main handler ----
 
@@ -543,25 +543,29 @@ async function callClaude(args: {
 }): Promise<AiSuggestion> {
   const systemPrompt = `You interpret a single freshly-added provider note about a lead in a UK education lead-routing system. Your job is to determine whether the note implies a change to the lead's enrolment status.
 
-Status values you may suggest:
-- "contacted": provider has reached the learner (call, voicemail, text)
-- "enrolled": learner has confirmed enrolment, paperwork signed, course start booked
-- "not_enrolled": learner declined, ineligible, lost, or won't proceed
-- "disputed": data error, provider disputing eligibility, conflict with system record
+The five valid statuses (the only values you may suggest):
+- "open": lead has been routed to the provider but no definitive outcome yet. Contact-only updates ("spoke to her", "left voicemail", "tried to reach") DO NOT change status — the lead stays open until something definitive happens.
+- "enrolled": learner has confirmed enrolment. Paperwork signed, place booked, course start booked. Definitive yes.
+- "presumed_enrolled": provider believes learner has enrolled but cannot fully confirm (e.g. learner started without final sign-off, ILR pending). The system also auto-flips routed-open leads to this status after 14 days; a provider note rarely needs to set it manually.
+- "cannot_reach": multiple contact attempts failed. Phone disconnected, emails bounce, no response after several tries. Use only when the note explicitly says contact has failed repeatedly.
+- "lost": learner has actively declined or is confirmed ineligible. "Not interested", "ineligible", "won't enrol", "decided not to proceed", "wrong fit". Definitive no.
 
 Rules:
-- Default implied_status to null. Only suggest a change if the note CLEARLY implies one.
-- "spoke to her", "called", "left voicemail", "tried to reach" → contacted (only if current status is "open")
-- "enrolled", "starting Monday", "paperwork signed", "course confirmed" → enrolled
-- "not interested", "not eligible", "ineligible", "won't enrol", "declined" → not_enrolled
-- "disputing", "wrong details", "can't verify identity", "data error" → disputed
-- Informational / scheduling / generic ("course starts Monday", "good fit") → null
+- Default implied_status to null. Status changes are the EXCEPTION, not the default. Only suggest one when the note CLEARLY implies a definitive outcome.
+- A provider noting they spoke to / called / messaged the learner is informational. The status stays whatever it currently is. Suggest null.
+- A provider noting future intent ("will enrol next week", "thinking about it") is also informational. Status stays. Suggest null.
+- "enrolled", "starting Monday", "paperwork signed", "course confirmed", "place booked" → enrolled
+- "not interested", "not eligible", "ineligible", "won't enrol", "declined", "wrong fit" → lost
+- "no answer after [N] attempts", "phone dead", "emails bouncing", "tried [3+] times" → cannot_reach
+- "starting [date]" or "ILR pending" without explicit confirmation → presumed_enrolled
+- Disputes are tracked separately on presumed_enrolled rows, not as a status. If the note implies a dispute, suggest null and surface for owner attention.
+- Generic / scheduling / observational ("good fit", "keen", "course starts Monday") → null
 - Never escalate beyond what the note actually says.
 - If unsure, set confidence "low" and surface anyway so the owner decides.
 
 Return STRICT JSON matching this schema, nothing else:
 {
-  "implied_status": "contacted" | "enrolled" | "not_enrolled" | "disputed" | null,
+  "implied_status": "open" | "enrolled" | "presumed_enrolled" | "cannot_reach" | "lost" | null,
   "confidence": "high" | "medium" | "low",
   "summary": string (one short sentence in plain English about what the note says),
   "rationale": string (one short sentence explaining your status pick),
@@ -609,8 +613,9 @@ New update text: ${args.currentNote}`;
     throw new Error(`Claude returned non-JSON: ${content.slice(0, 200)}`);
   }
 
-  // Validate shape
-  const validStatuses = ["contacted", "enrolled", "not_enrolled", "disputed", null];
+  // Validate shape — must match crm.enrolments.status canonical enum
+  // (migration 0028: open / enrolled / presumed_enrolled / cannot_reach / lost).
+  const validStatuses = ["open", "enrolled", "presumed_enrolled", "cannot_reach", "lost", null];
   const validConfidence = ["high", "medium", "low"];
   if (
     !validStatuses.includes(parsed.implied_status as string | null) ||
