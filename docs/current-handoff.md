@@ -1,86 +1,90 @@
-# Platform Handoff, Session 25, 2026-05-03
+# Platform Handoff, Session 26, 2026-05-03
 
 ## Current state
 
-Iris stage 2 is live in production. Six new migrations applied (0055-0060 plus 0063+0064 corrective; Mable's 0061 leads_experiment_columns also landed in parallel), three Edge Functions deployed (router + reconcile patched for shared referral helper, iris-daily-flags new), one new pg_cron schedule. The new ads dashboard's data layer (table + two views + populated funding_segment + new metadata columns) is fully built; the daily flag-computation Edge Function ran clean end-to-end and produced one real P2.3 pixel/CAPI drift flag on first execution. Action Centre integration (stage 3) and `/admin/ads` page (stage 4) are the next builds.
+The full Iris dashboard architecture is built end-to-end. Stage 1 (data layer) shipped this morning. Stages 2 (daily flag-compute Edge Function), 3 (Action Centre surface on /admin overview + full /admin/iris-flags page), 4a (/admin/ads tiles + per-ad performance table), 4b (/admin/ads/[ad_id] drill-down with funnel tiles + cost tiles + spend bars + per-provider breakdown + flag history + recent leads list), and 5 (closed-loop attribution view) all shipped this afternoon. The morning's stage 1d patch was rolled back after triggering Meta's "API access blocked" gate; the columns it would have populated stay NULL until Business Verification clears. Channel B sheet-edit-mirror activation runbook handed to owner; awaiting secrets setup. Mable's form-side pixel/CAPI dedup fix shipped same day, closing the P2.3 drift root cause.
 
 ## What was done this session
 
-### Morning bug fixes
-- 1g paid-lead count audit applied: `parent_submission_id IS NULL` filter added to leads queries on `/admin/profit` (headline + tracker), `/admin/errors` reconciliation card, and `/admin/analytics` blended CPL line (only the metric Iris named as broken). Closes ClickUp 869d4vyjv.
-- Migration 0055 applied: corrected the broken referral hook from Session 24's 0054. 0054 created a dead 3-arg overload of `crm.upsert_enrolment_outcome` while production's 6-arg signature went un-hooked. 0055 dropped the dead overload and refreshed the live 6-arg with the `flip_referral_eligible` hook. Verified via pg_proc query.
+### Iris stage 3 — flag surface
+- New `/admin/iris-flags` page: 30-day audit history + per-automation summary tiles (active/resolved/suppressed) + full table with severity badges + state pills + metric/threshold formatting per automation type.
+- New `IrisFlagsSection` reusable component, surfaced on `/admin` overview as compact top-of-page card (max visibility per the Action-Centre-not-landing concern). Same component used on `/admin/ads`.
+- Server actions: `markFlagResolved` (stamps `read_by_owner_at = now()`) and `markAllFlagsResolved` (bulk clear with confirm pattern).
+- Sidebar nav: "Iris flags" added to Tools section.
 
-### Referral programme follow-on
-- `processReferral` + `extractRefCode` extracted to `_shared/referral.ts`. Wired into both `netlify-lead-router` (fast path) and `netlify-leads-reconcile` (slow path) so back-filled leads get the same anti-fraud + referral-row insert as fast-path leads.
-- `/admin/referrals` page built per Mira's morning re-scope. Three sections (Eligible queue, Manual review queue, Recent paid). Server actions for Mark paid, Approve, Reject. Replaces the dropped Tremendous payout function. Build clean, awaiting first eligible referral to surface real data.
-- Mira's morning decision logged: voucher fulfilment v1 = manual Amazon e-gift cards. Tremendous parked until 20+ refs/month sustained.
+### Iris stage 4a — `/admin/ads` page
+- Period pills (24h / 7d / 30d / lifetime), brand tabs (Switchable | SwitchLeads dormant), funding-segment filter (all / funded / self-funded / loan-funded / other).
+- Five headline tiles: Spend, Leads (Meta), Qualified (DB), Routed, True CPL. All counts use `parent_submission_id IS NULL` for True CPL consistency.
+- Embedded Iris signals card.
+- Per-ad performance table: 11 columns. Sorted qualified-desc then CPL-asc. Signal dots link to /iris-flags. Ad-name cells link through to drill-down.
+- Sidebar nav: "Ads" added to Tools section.
 
-### Cron incident (resolved)
-- Daily 08:00 UTC `meta-ads-ingest-daily` cron had failed with OAuthException code 200 ("API access blocked"). Investigation confirmed token regeneration didn't help. Root cause: Meta App was in Development Mode, triggering recurring owner-re-verify gates that pause API access.
-- Charlotte completed App Settings Basic (Privacy/ToS URLs, app icon, DPO section, Data Use, Data Deletion URL) and **published the app**. Brand-new token then worked: function returned 200 with 9 rows upserted. £49.73 partial-day for 2026-05-02 overwritten with full real spend.
-- ClickUp 869d4xtng tracks the remaining un-publish work (Business Verification, App Review). Step 1 effectively done.
+### Iris stage 4b — `/admin/ads/[ad_id]` drill-down
+- Lead funnel tiles: Spend, Meta leads, DB total, Qualified, Routed, Enrolled. Each with % of prior step.
+- Cost tiles: True CPL (highlighted), cost-per-enrolment, revenue, CTR.
+- Server-rendered SVG bars chart for daily spend (no client deps; date labels every 5th bar; tooltip on hover).
+- Per-provider breakdown table (qualified/routed/enrolled per provider, links through to /providers/[id]).
+- Iris flag history for this ad (active + resolved + suppressed).
+- Recent leads list (last 50, with state badge, routing target, enrolment status link-through).
 
-### Schema housekeeping (carryovers cleared)
-- `infrastructure-manifest.md`: added `meta-ads-ingest` Edge Function row, `meta-ads-ingest-daily` cron row, `iris-daily-flags` Edge Function row, `iris-daily-flags` cron row, `iris_writer` Postgres role row, `META_ACCESS_TOKEN` + `META_AD_ACCOUNT_ID` secret rows.
-- `secrets-rotation.md`: added `META_ACCESS_TOKEN` and `iris_writer` rows. Logged Tremendous-secrets-not-added rationale.
-- `supabase/README.md`: added Exposed Schemas dashboard-step note.
-- `supabase migration repair --status applied 0048 0050 0051 0052 0053 0054 0055` ran clean (Charlotte's terminal).
+### Iris stage 5 — closed-loop attribution
+- Migration 0065 written: new view `ads_switchable.v_ad_to_enrolment` extending `v_ad_to_routed` with `leads_enrolled` (status IN enrolled, presumed_enrolled), `revenue` (SUM `crm.enrolments.billed_amount`), `cost_per_enrolment`. Returns zero per ad until enrolments populate from real revenue.
+- Schema correction: scope doc said `invoice_amount_pence` but production column is `billed_amount` (NUMERIC, £).
 
-### Iris dashboard stage 1 (full schema layer)
-- Migration 0056 applied: `ads_switchable.iris_flags` table + `iris_writer` role + RLS policies + soft CHECK constraints on severity/automation. Initial sequencing bug (CREATE POLICY referenced role before CREATE ROLE) caught and fixed before re-apply.
-- Migration 0057 applied: `ads_switchable.v_ad_to_routed` view (101 rows). All count columns use `parent_submission_id IS NULL` for True CPL consistency.
-- Migration 0058 applied: `ads_switchable.v_ad_baselines` view (23 rows). Three CTEs for launch / 7d / 3d windows.
-- Migration 0059 applied: `funding_segment` backfill + BEFORE INSERT/UPDATE trigger that derives from `campaign_name` (SW-FUND-* → funded, SW-PAID-* → self-funded, SW-LOAN-* → loan-funded). Backfill: 66 funded + 35 self-funded.
-- Migration 0060 applied: 5 new nullable columns on `meta_daily` (`delivery_state`, `daily_budget`, `status`, `headline`, `primary_text`). Existing rows NULL until backfill.
+### Stage 1d patch + rollback
+- Built and shipped patched `meta-ads-ingest` adding two new endpoint calls (`/act_X/ads` for status + creative metadata, `/act_X/adsets` for daily_budget) to populate the five metadata columns on `meta_daily`.
+- Within an hour Meta refired the "API access blocked" verification gate. The newly-published app's low-trust state means added endpoints trip a fresh permission check.
+- Rolled back: function returned to morning's working code path (single `/insights` call). Verified via test SQL: 200 with 9 rows upserted.
+- Stage 1d code preserved in git history for re-apply once Business Verification clears.
 
-### Iris dashboard stage 2 (Edge Function live)
-- `iris-daily-flags` Edge Function written and deployed. Implements all four checks (P1.2 fatigue, P2.1 daily health, P2.2 CPL anomaly, P2.3 pixel/CAPI drift) with 7-day suppression, idempotent same-day re-runs, graceful P2.1 degradation while 1d columns are NULL.
-- Two corrective migrations needed mid-deploy: 0063 (GRANT iris_writer TO postgres WITH SET TRUE INHERIT TRUE — Postgres 16+ split membership flags meant default-grant didn't include SET/INHERIT, blocking SET LOCAL ROLE) and 0064 (RLS read policy for readonly_analytics on iris_flags — agents/MCP couldn't see rows otherwise). Both originally numbered 0061/0062 in this session; renamed to 0063/0064 mid-handoff after discovering Mable's parallel 0061 collision. Plus an in-function rename (`window` is reserved word → `period`) and a JS-ternary-in-SQL fix.
-- Cron `iris-daily-flags` scheduled at `30 8 * * *` UTC via data-ops/012. Job ID 10. Live.
-- First test produced one real P2.3 drift flag (severity red): Meta reported 3 leads vs DB 4 (33% drift) on 2026-05-02; Meta 4 vs DB 6 (50% drift) on 2026-05-01.
+### P2.3 drift signal — investigated and resolved
+- Pulled the actual lead rows for 2026-05-01/02 (10 rows, the count Iris flagged on).
+- Found: `event_id`, `_fbp`, `_fbc` all NULL on every paid lead for the last 14 days (109 rows, zero exceptions). Only `fbclid` (URL param) was captured.
+- Root cause: form's hidden inputs weren't capturing the Meta dedup/identifier fields. CAPI events arrived at Meta with no shared event_id (over-count days from no dedup) and no browser identifier (under-count days from low-confidence drops). Drift bidirectional, range -71% to +33%.
+- Brief written and passed to Mable via owner. Mable shipped fix same day (switchable-site commit 4437855): new `deploy/js/meta-dedup.js` auto-creates and populates the three hidden inputs on every form on every page, both thank-you pages share the same stashed event_id for the pixel call.
 
-### Memory + ticketing
-- Memory saved: `feedback_query_live_pg_proc_before_patching.md` (Session 24's 0054 lesson on querying live function signatures before CREATE OR REPLACE).
-- Memory saved: `feedback_meta_api_settlement_window_overstated.md` (corrected my own incorrect "Meta takes 24-72h to settle" framing — closed-day data is final next morning).
-- ClickUp 869d4xtng created: Meta app un-publish three-stage path. Step 1 effectively done in this session.
+### Channel B activation runbook
+- Verified `sheet-edit-mirror/index.ts` is gated cleanly on `CHANNEL_B_ENABLED` env var, with `ANTHROPIC_API_KEY` and `PENDING_UPDATE_SECRET` checked at use time.
+- Activation steps handed to owner: generate Anthropic API key (with monthly spend cap), generate PENDING_UPDATE_SECRET via openssl, paste both into Supabase secrets, set `CHANNEL_B_ENABLED=true`. Test by editing a provider sheet's `Updates` column.
+
+### Cross-project pushes
+- `switchable/site/docs/current-handoff.md`: original brief for the form fix (now marked done) + Mable's commit reference.
+- `switchable/ads/docs/current-handoff.md`: Iris stage 2 live, P2.3 root cause + fix, recalibration heads-up.
 
 ## Next steps
 
-1. ~~**Investigate the live P2.3 drift signal.**~~ **Done + Mable shipped same day (switchable-site commit 4437855).** Root cause: form's hidden inputs didn't capture `_fbp`, `_fbc`, or `event_id`. Across 109 paid-lead rows over the last 14 days, all three were NULL on every submission. Drift bidirectional, range -71% to +33%. Mable's fix: new `deploy/js/meta-dedup.js` auto-creates and populates the three hidden inputs on every form, both thank-you pages share the same event_id. Fields land in `raw_payload->'data'` (no DB column migration). Watch P2.3 over the next 7 days as post-fix submissions accumulate; should normalise from -71/+33 to single-digit %.
-
-2. ~~**Stage 1d backfill: meta-ads-ingest function patch.**~~ **Attempted then rolled back same session.** I shipped a patch that added `/act_X/ads` and `/act_X/adsets` calls to populate the new metadata columns. Within an hour Meta refired the "API access blocked" verification gate (the new endpoint surface tripped the still-being-trusted app's permission re-check). Function reverted to the morning's working code path. The five new columns (delivery_state, daily_budget, status, headline, primary_text) stay NULL until Business Verification + App Review clear, then re-add the patch with full Meta trust. Stage 1d code preserved in git history (commit `7bc51e1`-area, see meta-ads-ingest/index.ts before the rollback diff). P2.1 daily health check stays parked.
-2. **Stage 1d backfill: meta-ads-ingest function patch.** Patch the function to request `effective_status`, `status` at the insights level + creative endpoint hits per ad for `headline`/`primary_text` + adset/campaign join for `daily_budget`. Then trigger a 30-day re-pull. Until this lands, P2.1 daily health check sits idle. Non-trivial: separate API endpoints, multiple round-trips per ad. Should be its own session focus.
-3. **Iris stage 3: Action Centre integration.** Surface `iris_flags WHERE notified = true AND read_by_owner_at IS NULL` on `/admin/actions` (or wherever owner reviews). Mark-resolved button stamps `read_by_owner_at`. The P2.3 flag from this session would be the first one to display.
-4. **Iris stage 4: `/admin/ads` page.** Largest single chunk (per stage spec). Headline tile row, signals card, performance table per-ad, drill-down side drawer. Reads from `meta_daily`, `v_ad_to_routed`, `v_ad_baselines`, `iris_flags`. Suggested split: 4a (tiles + table) then 4b (drill-down + trend).
-5. **Continue Meta app un-publish work** (ClickUp [869d4xtng](https://app.clickup.com/t/869d4xtng)). Step 2: Business Verification on Switchable Ltd via Business Manager Security Centre (1-3 business days for Meta to process). Step 3: App Review for `ads_management` + `ads_read` Advanced Access (5-10 business days). Owner action.
-6. **Verify tomorrow's 09:30 BST iris-daily-flags cron run.** First scheduled execution. Confirm via `SELECT id, status_code FROM net._http_response ORDER BY created DESC LIMIT 5` after 08:31 UTC.
+1. **Channel B activation** (owner action). Generate Anthropic API key + PENDING_UPDATE_SECRET, paste into Supabase secrets, flip CHANNEL_B_ENABLED=true. Then test by editing a provider sheet Updates column.
+2. **Apply migration 0065** (Iris stage 5 view). Single transaction, no password placeholder. Once applied, /admin/ads cost-per-enrolment tile + drill-down revenue numbers will start showing data when enrolments accumulate.
+3. **Meta Business Verification** (owner action, Meta Business Manager → Security Centre). 1-3 business days for Meta to process. Unblocks re-deploy of stage 1d patch (preserved in git history pre-rollback).
+4. **Meta App Review** for `ads_management` + `ads_read` Advanced Access. After Business Verification. 5-10 business days. ClickUp [869d4xtng](https://app.clickup.com/t/869d4xtng).
+5. **Watch P2.3 over next 7 days** as post-fix submissions accumulate. Drift should normalise from -71/+33 to single-digit %. If it doesn't, fix wasn't sufficient and Stape CAPI dedup config needs investigation.
+6. **Riverside apprenticeship pilot call** (Tue 5 May 14:00, per master plan critical path). If they say yes, apprenticeships data model + routing becomes the next platform priority over stage 1d backfill.
 
 ## Decisions and open questions
 
 **Decisions made this session:**
-- **Voucher fulfilment v1 = manual Amazon e-gift cards.** Mira's morning decision, reverting Session 24's Tremendous-from-launch. Trigger to flip back to Tremendous: 20+ successful referrals/month sustained for 2+ months. Reasoning: strategy unproven, speed-to-launch beats automation, 5-15 vouchers/month manageable manually, lower compliance overhead.
-- **Referral admin surface = dedicated `/admin/referrals` page**, not a section in `/admin/actions`. Reasoning: `/admin/actions` is being redesigned in Iris stage 3; placing referrals there now creates a dependency to unwind. Dedicated page is also more extensible as volume grows.
-- **Weekly digest email for the referral queue: deferred.** Build only if the queue actually drifts. Daily dashboard checks should suffice at pilot volume.
-- **meta-ads-ingest cron stays at 08:00 UTC.** I had wrongly proposed shifting to 14:00 UTC based on overstating the Meta settlement window. Closed-day data is final by next morning (Funnel.io confirms the same pattern). Cancelled the schedule-shift suggestion.
-- **Tremendous secrets NOT added to `secrets-rotation.md`.** Per the manual-fulfilment decision; re-evaluate when the trigger fires.
-- **`platform/CLAUDE.md` + `agent.md` committed to git** at end of session per "single source of truth wins" — drift between disk and git history was the worse option.
+- **Rolled back stage 1d patch.** Adding `/act_X/ads` and `/act_X/adsets` calls to a low-trust Meta app refired the verification gate within an hour. Lesson: don't expand a low-trust Meta app's API surface; saved as feedback memory.
+- **Iris flags surface lives on /admin overview, not /admin/actions.** Owner had said /admin/actions wasn't landing; putting flags there alone would inherit that problem. /admin overview is the daily-glance surface where flags get max visibility. Same component dropped into /admin/ads as well.
+- **Per-ad drill-down at `/admin/ads/[ad_id]` route, not side drawer.** Routes are deep-linkable, no client state, matches existing dashboard pattern. Side drawer would have needed client component + sheet primitive.
+- **Spend trend chart as inline server-rendered SVG**, no chart library added. Sufficient at pilot scale (≤30 days = ≤30 bars). Revisit if multi-axis chart becomes a frequent need.
+- **Cost-per-enrolment tile shipped on /admin/ads/[ad_id] showing "—" until enrolments accumulate.** Better than hiding the tile entirely; surfaces what the metric WILL show once Phase 4 is real.
+- **Migration 0065 ships even though crm.enrolments is empty.** No-op-but-correct. When enrolments land, no further deploy needed.
 
 **Open questions:**
-- ~~**What's causing the 33%/50% pixel/CAPI drift Iris just flagged?**~~ **Resolved same session.** Form was missing `event_id`/`_fbp`/`_fbc` hidden inputs (109 paid leads over 14 days, all NULL). Mable shipped form-side fix same day (switchable-site commit 4437855).
-- **When to schedule Iris stages 3 and 4?** Both are full-session builds. Stage 3 first (Action Centre) gives owner the surface for the existing flags. Stage 4 (`/admin/ads`) gives the bigger review surface but is more work. Suggested order: 3 then 4. Owner decides session-cadence.
+- Will Mable's pixel/CAPI fix fully close the drift, or is there a Stape CAPI dedup config also wrong? Watch over next 7 days.
+- When Business Verification + App Review clear, the rolled-back stage 1d patch needs re-applying. Check git history for the exact diff (rollback commit `ea683b0`).
 
 ## Watch items
 
-- **First scheduled iris-daily-flags cron at 09:30 BST tomorrow** (08:30 UTC 2026-05-04). Verify it ran cleanly. Expected: any in-flight P2.3 flag from today is suppressed by the 7-day rule; new P2.3 should NOT fire because Mable's form-side fix is now flowing event_id/fbp/fbc on every submission. P1.2/P2.2 should also be quiet given current ad volume.
-- ~~**Live P2.3 drift signal**~~ resolved same session via Mable's form fix. Watch the next 7 days of submissions to confirm drift normalises.
-- **Meta App un-Development-Moded but no Business Verification yet.** The recurring "API access blocked" gate is still firing periodically (twice in this session: morning and afternoon). It will keep firing until Business Verification clears (1-3 business days) and then App Review (5-10 business days). Tracked in ClickUp [869d4xtng](https://app.clickup.com/t/869d4xtng). Each gate fire requires Charlotte to log into developers.facebook.com and clear a verification screen. Lead the next session by checking that ticket's status before any work that depends on Meta API.
-- **Stage 1d columns NULL across all rows** until meta-ads-ingest function patch + re-pull lands. P2.1 daily health check sits idle.
-- **CLI migration tracking now includes 0056-0064.** Next `db push` will need `migration repair --status applied 0048 0050 0051 0052 0053 0054 0055 0056 0057 0058 0059 0060 0061 0063 0064` (still excluding 0049 HubSpot). Note 0062 is genuinely missing from production (was never numbered) and 0061 is Mable's leads_experiment_columns; my originally-numbered 0061+0062 became 0063+0064 to resolve the collision. Run before next CLI push.
-- **The deployed `meta-ads-ingest` function is NOT yet patched for stage 1d fields.** Daily cron continues to populate the original column set only. New columns stay NULL.
-- **`platform/agent.md`** committed in this session for the first time. If agent persona needs revision, do it as a deliberate edit, not a re-draft.
+- **Channel B activation pending owner secrets.** Until ANTHROPIC_API_KEY + PENDING_UPDATE_SECRET set + CHANNEL_B_ENABLED=true flipped, sheet-edit-mirror returns "Channel B disabled" on Updates-column edits. No silent failure — function explicitly says it's gated.
+- **Migration 0065 pending application.** v_ad_to_enrolment view doesn't exist in production yet; cost-per-enrolment column on /admin/ads/[ad_id] will show "—" until applied (and even after, until crm.enrolments has rows).
+- **Stage 1d columns NULL across all rows** (delivery_state, daily_budget, status, headline, primary_text). Re-deploy the rolled-back patch when Meta verification clears.
+- **First scheduled iris-daily-flags cron at 09:30 BST tomorrow** (08:30 UTC 2026-05-04). Verify it ran cleanly. Expected: in-flight P2.3 flag from today suppressed by 7-day rule; new P2.3 should be smaller after Mable's fix; P1.2/P2.2 quiet.
+- **Meta App un-Development-Moded but no Business Verification yet.** Recurring "API access blocked" gate keeps firing — twice this session (morning + when stage 1d patch added new endpoints). Each gate fire requires Charlotte to log into developers.facebook.com and clear a verification screen. Will keep happening until Business Verification clears.
+- **CLI migration tracking now includes 0056-0065.** Next `db push` will need `migration repair --status applied 0048 0050 0051 0052 0053 0054 0055 0056 0057 0058 0059 0060 0061 0063 0064 0065` (excluding 0049 HubSpot, no 0062 in production). Run before next CLI push.
 
 ## Next session
 
 - **Folder:** `platform/`
-- **First task:** Wait for Meta Business Verification to clear (1-3 business days after Charlotte submits via Meta Business Manager → Security Centre — see ClickUp 869d4xtng). Once verified, re-deploy the stage 1d patch (the `/act_X/ads` + `/act_X/adsets` fetches I rolled back this session — preserved in git history) and trigger a 30-day re-pull to backfill the five metadata columns. Check ClickUp 869d4xtng for status before sitting down. If Business Verification still pending, lead with stage 3 (Action Centre integration in `/admin/actions` to surface the `iris_flags` rows), which has no Meta dependency.
-- **Cross-project:** This session's outcome pushed to two places: Iris stage 2 live + P2.3 calibration heads-up to `switchable/ads/`, and the P2.3 root cause + form-side fix scope to `switchable/site/` (Mable). Both pushes added in step 5 of `/handoff`.
+- **First task:** Check Channel B activation status. If owner has set up secrets, do a manual sheet-edit test to confirm the AI suggestion email lands. If not yet, defer Channel B and verify the morning's iris-daily-flags cron ran cleanly (check `net._http_response` after 08:31 UTC for a 200 from iris-daily-flags). Then if Business Verification has cleared, re-deploy the rolled-back stage 1d patch (commit `ea683b0`).
+- **Cross-project:** Mable's form fix and the resulting P2.3 normalisation both flagged in `switchable/ads/`; confirm Iris isn't surprised by the changing flag pattern over the next week.
