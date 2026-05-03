@@ -195,6 +195,7 @@ export default async function ProfitPage({
       .select("id, email, submitted_at, primary_routed_to")
       .eq("is_dq", false)
       .is("archived_at", null)
+      .is("parent_submission_id", null)
       .gte("submitted_at", window.fromISO)
       .lte("submitted_at", window.toISO),
   ]);

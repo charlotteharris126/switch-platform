@@ -4,6 +4,215 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-03: Migration 0064 — RLS read policy on iris_flags for readonly_analytics
+
+**Type:** Access policy. New SELECT policy on `ads_switchable.iris_flags` for `readonly_analytics`.
+
+**Status:** Applied 2026-05-03 via SQL editor.
+
+**Why:** Migration 0056 created `iris_flags` with RLS read policies for `authenticated` (dashboard) and `iris_writer` (Edge Function) only. `readonly_analytics` had table SELECT grant via the migration-0001 default-grant inheritance but no RLS read policy, so agents querying via Postgres MCP saw zero rows even though data was present. Per data-infrastructure rule §11 ("Agents can read all tables and views"), this policy closes the gap. Surfaced when the first iris-daily-flags run inserted a flag and the readonly MCP couldn't see it.
+
+---
+
+## 2026-05-03: Migration 0063 — grant SET + INHERIT options on iris_writer to postgres
+
+**Type:** Role-membership grant fix. Originally written as 0061 in this session, renamed to 0063 mid-handoff after discovering Mable's parallel 0061 leads_experiment_columns file collision.
+
+**Status:** Applied 2026-05-03 via SQL editor (one-line GRANT, no transaction wrap needed).
+
+**Why:** Migration 0056 created the `iris_writer` role; the implicit grant of role-membership to the postgres superuser landed with only the admin_option (manage iris_writer's own grants) and not the set_option or inherit_option. Postgres 16+ split role-membership into three flags and the default-grant case lands without SET/INHERIT. The `iris-daily-flags` Edge Function (deployed same session) connects as postgres and tries `SET LOCAL ROLE iris_writer` to write through the scoped role per data-infrastructure rule §11; that call failed with "permission denied to set role iris_writer" until this fix. `functions_writer` already had both options on postgres (verified via pg_auth_members), so this brings iris_writer to parity.
+
+**Process lesson:** When creating a new scoped role in a migration, explicitly `GRANT new_role TO postgres WITH SET TRUE INHERIT TRUE` in the same migration. Defaults are not enough.
+
+---
+
+## 2026-05-03: Migration 0061 — `leads.submissions` experiment_id + experiment_variant
+
+- **Migration:** `0061_leads_experiment_columns.sql`
+- **Change:** Two new nullable TEXT columns on `leads.submissions` (`experiment_id`, `experiment_variant`) plus a partial composite index `leads_submissions_experiment_idx` on (experiment_id, experiment_variant) WHERE experiment_id IS NOT NULL.
+- **Why:** Foundation for site-controlled A/B testing on Switchable funded / self-funded / loan-funded landing pages. Each lead row records which experiment the visitor was part of and which variant they saw, so conversion rate and CPL can be computed per variant. Approach: per-page opt-in via a new `experiment:` block on the page YAML; Edge Function fronts `/funded/*` and rewrites the response to variant B for half the traffic; cookie persists; hidden form inputs carry the cookie value into the submission.
+- **Impact:** Additive only. No existing column changed, no row touched. No reader queries these columns yet — first reader will be the planned `/admin/experiments/` page in `platform/app/`. No payload schema_version bump (additive optional fields per `.claude/rules/schema-versioning.md`).
+- **Status:** Migration applied to production this session (verified via `information_schema.columns` lookup). `_shared/ingest.ts` updated in lockstep — `CanonicalSubmission` interface gains both fields, INSERT column + values lists carry them through, base payload mapping reads `firstString(data["experiment_id"])` / `firstString(data["experiment_variant"])` (empty string normalises to NULL automatically). Function deploy pending end-of-session batch.
+- **Related:** `switchable/site/docs/funded-funnel-architecture.md` (additive payload note + full A/B system spec, updated this session), `switchable/site/deploy/scripts/build-funded-pages.js` (variant build pipeline), `switchable/site/deploy/template/funded-course.html` (two new hidden inputs), `switchable/site/deploy/netlify/edge-functions/variant-router.ts` (new — variant routing), `platform/docs/data-architecture.md` (schema doc updated this session).
+- **Signed off:** Owner (this session).
+
+---
+
+## 2026-05-03: Iris stage 2 — `iris-daily-flags` Edge Function + cron
+
+**Type:** New Edge Function + new pg_cron schedule. No schema changes (table + views from stages 1a-1c are the storage layer).
+
+**Status:** Function code written, cron SQL written. Both pending end-of-session deploy + cron-schedule paste.
+
+**Why:** Implements the four daily flag-only checks per `switchable/ads/docs/iris-automation-spec.md` (P1.2 fatigue, P2.1 daily health, P2.2 CPL anomaly, P2.3 pixel/CAPI drift). Replaces the prior approach where Iris wrote weekly markdown briefs to iCloud (which the owner did not review) with a server-side daily compute that lands flags into `ads_switchable.iris_flags` for surfacing on Action Centre (stage 3) and `/admin/ads` (stage 4).
+
+**Implementation notes:**
+- Auth via `x-audit-key` header sourced from Supabase Vault (`AUDIT_SHARED_SECRET`), same pattern as netlify-leads-reconcile.
+- Reads from `ads_switchable.meta_daily`, `v_ad_to_routed`, `v_ad_baselines`, `leads.submissions`. Writes to `ads_switchable.iris_flags`.
+- INSERT transaction wraps `SET LOCAL ROLE iris_writer` so writes go through the scoped role per data-infrastructure rule §11.
+- 7-day suppression: if a candidate flag matches an existing `(ad_id, automation, brand)` notified=true row from the last 7 days, the new flag is inserted with `notified=false`. Audit row persists; dashboard surfaces only `notified=true`. Same-day re-runs are therefore idempotent.
+- P2.1 graceful-degrades: every per-ad check requires `delivery_state` non-NULL (migration 0060 column). Until the meta-ads-ingest function patch + re-pull populates them, P2.1 finds zero candidates. P1.2, P2.2, P2.3 are unaffected.
+- P2.3 applies the `parent_submission_id IS NULL` filter to DB paid-lead counts (consistent with the morning's `/admin/profit` audit fix per `feedback_paid_lead_count_filter.md`). Without it, P2.3 false-fires on waitlist enrichment days.
+- Cron `iris-daily-flags` at `30 8 * * *` UTC, scheduled via `data-ops/012_iris_daily_flags_cron.sql`.
+
+**Deploy steps (end of session):**
+1. `supabase functions deploy iris-daily-flags --no-verify-jwt`
+2. Smoke test: POST `?date=2026-05-02` against the function URL with the audit key, expect 200 with summary JSON.
+3. Paste `data-ops/012_iris_daily_flags_cron.sql` into the SQL editor, run.
+4. Verify cron row exists via `SELECT jobname, schedule, active FROM public.vw_cron_jobs WHERE jobname = 'iris-daily-flags'`.
+
+**Companion docs:** ClickUp [869d4vu0h](https://app.clickup.com/t/869d4vu0h) tracks this work.
+
+**Open follow-up:**
+- Stage 1d backfill: meta-ads-ingest function patch to start populating `delivery_state`, `daily_budget`, `status`, `headline`, `primary_text` from Meta. Until this lands, P2.1 sits idle. Worth scheduling as the next platform session's lead item.
+
+**Owner sign-off:** stage 2 scope confirmed in this session.
+
+---
+
+## 2026-05-03: Migration 0060 — Iris stage 1d: extend meta_daily with ad metadata columns
+
+**Type:** Schema change. Five new nullable columns on `ads_switchable.meta_daily`. No backfill in this migration — existing rows go to NULL until the function-side update + re-pull lands.
+
+**Status:** Migration written. Not yet applied.
+
+**Why:** The stage 2 `iris-daily-flags` Edge Function P2.1 daily health check needs `delivery_state`, `daily_budget`, and `status` to flag ads stuck in LIMITED delivery or pacing wrong. The stage 4 `/admin/ads` performance table needs `headline` and `primary_text` for the per-ad drill-down preview.
+
+**Changes:**
+- Add `delivery_state TEXT` (Meta effective_status: ACTIVE / INACTIVE / LIMITED / ADSET_PAUSED / CAMPAIGN_PAUSED / etc).
+- Add `daily_budget NUMERIC` (account currency minor units, sourced from adset → campaign hierarchy).
+- Add `status TEXT` (Meta configured ad status — what was set, vs delivery_state which is what's happening).
+- Add `headline TEXT` (creative headline; sourced from Meta creative endpoint, separate API hit per ad).
+- Add `primary_text TEXT` (creative body text, same source as headline).
+- All nullable, no CHECK constraints (Meta value sets evolve; we don't want a new value from Meta to break ingest).
+- COMMENT ON COLUMN for each, documenting source + consumer.
+
+**Follow-ups (separate from this migration):**
+- Patch `meta-ads-ingest/index.ts` to request the new fields from Meta (`effective_status`, `status` at the insights level; separate creative endpoint hit per ad for headline/primary_text; adset/campaign join for daily_budget).
+- Trigger a manual re-pull of the last ~30 days to backfill historical rows.
+- Both bundled into the end-of-session deploy.
+
+**Companion docs:** ClickUp [869d4ubwq](https://app.clickup.com/t/869d4ubwq) tracks this work.
+
+**Owner sign-off:** stage 1d scope confirmed in this session.
+
+---
+
+## 2026-05-03: Migration 0059 — Iris stage 1e: funding_segment backfill + auto-derive trigger
+
+**Type:** Schema change. New trigger function + trigger, plus a one-time UPDATE backfill of existing rows.
+
+**Status:** Migration written. Not yet applied.
+
+**Why:** `ads_switchable.meta_daily.funding_segment` is currently NULL on every row across 101 historical rows (verified via query). Owner needs this populated so `/admin/ads` can filter the performance table by funding segment when stage 4 ships. Single source of truth for the parsing rule lives in the trigger so the Edge Function doesn't need to know it.
+
+**Changes:**
+- New trigger function `ads_switchable.set_funding_segment_from_campaign()`. Maps `SW-FUND-*` → `funded`, `SW-PAID-*` → `self-funded`, `SW-LOAN-*` → `loan-funded` (reserved for future ALL campaigns), anything else → NULL. Unknown patterns degrade gracefully so a future naming-convention break doesn't block ingest.
+- Trigger `trg_meta_daily_funding_segment` fires BEFORE INSERT OR UPDATE OF (campaign_name, funding_segment) — narrow scope, won't fire on unrelated UPDATEs.
+- Backfill UPDATE re-derives every existing row.
+
+**Companion docs:** ClickUp [869d4vtz2](https://app.clickup.com/t/869d4vtz2) tracks this work.
+
+**Owner sign-off:** stage 1e scope confirmed in this session.
+
+---
+
+## 2026-05-03: Migration 0058 — Iris stage 1c: ads_switchable.v_ad_baselines view
+
+**Type:** Schema change. New view, no table changes, no new role.
+
+**Status:** Migration written. Not yet applied.
+
+**Why:** Per-ad rolling baselines (launch CTR, 7-day CTR + CPL, 3-day CTR + frequency) consumed by the future `iris-daily-flags` Edge Function for fatigue (P1.2) and CPL anomaly (P2.2) detection. Computed at view layer so the same baselines are queryable ad-hoc from the dashboard or via Postgres MCP.
+
+**Changes:**
+- New view `ads_switchable.v_ad_baselines`. Three CTEs joined: `launch_window` (first 7 days post-launch CTR baseline + impressions), `rolling_7d` (CTR avg + CPL across yesterday and 6 days prior — excludes today which is partial), `rolling_3d` (CTR avg + frequency across last 3 days including today).
+- Grants: SELECT to `authenticated` (dashboard) and `iris_writer` (stage 2 Edge Function).
+
+**Companion docs:** ClickUp [869d4ubxv](https://app.clickup.com/t/869d4ubxv) tracks this work.
+
+**Owner sign-off:** stage 1c scope confirmed in this session.
+
+---
+
+## 2026-05-03: Migration 0057 — Iris stage 1b: ads_switchable.v_ad_to_routed view
+
+**Type:** Schema change. New view, no table changes, no new role.
+
+**Status:** Migration written. Not yet applied.
+
+**Why:** Per-ad daily join from Meta spend → DB-recorded leads → routed leads. Powers the "leads → qualified → routed" drill-down column on the future `/admin/ads` performance table (stage 4) and feeds stage 2's `iris-daily-flags` Edge Function for the P2.2 CPL anomaly check.
+
+**Changes:**
+- New view `ads_switchable.v_ad_to_routed`. LEFT JOIN from `ads_switchable.meta_daily` to `leads.submissions` on `utm_content = ad_id` and `submitted_at::date = date`. Filters `s.utm_medium = 'paid'` so organic submissions don't pollute per-ad counts.
+- Aggregate columns: `leads_db_total`, `leads_qualified`, `leads_routed`, `cost_per_routed_lead`. All counts apply `parent_submission_id IS NULL` to exclude children that carry parent UTMs but don't represent novel paid conversions (consistent with this morning's `/admin/profit` and `/admin/errors` audit fix per `feedback_paid_lead_count_filter.md`).
+- Grants: SELECT to `authenticated` (dashboard) and `iris_writer` (stage 2 Edge Function).
+
+**Companion docs:** ClickUp [869d4ubxc](https://app.clickup.com/t/869d4ubxc) tracks this work.
+
+**Owner sign-off:** stage 1b scope confirmed in this session.
+
+---
+
+## 2026-05-03: Migration 0056 — Iris stage 1a: ads_switchable.iris_flags table + iris_writer role
+
+**Type:** Schema change. New table, two indexes, three RLS policies, one new role with scoped grants. No changes to existing tables.
+
+**Status:** Migration written. Not yet applied. Requires owner to replace `<PASSWORD_IRIS_WRITER>` placeholder with `openssl rand -base64 32` output before pasting into the SQL editor, then log the password in LastPass + add a row to `secrets-rotation.md` after apply.
+
+**Why:** Foundation table for the new ads dashboard architecture (Iris-as-source-of-truth, dashboard-as-review-surface). Replaces the prior approach where Iris wrote weekly markdown briefs to iCloud — owner doesn't read those day-to-day. The new pattern: Edge Function `iris-daily-flags` (stage 2, not yet built) writes flags to this table; Action Centre (stage 3) and `/admin/ads` Signals card (stage 4) read from it. Stage 1a is the foundation that unblocks everything else.
+
+**Changes:**
+- New table `ads_switchable.iris_flags` with the 17 columns from the consolidated scope (`switchable/ads/docs/ads-dashboard-scope.md` stage 1a). Schema_version v1.0.
+- Soft CHECK constraints on `severity` (must be `amber` or `red`) and `automation` (must be one of `P1.2`, `P2.1`, `P2.2`, `P2.3`). Defends against direct SQL writes; the Edge Function will be the canonical writer and constrains values upstream.
+- Index on `(brand, ad_id, automation, flagged_at)` for per-ad drill-down + per-automation history queries.
+- Partial index on `(notified, read_by_owner_at) WHERE notified = true AND read_by_owner_at IS NULL` — small index serving the Action Centre's "open flags" query.
+- RLS enabled. Three policies: `admin_read_iris_flags` (SELECT for `authenticated`), `admin_update_iris_flags` (UPDATE for `authenticated` — for owner clearing flags via dashboard), `iris_writer_insert_iris_flags` (INSERT for the new `iris_writer` role only).
+- New `iris_writer` Postgres role per data-infrastructure rule §11. Grants: USAGE on `ads_switchable` + `leads` schemas, INSERT + sequence access on `iris_flags`, SELECT on `meta_daily` + `leads.submissions` + `leads.routing_log` (the source tables stage 2's flag-computation queries need). Stages 1b (`v_ad_to_routed`) and 1c (`v_ad_baselines`) will add their own SELECT grants for those views in their migrations — granting up-front would error.
+- Dashboard reader (`authenticated`) gets SELECT + UPDATE on the table. USAGE on schema already granted in migration 0050.
+
+**Companion docs:**
+- `platform/docs/data-architecture.md` updated header.
+- ClickUp [869d4vty3](https://app.clickup.com/t/869d4vty3) tracks this work; will be marked complete after apply.
+
+**Open follow-up:**
+- Stage 1b (`v_ad_to_routed` view) ticket [869d4ubxc](https://app.clickup.com/t/869d4ubxc).
+- Stage 1c (`v_ad_baselines` view) ticket [869d4ubxv](https://app.clickup.com/t/869d4ubxv).
+- Stage 1d (extend `meta_daily` columns) ticket [869d4ubwq](https://app.clickup.com/t/869d4ubwq).
+- Stage 1e (`funding_segment` fix) ticket [869d4vtz2](https://app.clickup.com/t/869d4vtz2).
+- After 1a-1e land, stage 2 (Edge Function) ticket [869d4vu0h](https://app.clickup.com/t/869d4vu0h).
+- After apply: log `iris_writer` password in `secrets-rotation.md` (annual rotation cadence per default), and update `infrastructure-manifest.md` Postgres roles table.
+
+**Owner sign-off:** stage 1a scope confirmed in this session.
+
+---
+
+## 2026-05-03: Migration 0055 — fix referral eligible-flip hook on the live 6-arg upsert
+
+**Type:** Function body correction. Drops one dead overload, refreshes one live function. No new tables, no new columns.
+
+**Status:** Applied 2026-05-03 via Supabase SQL editor. Verified: one row returned for `crm.upsert_enrolment_outcome` (the 6-arg signature), `hook_present = true`. Dead 3-arg overload no longer exists.
+
+**Why:** Verification of migration 0054 the morning after Session 24 close found the hook only half-live. `crm.run_enrolment_auto_flip` was patched correctly (cron path fires the helper). `crm.upsert_enrolment_outcome` was NOT patched correctly: 0054 wrote against the 3-arg signature from migration 0022, but migration 0028 had since replaced that with a 6-arg signature. Postgres treated 0054's body as a separate overload, leaving the production 6-arg version (the one called from `app/admin/leads/[id]/actions.ts` and `bulk-actions.ts`) unhooked. Net effect: any enrolment marked through the admin UI before the 14-day cron promoted it would silently leave the matching referral stuck in `pending`.
+
+**Changes:**
+- DROP `crm.upsert_enrolment_outcome(BIGINT, TEXT, TEXT)` — the dead 3-arg overload introduced by 0054. Nothing in the codebase calls it.
+- CREATE OR REPLACE `crm.upsert_enrolment_outcome(BIGINT, TEXT, TEXT, TEXT, BOOLEAN, TEXT)` — body byte-identical to migration 0028 plus the same `IF p_status IN ('enrolled', 'presumed_enrolled') THEN PERFORM leads.flip_referral_eligible(...);` block 0054 used, inserted between the audit log call and RETURN.
+- COMMENT refreshed on the 6-arg version.
+- REVOKE/GRANT statements re-stated to preserve `authenticated` execute access.
+
+`crm.run_enrolment_auto_flip` is left untouched — 0054 patched it correctly.
+
+**Verification:** after apply, run `SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname='upsert_enrolment_outcome' AND pg_get_function_identity_arguments(oid) LIKE '%BOOLEAN%';` and grep the result for `flip_referral_eligible`. Hook should appear once. The 3-arg signature should no longer exist (`pg_proc` query for `proname='upsert_enrolment_outcome'` returns one row, not two).
+
+**Process lesson:** Session 24's two-pass review compared the 0054 doc claim against migration 0022's source. It did not query the live function signature. When patching a function known to have been refactored, query `pg_proc` for the current signature first. Saving as a feedback memory.
+
+**Open follow-up:** Migration 0054 itself stays in the file system as a record of the original (broken) attempt — convention is never to edit past migrations. 0055 is the forward correction. Both files describe the same intent.
+
+**Owner sign-off:** corrective migration confirmed 2026-05-03 in platform session.
+
+---
+
 ## 2026-05-02: Migration 0054 — wire referral eligible-flip into enrolment-confirmation paths
 
 **Type:** Function body refresh on two existing crm functions. No new tables, no new columns.
@@ -1198,7 +1407,7 @@ Two items surfaced during the Session 5 review that belong in a future switchabl
 
 **What changed:**
 
-- **Lucy Hizmo (id 25):** `primary_routed_to` = `enterprise-made-simple`, `routed_at` = `2026-04-20 08:31:14 UTC` (submitted_at + 5 min as proxy - owner confirmed manual-email routing but could not recall exact time). Inserted matching `routing_log` row (`delivery_method='manual_email'`, `delivery_status='sent'`). 14-day presumed-enrolment clock now starts from 2026-04-20 08:31 UTC → auto-flip window 2026-05-04.
+- **Lucy Hizmo (id 25):** `primary_routed_to` = `enterprise-made-simple`, `routed_at` = `2026-04-20 08:31:14 UTC` (submitted_at + 5 min as proxy - owner confirmed manual-email routing but could not recall exact time). Inserted matching `routing_log` row (`delivery_method='manual_email'`, `delivery_status='sent'`). 14-day presumed-enrolment clock now starts from 2026-04-20 08:31 UTC → auto-flip window 2026-05-03.
 - **id 28, id 37:** retroactively set `is_dq=true`, `dq_reason='owner_test_submission'`, `provider_ids='{}'`, `archived_at=now()`. Both were owner GTM/form tests that predated the `OWNER_TEST_EMAILS` filter.
 
 **Why this was needed:** Lucy had already been routed to EMS via an out-of-band path (per owner). DB divergence would have meant Sasha's weekly scan flagged her as un-routed and the enrolment-3 clock never fired. id 28/37 were polluting the active-lead view.

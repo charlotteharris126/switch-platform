@@ -81,6 +81,15 @@ export interface CanonicalSubmission {
   is_dq: boolean;
   dq_reason: string | null;
   session_id: string | null;
+
+  // A/B experiment attribution (platform migration 0061). Set when the
+  // submission came from a page running an experiment; both NULL otherwise.
+  // Variant is "a" (canonical / control) or "b" (challenger). Populated from
+  // the form's hidden inputs which are baked in per-variant at site build
+  // time. See switchable/site/docs/funded-funnel-architecture.md.
+  experiment_id: string | null;
+  experiment_variant: string | null;
+
   raw_payload: JsonValue;
   archived_at: string | null;
 }
@@ -236,7 +245,9 @@ export async function insertSubmission(
         postcode, region, reason, interest, situation, qualification,
         start_when, budget, courses_selected,
         terms_accepted, marketing_opt_in,
-        is_dq, dq_reason, session_id, raw_payload, archived_at,
+        is_dq, dq_reason, session_id,
+        experiment_id, experiment_variant,
+        raw_payload, archived_at,
         parent_submission_id
       ) VALUES (
         ${row.schema_version}, ${row.submitted_at}, ${row.page_url}, ${row.course_id}, ${row.provider_ids},
@@ -250,7 +261,9 @@ export async function insertSubmission(
         ${row.postcode}, ${row.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
         ${row.terms_accepted}, ${row.marketing_opt_in},
-        ${row.is_dq}, ${row.dq_reason}, ${row.session_id}, ${trx.json(row.raw_payload)}, ${row.archived_at},
+        ${row.is_dq}, ${row.dq_reason}, ${row.session_id},
+        ${row.experiment_id}, ${row.experiment_variant},
+        ${trx.json(row.raw_payload)}, ${row.archived_at},
         ${parentSubmissionId}
       )
       ON CONFLICT ((raw_payload->>'id')) WHERE raw_payload->>'id' IS NOT NULL DO NOTHING
@@ -419,6 +432,14 @@ function normalise(
     is_dq: clientSaysDq,
     dq_reason: dqReason,
     session_id: parseSessionId(data["session_id"]),
+
+    // Experiment attribution fields. Empty hidden inputs (the default for
+    // pages with no live experiment) come through as empty strings;
+    // firstString returns null for empty/whitespace values, which is the
+    // correct shape for the nullable DB columns.
+    experiment_id: firstString(data["experiment_id"]),
+    experiment_variant: firstString(data["experiment_variant"]),
+
     raw_payload: rawPayload,
     archived_at: null,
   };

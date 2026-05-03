@@ -183,6 +183,10 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   const totalDQ = subs.filter((s) => s.is_dq).length;
   const totalRouted = subs.filter((s) => s.primary_routed_to).length;
   const totalEnrolled = subs.filter((s) => enrolledSubIds.has(s.id)).length;
+  // Fresh leads only (no waitlist enrichment / re-submission children).
+  // Used for the blended CPL denominator below — children carry parent UTMs
+  // but never fired a Meta pixel conversion, so including them depresses CPL.
+  const freshLeads = subs.filter((s) => s.parent_submission_id === null).length;
   const totalUniquePeople = peopleSubs.length;
   const totalUniqueDQ = peopleSubs.filter((s) => s.is_dq).length;
 
@@ -415,7 +419,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
         )}
         {totalAdSpend > 0 && (
           <p className="text-[10px] text-[#5a6a72] mt-2 italic">
-            Blended CPL across all sources for {PERIOD_LABEL[period].toLowerCase()}: {gbp(totalLeads > 0 ? totalAdSpend / totalLeads : null)}.
+            Blended CPL across all sources for {PERIOD_LABEL[period].toLowerCase()}: {gbp(freshLeads > 0 ? totalAdSpend / freshLeads : null)}.
           </p>
         )}
       </Section>

@@ -23,8 +23,20 @@ Live from 2026-04-18.
 | Region | `eu-west-1` (West EU / Ireland) |
 | Postgres version | 15+ (Supabase default as of 2026-04-18) |
 | Pricing tier | Free |
-| Data API | **Disabled** — we use direct Postgres only (see `platform/docs/data-architecture.md`) |
+| Data API | Enabled (used by the Next.js admin app via `supabase-js`). See "Exposed Schemas" note below. |
 | Automatic RLS on public schema | Enabled (belt-and-braces; migration 0001 enables explicitly on every table too) |
+
+### Exposed Schemas (Data API setting)
+
+The Supabase Data API only sees schemas added to **Project Settings → Data API → Exposed schemas**. By default only `public` is exposed. Every non-public schema we want `supabase-js` to query (`leads`, `crm`, `ads_switchable`, etc.) must be added explicitly. After any migration that creates a new top-level schema:
+
+1. Open Supabase dashboard → Project Settings → Data API
+2. Add the new schema name to the "Exposed schemas" comma-separated list
+3. Save
+
+Without this, calls like `supabase.schema("leads").from("submissions")` return `Invalid schema: leads` even though the role has SELECT permission. This is a manual UI step (no SQL equivalent), so it sits outside the migration file and gets missed easily — flag it in the changelog entry for any schema-creating migration.
+
+Currently exposed: `public`, `leads`, `crm`, `ads_switchable`. Add `ads_switchleads` when the SwitchLeads B2B ad ingest activates (per `platform/docs/data-architecture.md`).
 
 ## Credentials (where they live)
 

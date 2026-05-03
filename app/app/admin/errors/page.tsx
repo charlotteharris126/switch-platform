@@ -315,13 +315,15 @@ export default async function ErrorsPage() {
       .select("leads")
       .gte("date", reconcileCutoffDate),
     // DB qualified leads (last 30 days). Distinct emails to match the
-    // de-duped count we use elsewhere.
+    // de-duped count we use elsewhere. parent_submission_id IS NULL excludes
+    // children that carry parent UTMs but never fired a Meta pixel conversion.
     supabase
       .schema("leads")
       .from("submissions")
       .select("email")
       .eq("is_dq", false)
       .is("archived_at", null)
+      .is("parent_submission_id", null)
       .gte("submitted_at", reconcileCutoffISO),
   ]);
 

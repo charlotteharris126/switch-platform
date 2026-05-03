@@ -40,6 +40,7 @@
 import postgres from "npm:postgres@3";
 import { insertSubmission, type JsonValue, normaliseAndOverride } from "../_shared/ingest.ts";
 import { sendBrevoEmail } from "../_shared/brevo.ts";
+import { extractRefCode, processReferral } from "../_shared/referral.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 const NETLIFY_API_TOKEN = Deno.env.get("NETLIFY_API_TOKEN");
@@ -174,6 +175,24 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
 
       await writeBackfillDeadLetter(result.id, sub.id, formName);
+
+      // Mirror the router's referral processing so back-filled leads get the
+      // same anti-fraud + leads.referrals row as fast-path leads. Inline-await
+      // is fine here: this function runs on an hourly cron, not a user-facing
+      // request, so latency from the lookup + transaction doesn't matter.
+      // Errors are logged and swallowed so a referral failure can't abort the
+      // remainder of the back-fill batch.
+      const refCode = extractRefCode(sub as Record<string, JsonValue>);
+      if (refCode) {
+        try {
+          await processReferral(sql, result.id, refCode, row);
+        } catch (err) {
+          console.error(
+            `referral processing failed for back-filled lead ${result.id}:`,
+            describeError(err),
+          );
+        }
+      }
     } catch (err) {
       console.error(`reconcile insert failed for ${sub.id}:`, describeError(err));
       errors.push({ netlify_id: sub.id, error: describeError(err) });

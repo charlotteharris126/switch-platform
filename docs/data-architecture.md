@@ -1,7 +1,11 @@
 # Data Architecture - Switchable Ltd
 
 **Status:** Live in production. Pilot schemas implemented; Sessions 3 and 3.3 operational. Session 5 (2026-04-21 evening) extends `leads.submissions` for multi-provider self-funded routing and adds `crm.providers.cc_emails`.
-**Last updated:** 2026-05-02 - migration 0053 written (referral programme): `leads.submissions` extended with `referral_code` (8-char Crockford base32, unique, auto-generated, backfilled) and `referrer_lead_id` (FK self-ref). New table `leads.referrals` with status machine (pending → eligible → paid, plus terminal fraud_rejected). `leads.flip_referral_eligible(submission_id)` helper for the enrolment-confirmation hook. Soft cap of 10 successful referrals per 90 days flagged via `needs_manual_review`, not blocked. Schema_version bumped 1.2 → 1.3 on `leads.submissions`. See `platform/docs/impact-assessment-2026-05-02-referrals.md` and `strategy/docs/referral-programme-scope.md`.
+**Last updated:** 2026-05-03 - Iris stages 1a-1e + stage 2 shipped. Migrations 0056-0060 + 0063 + 0064 applied. 0056 adds table `ads_switchable.iris_flags` + `iris_writer` Postgres role + RLS policies. 0057 adds view `ads_switchable.v_ad_to_routed` (per-ad spend↔leads↔routed join, parent_submission_id IS NULL applied throughout for True CPL consistency). 0058 adds view `ads_switchable.v_ad_baselines` (per-ad rolling baselines for fatigue + CPL anomaly detection). 0059 backfills funding_segment + adds BEFORE INSERT/UPDATE trigger on meta_daily to derive funding_segment from campaign_name (66 funded + 35 self-funded). 0060 extends meta_daily with delivery_state / daily_budget / status / headline / primary_text columns (NULL until re-pull after meta-ads-ingest function patch lands). 0063 grants iris_writer to postgres WITH SET TRUE INHERIT TRUE (Postgres-16 role-membership flags fix). 0064 adds RLS read policy on iris_flags for readonly_analytics. All views grant SELECT to `authenticated` + `iris_writer`. Stage 2 (`iris-daily-flags` Edge Function) live, runs daily 09:30 BST. (Note: Mable's parallel 0061 leads_experiment_columns landed same day; my originally-numbered 0061+0062 were renamed to 0063+0064 to resolve the file collision.)
+
+**Previously:** 2026-05-03 - migration 0055 applied (referral hook fix): `crm.upsert_enrolment_outcome` 6-arg signature (the live one called from the admin UI) now fires `leads.flip_referral_eligible(p_submission_id)` when status is enrolled or presumed_enrolled. Migration 0054 had targeted the wrong signature; 0055 corrects. `crm.run_enrolment_auto_flip` (cron path) was correctly hooked by 0054 and is unchanged. See changelog 2026-05-03 entry.
+
+**Previously:** 2026-05-02 - migration 0053 written (referral programme): `leads.submissions` extended with `referral_code` (8-char Crockford base32, unique, auto-generated, backfilled) and `referrer_lead_id` (FK self-ref). New table `leads.referrals` with status machine (pending → eligible → paid, plus terminal fraud_rejected). `leads.flip_referral_eligible(submission_id)` helper for the enrolment-confirmation hook. Soft cap of 10 successful referrals per 90 days flagged via `needs_manual_review`, not blocked. Schema_version bumped 1.2 → 1.3 on `leads.submissions`. See `platform/docs/impact-assessment-2026-05-02-referrals.md` and `strategy/docs/referral-programme-scope.md`.
 
 **Previously:** 2026-04-29 - migration 0041 applied: cohort-aware intake fields on `leads.submissions` (`preferred_intake_id`, `acceptable_intake_ids`) live, captured by `_shared/ingest.ts`, surfaced to provider sheets via `_shared/route-lead.ts`. Lead payload schema bumped 1.0 → 1.2 at the form. **Still planned (not yet applied):** `leads.routing_log.confirmed_intake_id` (only needed when owner overrides learner's pick at confirm time — no surface for that yet) and `crm.enrolments.intake_id` (only needed for per-cohort enrolment reporting). `can_start_on_intake_date` retained for one transition cycle.
 **Previous:** 2026-04-21 (Session 5 - self-funded canonical columns + cc_emails)
@@ -289,6 +293,14 @@ CREATE TABLE leads.submissions (
   referral_code              TEXT NOT NULL, -- 8-char Crockford base32, unique
   referrer_lead_id           BIGINT REFERENCES leads.submissions(id) ON DELETE SET NULL,
 
+  -- A/B experiment attribution (added in migration 0061). Both NULL when the
+  -- page had no live experiment at submission time, which is the default for
+  -- the vast majority of submissions. Populated from a sticky cookie set by
+  -- the variant-routing Edge Function and carried into the form as hidden
+  -- inputs. experiment_variant is "a" (canonical / control) or "b" (challenger).
+  experiment_id              TEXT,
+  experiment_variant         TEXT,
+
   -- Audit
   raw_payload                JSONB NOT NULL,
   archived_at                TIMESTAMPTZ,
@@ -307,6 +319,13 @@ CREATE INDEX ON leads.submissions (session_id) WHERE session_id IS NOT NULL;
 -- Referral programme indexes (migration 0053)
 CREATE UNIQUE INDEX leads_submissions_referral_code_uniq ON leads.submissions (referral_code);
 CREATE INDEX leads_submissions_referrer_lead_id_idx ON leads.submissions (referrer_lead_id) WHERE referrer_lead_id IS NOT NULL;
+
+-- A/B experiment attribution index (migration 0061). Partial — only rows in a
+-- running experiment. Composite supports the analytics page's "leads per
+-- variant within experiment X" query as an index-only scan.
+CREATE INDEX leads_submissions_experiment_idx
+  ON leads.submissions (experiment_id, experiment_variant)
+  WHERE experiment_id IS NOT NULL;
 
 -- Session 3.3 (migration 0010): partial unique index on Netlify's submission id
 -- Enforces idempotency for netlify-leads-reconcile back-fills against the webhook
