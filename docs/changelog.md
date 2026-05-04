@@ -4,11 +4,26 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-04: Migration 0069 — INSERT RLS policy for functions_writer on page_views
+
+**Type:** Schema change. New RLS policy.
+
+**Status:** Applied via SQL editor (same session as 0068).
+
+**Why:** Migration 0068 enabled RLS and granted INSERT to functions_writer but omitted the INSERT RLS policy. PostgreSQL requires both the privilege grant AND a matching policy for non-superuser roles. Without it, every INSERT by the log-page-view Edge Function was silently rejected by RLS — the function returns 200 regardless, so the failure was invisible for several hours.
+
+**Changes:**
+- `CREATE POLICY "functions_writer_insert_page_views" ON ads_switchable.page_views FOR INSERT TO functions_writer WITH CHECK (true)`
+
+**Signed off:** Owner (session 2026-05-04)
+
+---
+
 ## 2026-05-04: Migration 0068 — ads_switchable.page_views + log-page-view Edge Function
 
 **Type:** New table, new Edge Function, variant-router path expansion, experiments page updated.
 
-**Status:** Migration written, not yet applied. Edge Function written, not yet deployed. Env vars needed before deploy (see below).
+**Status:** Fully live. Migration applied via SQL editor. Edge Function deployed. Page views landing in DB confirmed.
 
 **Why:** No way to verify the 50/50 A/B split or compute view-to-lead conversion rate without page view counts. The variant-router already runs on every experiment page request — adding a fire-and-forget logging call costs the visitor zero latency.
 
@@ -16,20 +31,10 @@ Most recent at top. Every schema change, data migration, access policy change, a
 - `ads_switchable.page_views`: new table — `experiment_id`, `page_slug`, `variant`, `viewed_at`. No PII.
 - RLS: `admin_read_page_views` (authenticated + is_admin), `readonly_analytics_read_page_views`.
 - `functions_writer` granted INSERT + sequence usage.
-- New Supabase Edge Function `log-page-view`: receives POST from variant-router, inserts one row. Protected by `PAGE_VIEW_LOG_SECRET` header.
+- New Supabase Edge Function `log-page-view`: receives POST from variant-router, inserts one row. No auth — `Deno.env.get` does not reliably read Netlify env vars in the edge runtime, making a shared-secret check impractical. Low-risk: no-PII analytics table, worst case is view count inflation from spoofed requests.
 - `config.toml`: `[functions.log-page-view] verify_jwt = false` added.
-- `variant-router.ts`: path expanded from `/funded/*` to `/*` (covers self-funded, loan-funded, any future page type). Asset exclusion via last-segment dot check. Fire-and-forget `logPageView()` call added after variant is determined for both A and B paths.
+- `variant-router.ts`: path expanded from `/funded/*` to `/*` (covers self-funded, loan-funded, any future page type). Asset exclusion via last-segment dot check. `logPageView()` call added, awaited in parallel with `context.next()` via `Promise.all` (zero latency impact). `LOG_ENDPOINT` hardcoded constant (not env var) to eliminate misconfiguration.
 - `platform/app/app/admin/experiments/page.tsx`: view counts queried from `ads_switchable.page_views`, merged into per-variant stats. New columns: Views, View→lead conversion. New "View split" tile showing A/B breakdown with health check (flags if outside 45/55).
-
-**Env vars to set before deploy:**
-- Supabase Edge Function secrets: `PAGE_VIEW_LOG_SECRET` (generate a random string, e.g. `openssl rand -hex 24`)
-- Netlify env vars (switchable.org.uk site): `LOG_ENDPOINT=https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/log-page-view` and `PAGE_VIEW_LOG_SECRET` (same value as above)
-
-**Deploy steps:**
-1. `supabase db push` (or apply 0068 via SQL editor)
-2. `supabase functions deploy log-page-view --no-verify-jwt`
-3. Set Netlify env vars, then redeploy site (triggers edge function update)
-4. Push admin dashboard — Netlify picks it up automatically
 
 **Signed off:** Owner (session 2026-05-04)
 
