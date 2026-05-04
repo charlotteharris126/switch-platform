@@ -261,14 +261,14 @@ export default async function ExperimentsPage() {
     }
   }
 
-  // 8. Add manifest-only experiments (currently running, no data yet).
+  // 8. For every experiment in the current manifest, ensure both A and B rows
+  //    exist — even if only one variant has collected leads or views so far.
+  //    Without this, the challenger row is invisible until its first lead lands.
   if (manifest) {
     for (const m of manifest.experiments) {
-      if (!byExperiment.has(m.id)) {
-        const s = getOrCreateSummary(m.id);
-        s.variants.set("a", emptyVariantStats());
-        s.variants.set("b", emptyVariantStats());
-      }
+      const s = getOrCreateSummary(m.id);
+      if (!s.variants.has("a")) s.variants.set("a", emptyVariantStats());
+      if (!s.variants.has("b")) s.variants.set("b", emptyVariantStats());
     }
   }
 
