@@ -49,11 +49,16 @@ export function RealtimeRefresh({ tables, channel }: Props) {
     const supabase = createClient();
     const channelName = channel ?? "rt-" + tables.map((t) => `${t.schema}.${t.table}`).join("-");
 
+    // Debounce window: a single owner action (mark-enrolled, route-confirm)
+    // typically produces 2-4 INSERT/UPDATE events on different tables in
+    // quick succession. 600ms is long enough to coalesce them into one
+    // router.refresh and short enough that the UI feels live.
+    const REFRESH_DEBOUNCE_MS = 600;
     const queueRefresh = () => {
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       refreshTimer.current = setTimeout(() => {
         router.refresh();
-      }, 600);
+      }, REFRESH_DEBOUNCE_MS);
     };
 
     let currentChannel: ReturnType<typeof supabase.channel> | null = null;

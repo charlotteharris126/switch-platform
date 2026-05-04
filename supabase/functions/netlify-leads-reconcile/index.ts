@@ -41,6 +41,7 @@ import postgres from "npm:postgres@3";
 import { insertSubmission, type JsonValue, normaliseAndOverride } from "../_shared/ingest.ts";
 import { sendBrevoEmail } from "../_shared/brevo.ts";
 import { extractRefCode, processReferral } from "../_shared/referral.ts";
+import { getOwnerEmail } from "../_shared/owner-email.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 const NETLIFY_API_TOKEN = Deno.env.get("NETLIFY_API_TOKEN");
@@ -331,7 +332,7 @@ async function sendReconcileAlert(
   backfills: BackfillRecord[],
   errors: Array<{ netlify_id: string; error: string }>,
 ): Promise<void> {
-  const ownerEmail = Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? Deno.env.get("BREVO_SENDER_EMAIL");
+  const ownerEmail = getOwnerEmail();
   if (!ownerEmail) {
     console.error("No owner email configured; cannot send reconcile alert");
     return;

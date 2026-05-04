@@ -197,6 +197,101 @@ export default async function SheetActivityPage({
     pendingNow: pending.length,
   };
 
+  // Status drift detection: for each enrolment with a Status-column sheet edit
+  // history (any time, not just last N days), find the most recent Status edit
+  // and compare against the current DB status. Drift cases:
+  //   - Latest edit wasn't successfully mirrored (queued / rejected / ai_error)
+  //     AND the DB status hasn't moved since that failed edit.
+  //   - Latest edit was mirrored but the DB's current status differs from the
+  //     applied_status AND no admin update has happened since (likely the
+  //     sheet was changed silently after, e.g. by an Apps Script bypass).
+  // Limitation: we can only detect drift that originated from sheet edits that
+  // fired onEdit. Drift from scripts that bypass onEdit isn't visible here;
+  // for that, a Sheets API pull would be needed (separate build).
+  const { data: latestEditsData } = await supabase
+    .schema("crm")
+    .from("sheet_edits_log")
+    .select("enrolment_id, new_value, applied_status, action, edited_at")
+    .eq("column_name", "Status")
+    .not("enrolment_id", "is", null)
+    .order("edited_at", { ascending: false })
+    .limit(2000);
+
+  const latestStatusEditPerEnrol = new Map<
+    number,
+    { new_value: string | null; applied_status: string | null; action: string; edited_at: string }
+  >();
+  for (const r of (latestEditsData ?? []) as Array<{
+    enrolment_id: number;
+    new_value: string | null;
+    applied_status: string | null;
+    action: string;
+    edited_at: string;
+  }>) {
+    if (!latestStatusEditPerEnrol.has(r.enrolment_id)) {
+      latestStatusEditPerEnrol.set(r.enrolment_id, r);
+    }
+  }
+
+  // Need full enrolment + submission context for any drift candidates.
+  const driftEnrolmentIds = Array.from(latestStatusEditPerEnrol.keys());
+  let driftEnrolments: Array<{
+    id: number;
+    submission_id: number;
+    provider_id: string;
+    status: string;
+    status_updated_at: string;
+  }> = [];
+  if (driftEnrolmentIds.length > 0) {
+    const { data: driftEnrolData } = await supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id, submission_id, provider_id, status, status_updated_at")
+      .in("id", driftEnrolmentIds);
+    driftEnrolments = (driftEnrolData ?? []) as typeof driftEnrolments;
+  }
+
+  const driftRows = driftEnrolments
+    .map((e) => {
+      const edit = latestStatusEditPerEnrol.get(e.id)!;
+      const editedAt = new Date(edit.edited_at).getTime();
+      const dbUpdatedAt = new Date(e.status_updated_at).getTime();
+      const failedAndStuck =
+        (edit.action === "queued" || edit.action === "rejected" || edit.action === "ai_error") &&
+        dbUpdatedAt <= editedAt;
+      const mirroredButDiverged =
+        edit.action === "mirrored" &&
+        edit.applied_status !== null &&
+        e.status !== edit.applied_status &&
+        // Allow 60s window in case the admin update happened a beat after the edit
+        dbUpdatedAt <= editedAt + 60_000;
+      const isDrift = failedAndStuck || mirroredButDiverged;
+      if (!isDrift) return null;
+      return {
+        enrolment_id: e.id,
+        submission_id: e.submission_id,
+        provider_id: e.provider_id,
+        db_status: e.status,
+        sheet_says: edit.new_value,
+        action: edit.action,
+        edited_at: edit.edited_at,
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .sort((a, b) => (a.edited_at < b.edited_at ? 1 : -1));
+
+  // Hydrate names for the drift table
+  const driftSubIds = driftRows.map((d) => d.submission_id);
+  const driftSubs = new Map<number, SubmissionRow>();
+  if (driftSubIds.length > 0) {
+    const { data: driftSubData } = await supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id, first_name, last_name, course_id")
+      .in("id", driftSubIds);
+    for (const s of (driftSubData ?? []) as SubmissionRow[]) driftSubs.set(s.id, s);
+  }
+
   return (
     <div className="max-w-6xl space-y-6">
       <RealtimeRefresh

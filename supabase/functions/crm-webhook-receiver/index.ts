@@ -27,10 +27,9 @@
 
 import postgres from "npm:postgres@3";
 import { sendBrevoEmail } from "../_shared/brevo.ts";
+import { getOwnerEmail } from "../_shared/owner-email.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
-const OWNER_NOTIFICATION_EMAIL =
-  Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? "charlotte@switchleads.co.uk";
 
 if (!DATABASE_URL) throw new Error("SUPABASE_DB_URL is not set.");
 
@@ -319,7 +318,7 @@ async function safeSendAnomalyEmail(providerLabel: string, submissionId: number 
     `;
     await sendBrevoEmail({
       brand: "switchleads",
-      to: [{ email: OWNER_NOTIFICATION_EMAIL }],
+      to: [{ email: getOwnerEmail() ?? "charlotte@switchleads.co.uk" }],
       subject: `[CRM webhook anomaly] ${providerLabel}: ${reason.slice(0, 60)}`,
       htmlContent: html,
     });

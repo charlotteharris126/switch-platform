@@ -29,13 +29,6 @@ export default async function AccountPage() {
       </Card>
 
       <ChangePasswordForm />
-
-      <Card className="border-dashed">
-        <CardContent className="pt-4 text-xs text-[#5a6a72]">
-          <p className="font-bold uppercase tracking-wide text-[10px] text-[#143643] mb-1">Coming soon</p>
-          <p>MFA recovery codes view, session revocation, theme + notification preferences. For now: change password here, sign out via the menu in the top right.</p>
-        </CardContent>
-      </Card>
     </div>
   );
 }

@@ -30,6 +30,7 @@ import {
 } from "../_shared/ingest.ts";
 import { routeLead, upsertLearnerInBrevoNoMatch } from "../_shared/route-lead.ts";
 import { extractRefCode, processReferral } from "../_shared/referral.ts";
+import { getOwnerEmail, adminLeadUrl } from "../_shared/owner-email.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -244,7 +245,7 @@ async function sendOwnerAutoRouteFyiEmail(
   sheetAppended: boolean,
   providerNotified: boolean,
 ): Promise<void> {
-  const ownerEmail = Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? Deno.env.get("BREVO_SENDER_EMAIL");
+  const ownerEmail = getOwnerEmail();
   if (!ownerEmail) {
     console.error("No owner email address configured for auto-route FYI");
     return;
@@ -252,7 +253,7 @@ async function sendOwnerAutoRouteFyiEmail(
 
   const leadId = formatLeadId(submissionId, row.submitted_at);
   const fullName = [row.first_name, row.last_name].filter(Boolean).join(" ") || "(no name)";
-  const dashboardUrl = `https://admin.switchleads.co.uk/leads/${submissionId}`;
+  const dashboardUrl = adminLeadUrl(submissionId);
 
   const sideEffectsLine = sheetAppended && providerNotified
     ? "Sheet appended, provider notified."
@@ -324,13 +325,13 @@ async function handleReApplication(
 
   // Owner FYI (separate from the provider-facing email — this one carries PII
   // because it's an internal notification to Charlotte).
-  const ownerEmail = Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? Deno.env.get("BREVO_SENDER_EMAIL");
+  const ownerEmail = getOwnerEmail();
   if (!ownerEmail) return;
 
   const fullName = [row.first_name, row.last_name].filter(Boolean).join(" ") ||
     [parent.first_name, parent.last_name].filter(Boolean).join(" ") ||
     "(no name)";
-  const dashboardUrl = `https://admin.switchleads.co.uk/leads/${submissionId}`;
+  const dashboardUrl = adminLeadUrl(submissionId);
   const sideEffects = outcome.sheetAppended && outcome.providerNotified
     ? "Re-applied marker row added to sheet, provider notified."
     : !outcome.sheetAppended
@@ -340,7 +341,7 @@ async function handleReApplication(
   const ownerHtml = `
     <p>${escapeHtml(fullName)} has reapplied — ${newLeadId} is a re-application of ${parentLeadId} → ${escapeHtml(outcome.providerCompany)}.</p>
     <p>${sideEffects}</p>
-    <p><a href="${dashboardUrl}">Open new lead in dashboard</a> · <a href="https://admin.switchleads.co.uk/leads/${parent.id}">Open original lead</a></p>
+    <p><a href="${dashboardUrl}">Open new lead in dashboard</a> · <a href="${adminLeadUrl(parent.id)}">Open original lead</a></p>
     <p style="color:#666;font-size:12px;margin-top:24px;">This is the ${parent.re_submission_count + 1}${ordinalSuffix(parent.re_submission_count + 1)} time this person has engaged. The marker row at the bottom of the provider's sheet has status="Re-applied" and points back to ${parentLeadId}.</p>
   `.trim();
 
@@ -394,7 +395,7 @@ async function notifyOwnerOfRoutableLead(
     console.error("SUPABASE_URL not set; cannot build confirm link base URL");
     return;
   }
-  const ownerEmail = Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? Deno.env.get("BREVO_SENDER_EMAIL");
+  const ownerEmail = getOwnerEmail();
   if (!ownerEmail) {
     console.error("No owner email configured (OWNER_NOTIFICATION_EMAIL or BREVO_SENDER_EMAIL)");
     return;

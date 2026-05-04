@@ -23,6 +23,7 @@
 // later from the owner-fallback email).
 
 import type { Sql } from "npm:postgres@3";
+import { getOwnerEmail, adminLeadUrl } from "./owner-email.ts";
 import {
   type BrevoAttributes,
   sendBrevoEmail,
@@ -962,7 +963,7 @@ async function sendProviderNotification(
     ? `https://docs.google.com/spreadsheets/d/${provider.sheet_id}/edit`
     : null;
 
-  const ownerEmail = Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? Deno.env.get("BREVO_SENDER_EMAIL");
+  const ownerEmail = getOwnerEmail();
   const ccList = buildCcList(ownerEmail, provider.cc_emails);
 
   // Re-application: PII-free, references the parent lead by its label, points
@@ -1052,7 +1053,7 @@ async function sendOwnerSheetFailureEmail(
     <p>A leads.dead_letter row has been written (source=edge_function_sheet_append) so Sasha's weekly scan will flag if this pattern repeats.</p>
   `.trim();
 
-  const ownerEmail = Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? Deno.env.get("BREVO_SENDER_EMAIL");
+  const ownerEmail = getOwnerEmail();
   if (!ownerEmail) {
     console.error("No owner email address configured for sheet failure notification");
     return;

@@ -48,6 +48,7 @@
 import postgres from "npm:postgres@3";
 import { sendBrevoEmail } from "../_shared/brevo.ts";
 import { signPendingUpdateToken } from "../_shared/pending-update-token.ts";
+import { getOwnerEmail } from "../_shared/owner-email.ts";
 
 // ---- Env ----
 
@@ -55,8 +56,6 @@ const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 const SHEETS_APPEND_TOKEN = Deno.env.get("SHEETS_APPEND_TOKEN");
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const PENDING_UPDATE_SECRET = Deno.env.get("PENDING_UPDATE_SECRET");
-const OWNER_NOTIFICATION_EMAIL =
-  Deno.env.get("OWNER_NOTIFICATION_EMAIL") ?? "hello@switchable.careers";
 const CHANNEL_B_ENABLED = Deno.env.get("CHANNEL_B_ENABLED") === "true";
 const CONFIRM_BASE_URL =
   Deno.env.get("CONFIRM_BASE_URL") ??
@@ -707,7 +706,7 @@ async function safeSendAnomalyEmail(args: {
     `;
     await sendBrevoEmail({
       brand: "switchleads",
-      to: [{ email: OWNER_NOTIFICATION_EMAIL }],
+      to: [{ email: getOwnerEmail() ?? "hello@switchable.careers" }],
       subject: `[Sheet anomaly] ${args.providerId} lead ${args.leadId}: ${args.reason.slice(0, 60)}`,
       htmlContent: html,
     });
@@ -751,7 +750,7 @@ async function safeSendAiSuggestionEmail(args: {
     `;
     await sendBrevoEmail({
       brand: "switchleads",
-      to: [{ email: OWNER_NOTIFICATION_EMAIL }],
+      to: [{ email: getOwnerEmail() ?? "hello@switchable.careers" }],
       subject: `[Status suggestion] ${args.leadName} — ${args.suggestedStatus} (${args.confidence})`,
       htmlContent: html,
     });
