@@ -312,6 +312,21 @@ async function handleStatusEdit(
     `;
   }
 
+  // Brevo attribute sync. Without this, the sheet → DB write completes but
+  // Brevo's SW_ENROL_STATUS attribute on the learner contact stays stale,
+  // and any U4-style "An attribute is updated" automations on Brevo never
+  // fire for sheet-driven status changes. crm.sync_leads_to_brevo is the
+  // canonical sync RPC (migration 0044, pg_net-driven async); same path
+  // used by the admin Server Actions, one-click chaser, and the 14-day
+  // auto-flip cron. Returns the request_id immediately; actual Brevo
+  // upsert runs async via the admin-brevo-resync Edge Function. Failures
+  // land in leads.dead_letter, never block the sheet-edit response.
+  try {
+    await sql`SELECT crm.sync_leads_to_brevo(${[submissionId]}::bigint[])`;
+  } catch (err) {
+    console.error("brevo sync after sheet status mirror failed:", String(err));
+  }
+
   await logEdit({
     body,
     enrolmentId: enrolment.id,

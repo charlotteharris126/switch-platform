@@ -203,6 +203,21 @@ async function applyStatusChange(
       )
     `;
   }
+
+  // Brevo attribute sync — same canonical RPC the admin Server Actions use,
+  // so SW_ENROL_STATUS on the learner's Brevo contact catches up to the
+  // approved/overridden status. Without it, U4-style "An attribute is updated"
+  // automations on Brevo never fire for sheet-AI-driven status changes.
+  // Sub-select pulls submission_id without a separate round-trip.
+  try {
+    await sql`
+      SELECT crm.sync_leads_to_brevo(ARRAY[
+        (SELECT submission_id FROM crm.enrolments WHERE id = ${pending.enrolment_id})
+      ]::bigint[])
+    `;
+  } catch (err) {
+    console.error("brevo sync after AI-suggestion approval failed:", String(err));
+  }
   await sql`
     UPDATE crm.pending_updates
     SET status = ${pendingResolution},
