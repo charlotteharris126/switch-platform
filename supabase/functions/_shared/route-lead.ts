@@ -82,6 +82,7 @@ export interface SubmissionRow {
   marketing_opt_in: boolean;
   preferred_intake_id: string | null;
   acceptable_intake_ids: string[] | null;
+  referral_code: string | null;
 }
 
 export type RouteTrigger = "owner_confirm" | "auto_route" | "re_application";
@@ -144,7 +145,8 @@ export async function routeLead(
              qualification, start_when, budget, courses_selected,
              is_dq, dq_reason, primary_routed_to, archived_at,
              marketing_opt_in,
-             preferred_intake_id, acceptable_intake_ids
+             preferred_intake_id, acceptable_intake_ids,
+             referral_code
         FROM leads.submissions
        WHERE id = ${submissionId}
     `;
@@ -475,6 +477,23 @@ function mapEnrolStatusForBrevo(dbStatus: string): string {
   return ENROL_STATUS_DB_TO_BREVO[dbStatus] ?? dbStatus;
 }
 
+// Builds the referral landing URL segmented by funding category so templates
+// can use {{ contact.SW_REFERRAL_URL }} directly with no Liquid conditionals.
+// Self-funded leads link to the self-funded form; all others link to the funded
+// course finder. If no referral_code is present the base URL is returned (link
+// still works, referral just won't be attributed to a specific referrer).
+function buildReferralUrl(
+  fundingCategory: string | null,
+  referralCode: string | null,
+): string {
+  const base = fundingCategory === "self"
+    ? "https://switchable.org.uk/find-your-course/"
+    : "https://switchable.org.uk/find-funded-courses/";
+  return referralCode
+    ? `${base}?ref=${encodeURIComponent(referralCode)}`
+    : base;
+}
+
 // Resolves course / region / intake / sector for a submission, branching on
 // funding_category. Self-funded leads skip matrix.json entirely (their
 // course_id is a YAML id, not a page slug, so the lookup would silently miss)
@@ -607,6 +626,8 @@ export async function upsertLearnerInBrevo(
     // without needing a separate event API. See _shared/brevo.ts comment.
     SW_MATCH_STATUS: "matched",
     SW_ENROL_STATUS: mapEnrolStatusForBrevo(enrolStatus),
+    SW_REFERRAL_CODE: submission.referral_code ?? "",
+    SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
   };
 
   // One upsert call adds the contact to both lists atomically. Previously
@@ -665,7 +686,8 @@ export async function upsertLearnerInBrevoNoMatch(
            qualification, start_when, budget, courses_selected,
            is_dq, dq_reason, primary_routed_to, archived_at,
            marketing_opt_in,
-           preferred_intake_id, acceptable_intake_ids
+           preferred_intake_id, acceptable_intake_ids,
+           referral_code
       FROM leads.submissions
      WHERE id = ${submissionId}
      LIMIT 1
@@ -706,6 +728,8 @@ export async function upsertLearnerInBrevoNoMatch(
     // in the enrolment lifecycle yet. Will be populated once the lead routes
     // and the matched upsert helper takes over.
     SW_ENROL_STATUS: "",
+    SW_REFERRAL_CODE: submission.referral_code ?? "",
+    SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
   };
 
   const listIds = [utilityListId];

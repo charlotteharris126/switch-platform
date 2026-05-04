@@ -127,7 +127,8 @@ async function resyncOne(submissionId: number): Promise<ResyncResult> {
              qualification, start_when, budget, courses_selected,
              is_dq, primary_routed_to, archived_at,
              marketing_opt_in,
-             preferred_intake_id, acceptable_intake_ids
+             preferred_intake_id, acceptable_intake_ids,
+             referral_code
         FROM leads.submissions
        WHERE id = ${submissionId}
     `;

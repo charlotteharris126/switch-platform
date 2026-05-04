@@ -327,6 +327,67 @@ export default async function SheetActivityPage({
         <Tile label="Awaiting your call" value={counts.pendingNow} note="AI suggestions" tone={counts.pendingNow > 0 ? "warn" : undefined} />
       </div>
 
+      {/* Drift detection */}
+      <section>
+        <div className="flex items-center gap-3 mb-3">
+          <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72]">Sheet / DB drift</p>
+          {driftRows.length === 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+              All sheets in sync
+            </span>
+          ) : (
+            <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FBE5CB] text-[#b3412e]">
+              {driftRows.length}
+            </span>
+          )}
+        </div>
+        {driftRows.length > 0 ? (
+          <div className="bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[#f0ece6] bg-[#f4f1ed]">
+                  <th className="text-left px-4 py-2 font-semibold text-[#5a6a72]">Lead</th>
+                  <th className="text-left px-4 py-2 font-semibold text-[#5a6a72]">Provider</th>
+                  <th className="text-left px-4 py-2 font-semibold text-[#5a6a72]">Sheet says</th>
+                  <th className="text-left px-4 py-2 font-semibold text-[#5a6a72]">DB status</th>
+                  <th className="text-left px-4 py-2 font-semibold text-[#5a6a72]">Cause</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f0ece6]">
+                {driftRows.map((d) => {
+                  const sub = driftSubs.get(d.submission_id);
+                  const prov = providerMap.get(d.provider_id);
+                  const leadName = sub
+                    ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || `#${d.submission_id}`
+                    : `#${d.submission_id}`;
+                  const cause =
+                    d.action === "queued" || d.action === "rejected" || d.action === "ai_error"
+                      ? "Edit failed to mirror"
+                      : "Mirrored, then diverged";
+                  return (
+                    <tr key={d.enrolment_id}>
+                      <td className="px-4 py-2">
+                        <Link
+                          href={`/leads/${d.submission_id}`}
+                          className="text-[#cd8b76] hover:underline font-medium"
+                        >
+                          {leadName}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-2 text-[#5a6a72]">{prov?.company_name ?? d.provider_id}</td>
+                      <td className="px-4 py-2 font-medium">{d.sheet_says ?? "—"}</td>
+                      <td className="px-4 py-2 font-medium text-[#143643]">{d.db_status}</td>
+                      <td className="px-4 py-2 text-[#5a6a72]">{cause}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
       {/* Pending AI suggestions */}
       {pending.length > 0 ? (
         <section>

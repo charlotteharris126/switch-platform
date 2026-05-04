@@ -52,7 +52,7 @@ export async function markReferralPaid(input: {
     return { ok: false, error: error.message };
   }
 
-  revalidatePath("/referrals");
+  revalidatePath("/admin/referrals");
   return { ok: true };
 }
 
@@ -80,7 +80,7 @@ export async function approveManualReview(input: {
     return { ok: false, error: error.message };
   }
 
-  revalidatePath("/referrals");
+  revalidatePath("/admin/referrals");
   return { ok: true };
 }
 
@@ -115,6 +115,6 @@ export async function rejectManualReview(input: {
     return { ok: false, error: error.message };
   }
 
-  revalidatePath("/referrals");
+  revalidatePath("/admin/referrals");
   return { ok: true };
 }
