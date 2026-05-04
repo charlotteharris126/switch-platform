@@ -47,6 +47,28 @@ function normalisePeriod(v: string | undefined): Period {
 const NOW = () => new Date();
 const DAYS_AGO_ISO = (n: number) => new Date(Date.now() - n * 24 * 3600 * 1000).toISOString();
 
+// Race a promise against a deadline. If the underlying work takes longer
+// than `ms`, throw a labelled error that the admin error.tsx can render
+// instead of letting the page hang. Used on the /admin overview's 18-query
+// fan-out so a single slow query becomes a clear failure with retry rather
+// than a Vercel-default 25s spinner-then-504. Architectural-grade fix is
+// to split queries into critical vs optional bundles and partial-render;
+// queued for a future session, this is the right pragmatic guard until then.
+async function withTimeout<T>(ms: number, label: string, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function distinctEmails(rows: Array<{ email: string | null }> | null | undefined): number {
   return new Set(
     (rows ?? [])
@@ -128,7 +150,7 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
     errorsRes,
     presumedListRes,
     pendingAiRes,
-  ] = await Promise.all([
+  ] = await withTimeout(20_000, "admin overview", Promise.all([
     // Leads in: distinct emails of non-DQ submissions
     applyThis(
       supabase.schema("leads").from("submissions").select("email").eq("is_dq", false).is("archived_at", null),
@@ -198,7 +220,7 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
       .order("status_updated_at", { ascending: true })
       .limit(1),
     supabase.schema("crm").from("pending_updates").select("id", { count: "exact", head: true }).eq("status", "pending"),
-  ]);
+  ]));
 
   // Pace
   const leadsThis = distinctEmails(leadsThisRes.data as Array<{ email: string | null }>);
