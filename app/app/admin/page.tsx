@@ -131,15 +131,12 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
     leadsThisRes,
     leadsLastRes,
     routedThisRes,
-    routedLastRes,
     enrolThisRes,
     enrolLastRes,
     metaSpendThisRes,
     metaSpendLastRes,
-    // Lifetime always-on
-    routedAllTimeRes,
-    confirmedEnrolAllTimeRes,
-    presumedEnrolAllTimeRes,
+    // Period-aware conversion counts
+    presumedThisRes,
     // Provider state (lifetime)
     billingRes,
     providersRes,
@@ -148,7 +145,6 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
     presumedAttentionRes,
     disputedRes,
     errorsRes,
-    presumedListRes,
     pendingAiRes,
   ] = await withTimeout(20_000, "admin overview", Promise.all([
     // Leads in: distinct emails of non-DQ submissions
@@ -160,12 +156,8 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
       supabase.schema("leads").from("submissions").select("email").eq("is_dq", false).is("archived_at", null),
       "submitted_at",
     ),
-    // Sent to providers
+    // Routed this period (denominator for period-aware conversion)
     applyThis(
-      supabase.schema("leads").from("submissions").select("email").not("primary_routed_to", "is", null).is("archived_at", null),
-      "routed_at",
-    ),
-    applyLast(
       supabase.schema("leads").from("submissions").select("email").not("primary_routed_to", "is", null).is("archived_at", null),
       "routed_at",
     ),
@@ -190,10 +182,11 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
           .select("spend, leads")
           .gte("date", lastStart!.slice(0, 10))
           .lt("date", thisStart!.slice(0, 10)),
-    // Lifetime: total routed, confirmed enrolments, presumed enrolments
-    supabase.schema("leads").from("submissions").select("email").not("primary_routed_to", "is", null).is("archived_at", null),
-    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "enrolled"),
-    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled"),
+    // Presumed enrolled this period (for period-aware potential conversion)
+    applyThis(
+      supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled"),
+      "status_updated_at",
+    ),
     // Provider state
     supabase
       .schema("crm")
@@ -212,13 +205,6 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
     supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled"),
     supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).not("disputed_at", "is", null),
     supabase.schema("leads").from("dead_letter").select("id", { count: "exact", head: true }).is("replayed_at", null),
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("id, status_updated_at, provider_id")
-      .eq("status", "presumed_enrolled")
-      .order("status_updated_at", { ascending: true })
-      .limit(1),
     supabase.schema("crm").from("pending_updates").select("id", { count: "exact", head: true }).eq("status", "pending"),
   ]));
 
@@ -226,20 +212,14 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
   const leadsThis = distinctEmails(leadsThisRes.data as Array<{ email: string | null }>);
   const leadsLast = distinctEmails(leadsLastRes.data as Array<{ email: string | null }>);
   const routedThis = distinctEmails(routedThisRes.data as Array<{ email: string | null }>);
-  const routedLast = distinctEmails(routedLastRes.data as Array<{ email: string | null }>);
   const enrolThis = enrolThisRes.count ?? 0;
   const enrolLast = enrolLastRes.count ?? 0;
 
-  // Conversion (lifetime)
-  const totalRoutedLifetime = distinctEmails(routedAllTimeRes.data as Array<{ email: string | null }>);
-  const confirmedAllTime = confirmedEnrolAllTimeRes.count ?? 0;
-  const presumedAllTime = presumedEnrolAllTimeRes.count ?? 0;
-  const conversionConfirmedPct =
-    totalRoutedLifetime > 0 ? Math.round((confirmedAllTime / totalRoutedLifetime) * 1000) / 10 : null;
+  // Conversion (period-aware)
+  const presumedThis = presumedThisRes.count ?? 0;
+  const conversionConfirmedPct = routedThis > 0 ? Math.round((enrolThis / routedThis) * 1000) / 10 : null;
   const conversionPotentialPct =
-    totalRoutedLifetime > 0
-      ? Math.round(((confirmedAllTime + presumedAllTime) / totalRoutedLifetime) * 1000) / 10
-      : null;
+    routedThis > 0 ? Math.round(((enrolThis + presumedThis) / routedThis) * 1000) / 10 : null;
 
   // Provider/money state
   const billingRows = (billingRes.data ?? []) as ProviderBillingRow[];
@@ -279,10 +259,11 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
   const cplThisPeriod = metaIngestionLive && leadsThis > 0 ? metaSpendThis / leadsThis : null;
   // Meta-reported CPL: what Meta thinks each lead costs (pixel/CAPI count).
   const metaCplThisPeriod = metaIngestionLive && metaLeadsThis > 0 ? metaSpendThis / metaLeadsThis : null;
-  // Profit/loss this period: revenue earned this period (currently null until
-  // billable enrolments confirm in-period) minus ad spend this period.
-  // Once revenue starts flowing this becomes meaningful per period.
-  const profitLossThisPeriod = metaIngestionLive ? -metaSpendThis : null;
+  // Cost per enrolment: Meta spend this period ÷ enrolments confirmed this period.
+  const cpeThisPeriod = metaIngestionLive && enrolThis > 0 ? metaSpendThis / enrolThis : null;
+  // Profit/loss: confirmed lifetime revenue minus ad spend this period.
+  // Revenue is lifetime because billing is cumulative (free-3 offset, monthly invoicing).
+  const profitLossThisPeriod = metaIngestionLive ? revenueConfirmedGBP - metaSpendThis : null;
 
   const totalFreeRemaining = billingRows.reduce((s, r) => s + (r.free_enrolments_remaining ?? 0), 0);
   const totalFreeUsed = billingRows.reduce((s, r) => s + Math.min(3, r.confirmed_enrolled + r.presumed_enrolled), 0);
@@ -295,18 +276,6 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
   const errors = errorsRes.count ?? 0;
   const aiPending = pendingAiRes.count ?? 0;
   const totalAttention = unrouted + presumed + disputed + errors + aiPending;
-
-  // First billable date
-  const earliestPresumed = ((presumedListRes.data ?? []) as Array<{ status_updated_at: string }>)[0];
-  const firstBillableDate = earliestPresumed
-    ? new Date(new Date(earliestPresumed.status_updated_at).getTime() + 21 * 24 * 3600 * 1000)
-    : null;
-  const firstBillableDateLabel = firstBillableDate
-    ? firstBillableDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
-    : null;
-  const daysToFirstBillable = firstBillableDate
-    ? Math.ceil((firstBillableDate.getTime() - NOW().getTime()) / (24 * 3600 * 1000))
-    : null;
 
   return (
     <div className="max-w-6xl space-y-8">
@@ -323,7 +292,7 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
         title="Business health"
         subtitle={
           <span>
-            {PERIOD_LABEL[period]} for pace + ad spend. Conversion + revenue + provider state are lifetime.
+            All sections move with the period selector. Revenue in money + profit tiles is lifetime (billing is cumulative).
           </span>
         }
       />
@@ -338,18 +307,12 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
         <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">
           Pace ({PERIOD_LABEL[period].toLowerCase()})
         </p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <PaceTile
             label="Leads in"
             value={leadsThis}
             delta={period === "lifetime" ? null : delta(leadsThis, leadsLast)}
             href="/leads?dq=no"
-          />
-          <PaceTile
-            label="Sent to providers"
-            value={routedThis}
-            delta={period === "lifetime" ? null : delta(routedThis, routedLast)}
-            href="/leads?stage=routed"
           />
           <PaceTile
             label="Enrolments confirmed"
@@ -373,19 +336,21 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
         </div>
       </section>
 
-      {/* Section 2: Conversion (lifetime) */}
+      {/* Section 2: Conversion (period-aware) */}
       <section>
-        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Conversion (lifetime)</p>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">
+          Conversion ({PERIOD_LABEL[period].toLowerCase()})
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <ConversionTile
             label="Confirmed conversion"
             value={pct(conversionConfirmedPct)}
-            note={`${confirmedAllTime} confirmed enrolments / ${totalRoutedLifetime} unique people sent`}
+            note={routedThis > 0 ? `${enrolThis} confirmed / ${routedThis} sent this period` : "No leads routed this period"}
           />
           <ConversionTile
             label="Potential conversion"
             value={pct(conversionPotentialPct)}
-            note={`+ ${presumedAllTime} presumed = ${confirmedAllTime + presumedAllTime} possible / ${totalRoutedLifetime}`}
+            note={routedThis > 0 ? `+ ${presumedThis} presumed = ${enrolThis + presumedThis} possible / ${routedThis}` : "No leads routed this period"}
             theme="good"
           />
         </div>
@@ -393,18 +358,18 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
 
       {/* Section 3: Money */}
       <section>
-        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Money (lifetime)</p>
+        <p className="text-[10px] font-bold uppercase tracking-[2px] text-[#5a6a72] mb-3">Money</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <MoneyTile
             label="Revenue confirmed"
             value={gbp(revenueConfirmedGBP)}
-            note="Earned, no dispute risk"
+            note="Earned lifetime, no dispute risk"
             theme="good"
           />
           <MoneyTile
             label="Revenue potential"
             value={gbp(revenuePotentialGBP)}
-            note={revenueIncomplete ? "Incl. presumed; plus % of CD" : "Incl. presumed enrolments"}
+            note={revenueIncomplete ? "Lifetime incl. presumed; plus % of CD" : "Lifetime incl. presumed enrolments"}
           />
           <MoneyTile
             label="True CPL"
@@ -418,12 +383,14 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
             }
           />
           <MoneyTile
-            label="First billable hits"
-            value={firstBillableDateLabel ?? "Not yet"}
+            label="Cost per enrolment"
+            value={cpeThisPeriod === null ? "—" : gbp(cpeThisPeriod)}
             note={
-              firstBillableDateLabel
-                ? `${daysToFirstBillable === 1 ? "tomorrow" : daysToFirstBillable === 0 ? "today" : daysToFirstBillable !== null && daysToFirstBillable < 0 ? `${Math.abs(daysToFirstBillable)} days ago, chase` : `in ${daysToFirstBillable} days`}`
-                : "No presumed enrolments yet"
+              !metaIngestionLive
+                ? "Awaiting Meta ingestion"
+                : enrolThis === 0
+                  ? "No enrolments this period"
+                  : `${gbp(metaSpendThis)} spend ÷ ${enrolThis} confirmed`
             }
           />
         </div>
