@@ -83,7 +83,9 @@ interface PerAdAggregate {
   leads_db_total: number;
   leads_qualified: number;
   leads_routed: number;
+  leads_enrolled: number;
   cpl_true: number | null;
+  cost_per_enrolment: number | null;
   earliest_date: string;
   active_signals: number;
 }
@@ -200,7 +202,9 @@ export default async function AdsPage({ searchParams }: PageProps) {
       leads_db_total: 0,
       leads_qualified: 0,
       leads_routed: 0,
+      leads_enrolled: 0,
       cpl_true: null,
+      cost_per_enrolment: null,
       earliest_date: r.date,
       active_signals: 0,
     };
@@ -242,9 +246,34 @@ export default async function AdsPage({ searchParams }: PageProps) {
     }
   }
 
-  // True CPL using qualified leads as denominator (matches /admin/profit)
+  // Pull enrolments for the routed submissions in this period, then aggregate
+  // per ad. Mirrors the drill-down's pattern. Only enrolled + presumed_enrolled
+  // statuses count as "enrolled" for cost-per-enrolment (lost / cannot_reach
+  // / open don't generate revenue).
+  const routedSubmissionIds = submissions.filter((s) => s.primary_routed_to).map((s) => s.id);
+  const enrolmentBySubmissionId = new Map<number, string>();
+  if (routedSubmissionIds.length > 0) {
+    const enrolmentsRes = await supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("submission_id,status")
+      .in("submission_id", routedSubmissionIds);
+    for (const e of (enrolmentsRes.data ?? []) as Array<{ submission_id: number; status: string }>) {
+      enrolmentBySubmissionId.set(e.submission_id, e.status);
+    }
+  }
+  for (const s of submissions) {
+    if (!s.utm_content || !s.primary_routed_to) continue;
+    const a = adMap.get(s.utm_content);
+    if (!a) continue;
+    const status = enrolmentBySubmissionId.get(s.id);
+    if (status === "enrolled" || status === "presumed_enrolled") a.leads_enrolled += 1;
+  }
+
+  // True CPL (qualified denominator, matches /admin/profit) + cost per enrolment
   for (const a of adMap.values()) {
     a.cpl_true = a.leads_qualified > 0 ? a.spend / a.leads_qualified : null;
+    a.cost_per_enrolment = a.leads_enrolled > 0 ? a.spend / a.leads_enrolled : null;
   }
 
   // Filter by funding segment if set
@@ -269,7 +298,9 @@ export default async function AdsPage({ searchParams }: PageProps) {
   const totalLeadsMeta = ads.reduce((s, a) => s + a.leads_meta, 0);
   const totalQualified = ads.reduce((s, a) => s + a.leads_qualified, 0);
   const totalRouted = ads.reduce((s, a) => s + a.leads_routed, 0);
+  const totalEnrolled = ads.reduce((s, a) => s + a.leads_enrolled, 0);
   const headlineCpl = totalQualified > 0 ? totalSpend / totalQualified : null;
+  const headlineCpe = totalEnrolled > 0 ? totalSpend / totalEnrolled : null;
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -295,12 +326,25 @@ export default async function AdsPage({ searchParams }: PageProps) {
       <FilterBar period={period} brand={brand} funding={funding} />
 
       {/* Headline tiles */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <Tile label="Spend" value={gbp(totalSpend)} />
         <Tile label="Leads (Meta)" value={intFmt(totalLeadsMeta)} note="What Meta reports" />
         <Tile label="Qualified (DB)" value={intFmt(totalQualified)} note="Pixel-fired + qualified" />
         <Tile label="Routed" value={intFmt(totalRouted)} note={`${totalQualified > 0 ? Math.round((totalRouted / totalQualified) * 100) : 0}% of qualified`} />
+        <Tile
+          label="Enrolled"
+          value={intFmt(totalEnrolled)}
+          note={totalRouted > 0 ? `${Math.round((totalEnrolled / totalRouted) * 100)}% of routed` : "—"}
+        />
         <Tile label="True CPL" value={gbp(headlineCpl)} highlight />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Tile
+          label="Cost per enrolment"
+          value={gbp(headlineCpe)}
+          note={totalEnrolled === 0 ? "No enrolments yet in this window" : "Spend ÷ enrolled"}
+          highlight
+        />
       </div>
 
       {/* Ad signals card — reuse the same compact section */}
@@ -332,7 +376,9 @@ export default async function AdsPage({ searchParams }: PageProps) {
                   <TableHead className="text-right">Meta leads</TableHead>
                   <TableHead className="text-right">Qualified</TableHead>
                   <TableHead className="text-right">Routed</TableHead>
+                  <TableHead className="text-right">Enrolled</TableHead>
                   <TableHead className="text-right">True CPL</TableHead>
+                  <TableHead className="text-right">Cost / enrol</TableHead>
                   <TableHead className="text-right">CTR</TableHead>
                   <TableHead className="text-right">Freq</TableHead>
                   <TableHead className="text-center">Signal</TableHead>
@@ -385,8 +431,18 @@ export default async function AdsPage({ searchParams }: PageProps) {
                       <TableCell className="text-xs text-right tabular-nums">
                         {intFmt(a.leads_routed)}
                       </TableCell>
+                      <TableCell className="text-xs text-right tabular-nums">
+                        {a.leads_enrolled > 0 ? (
+                          <span className="font-semibold text-[#287271]">{a.leads_enrolled}</span>
+                        ) : (
+                          <span className="text-[#5a6a72]">0</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-xs text-right tabular-nums font-bold">
                         {gbp(a.cpl_true)}
+                      </TableCell>
+                      <TableCell className="text-xs text-right tabular-nums font-bold">
+                        {gbp(a.cost_per_enrolment)}
                       </TableCell>
                       <TableCell className="text-xs text-right tabular-nums text-[#5a6a72]">
                         {pct(a.ctr)}
