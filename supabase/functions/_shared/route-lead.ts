@@ -477,18 +477,15 @@ function mapEnrolStatusForBrevo(dbStatus: string): string {
   return ENROL_STATUS_DB_TO_BREVO[dbStatus] ?? dbStatus;
 }
 
-// Builds the referral landing URL segmented by funding category so templates
-// can use {{ contact.SW_REFERRAL_URL }} directly with no Liquid conditionals.
-// Self-funded leads link to the self-funded form; all others link to the funded
-// course finder. If no referral_code is present the base URL is returned (link
-// still works, referral just won't be attributed to a specific referrer).
+// Builds the referral page URL for the referrer. The /refer/ page shows the
+// referrer their personal sharing link. The ?ref= param tells the page which
+// referrer this is. Funding category is irrelevant here — the refer page is
+// for the referrer, not the friend they're sending the link to.
 function buildReferralUrl(
-  fundingCategory: string | null,
+  _fundingCategory: string | null,
   referralCode: string | null,
 ): string {
-  const base = fundingCategory === "self"
-    ? "https://switchable.org.uk/find-your-course/"
-    : "https://switchable.org.uk/find-funded-courses/";
+  const base = "https://switchable.org.uk/refer/";
   return referralCode
     ? `${base}?ref=${encodeURIComponent(referralCode)}`
     : base;
