@@ -451,3 +451,6 @@ verify_jwt = false
 
 [functions.meta-ads-ingest]
 verify_jwt = false
+
+[functions.log-page-view]
+verify_jwt = false

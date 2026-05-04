@@ -4,6 +4,37 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-04: Migration 0068 — ads_switchable.page_views + log-page-view Edge Function
+
+**Type:** New table, new Edge Function, variant-router path expansion, experiments page updated.
+
+**Status:** Migration written, not yet applied. Edge Function written, not yet deployed. Env vars needed before deploy (see below).
+
+**Why:** No way to verify the 50/50 A/B split or compute view-to-lead conversion rate without page view counts. The variant-router already runs on every experiment page request — adding a fire-and-forget logging call costs the visitor zero latency.
+
+**Changes:**
+- `ads_switchable.page_views`: new table — `experiment_id`, `page_slug`, `variant`, `viewed_at`. No PII.
+- RLS: `admin_read_page_views` (authenticated + is_admin), `readonly_analytics_read_page_views`.
+- `functions_writer` granted INSERT + sequence usage.
+- New Supabase Edge Function `log-page-view`: receives POST from variant-router, inserts one row. Protected by `PAGE_VIEW_LOG_SECRET` header.
+- `config.toml`: `[functions.log-page-view] verify_jwt = false` added.
+- `variant-router.ts`: path expanded from `/funded/*` to `/*` (covers self-funded, loan-funded, any future page type). Asset exclusion via last-segment dot check. Fire-and-forget `logPageView()` call added after variant is determined for both A and B paths.
+- `platform/app/app/admin/experiments/page.tsx`: view counts queried from `ads_switchable.page_views`, merged into per-variant stats. New columns: Views, View→lead conversion. New "View split" tile showing A/B breakdown with health check (flags if outside 45/55).
+
+**Env vars to set before deploy:**
+- Supabase Edge Function secrets: `PAGE_VIEW_LOG_SECRET` (generate a random string, e.g. `openssl rand -hex 24`)
+- Netlify env vars (switchable.org.uk site): `LOG_ENDPOINT=https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/log-page-view` and `PAGE_VIEW_LOG_SECRET` (same value as above)
+
+**Deploy steps:**
+1. `supabase db push` (or apply 0068 via SQL editor)
+2. `supabase functions deploy log-page-view --no-verify-jwt`
+3. Set Netlify env vars, then redeploy site (triggers edge function update)
+4. Push admin dashboard — Netlify picks it up automatically
+
+**Signed off:** Owner (session 2026-05-04)
+
+---
+
 ## 2026-05-04: Migration 0067 — referral voucher trigger restricted to confirmed enrolment only
 
 **Type:** Schema change. Two Postgres functions replaced via CREATE OR REPLACE.

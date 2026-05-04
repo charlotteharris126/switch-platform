@@ -45,6 +45,11 @@ interface EnrolmentRow {
   status: string | null;
 }
 
+interface PageViewRow {
+  experiment_id: string;
+  variant: string;
+}
+
 interface VariantStats {
   count: number;
   earliest: string | null;
@@ -54,15 +59,17 @@ interface VariantStats {
   enrolmentTotal: number;
   enrolmentBillable: number; // status in (enrolled, presumed_enrolled)
   enrolmentInFlight: number; // status in (open, cannot_reach)
-  enrolmentLost: number; // status = lost
+  enrolmentLost: number;     // status = lost
+  viewCount: number;         // page views logged by variant-router
 }
 
 interface ExperimentSummary {
   id: string;
-  manifest: ManifestEntry | null; // null if experiment in DB but not in current manifest (already promoted/ended)
+  manifest: ManifestEntry | null; // null if in DB but not in current manifest (ended)
   variants: Map<string, VariantStats>;
   totalLeads: number;
   totalQualifiedLeads: number;
+  totalViews: number;
   earliest: string | null;
   latest: string | null;
 }
@@ -106,6 +113,7 @@ function emptyVariantStats(): VariantStats {
     enrolmentBillable: 0,
     enrolmentInFlight: 0,
     enrolmentLost: 0,
+    viewCount: 0,
   };
 }
 
@@ -138,9 +146,7 @@ export default async function ExperimentsPage() {
 
   const subRows = (submissionsQuery.data ?? []) as SubmissionRow[];
 
-  // 2. Pull enrolments for every submission carrying an experiment_id, so
-  //    per-variant counts can include billable enrolment data alongside
-  //    raw lead counts.
+  // 2. Pull enrolments for every submission carrying an experiment_id.
   const submissionIds = subRows.map((r) => r.id);
   let enrolRows: EnrolmentRow[] = [];
   if (submissionIds.length > 0) {
@@ -152,7 +158,23 @@ export default async function ExperimentsPage() {
     enrolRows = (enrolQuery.data ?? []) as EnrolmentRow[];
   }
 
-  // Index enrolments by submission_id for O(1) lookup during aggregation.
+  // 3. Pull page view counts per experiment+variant from ads_switchable.page_views.
+  //    Logged server-side by variant-router — no PII, pure aggregate counts.
+  const viewsQuery = await supabase
+    .schema("ads_switchable")
+    .from("page_views")
+    .select("experiment_id, variant");
+
+  const viewRows = (viewsQuery.data ?? []) as PageViewRow[];
+
+  // 4. Fetch the live experiments manifest from the site.
+  const { manifest, error: manifestError } = await fetchManifest();
+  const manifestById = new Map<string, ManifestEntry>();
+  if (manifest) {
+    for (const e of manifest.experiments) manifestById.set(e.id, e);
+  }
+
+  // 5. Index enrolments and views for O(1) lookup during aggregation.
   const enrolmentsBySubmission = new Map<number, EnrolmentRow[]>();
   for (const e of enrolRows) {
     const list = enrolmentsBySubmission.get(e.submission_id) ?? [];
@@ -160,15 +182,18 @@ export default async function ExperimentsPage() {
     enrolmentsBySubmission.set(e.submission_id, list);
   }
 
-  // 3. Fetch the live experiments manifest from the site so currently-
-  //    running experiments appear here even with zero leads in the DB.
-  const { manifest, error: manifestError } = await fetchManifest();
-  const manifestById = new Map<string, ManifestEntry>();
-  if (manifest) {
-    for (const e of manifest.experiments) manifestById.set(e.id, e);
+  // View counts: { experimentId → { variant → count } }
+  const viewsByExp = new Map<string, Map<string, number>>();
+  for (const v of viewRows) {
+    let byVariant = viewsByExp.get(v.experiment_id);
+    if (!byVariant) {
+      byVariant = new Map();
+      viewsByExp.set(v.experiment_id, byVariant);
+    }
+    byVariant.set(v.variant, (byVariant.get(v.variant) ?? 0) + 1);
   }
 
-  // 4. Build per-experiment, per-variant aggregates from the DB rows.
+  // 6. Build per-experiment, per-variant aggregates.
   const byExperiment = new Map<string, ExperimentSummary>();
 
   function getOrCreateSummary(id: string): ExperimentSummary {
@@ -180,6 +205,7 @@ export default async function ExperimentsPage() {
         variants: new Map(),
         totalLeads: 0,
         totalQualifiedLeads: 0,
+        totalViews: 0,
         earliest: null,
         latest: null,
       };
@@ -206,7 +232,6 @@ export default async function ExperimentsPage() {
     if (!v.earliest || row.submitted_at < v.earliest) v.earliest = row.submitted_at;
     if (!v.latest || row.submitted_at > v.latest) v.latest = row.submitted_at;
 
-    // Roll any enrolments for this submission into the variant's totals.
     const enrolments = enrolmentsBySubmission.get(row.id) ?? [];
     for (const e of enrolments) {
       v.enrolmentTotal += 1;
@@ -221,14 +246,26 @@ export default async function ExperimentsPage() {
     if (!summary.latest || row.submitted_at > summary.latest) summary.latest = row.submitted_at;
   }
 
-  // 5. Add manifest-only experiments (currently running, no leads yet) so
-  //    the page shows them even before any visitor has submitted.
+  // 7. Merge view counts into existing summaries (and create summaries for
+  //    experiments that have views but no leads yet).
+  for (const [expId, byVariant] of viewsByExp) {
+    const summary = getOrCreateSummary(expId);
+    for (const [variant, count] of byVariant) {
+      let v = summary.variants.get(variant);
+      if (!v) {
+        v = emptyVariantStats();
+        summary.variants.set(variant, v);
+      }
+      v.viewCount = count;
+      summary.totalViews += count;
+    }
+  }
+
+  // 8. Add manifest-only experiments (currently running, no data yet).
   if (manifest) {
     for (const m of manifest.experiments) {
       if (!byExperiment.has(m.id)) {
         const s = getOrCreateSummary(m.id);
-        // Pre-seed both expected variants so the table renders A and B
-        // rows with zeros, making the test visibly "in flight".
         s.variants.set("a", emptyVariantStats());
         s.variants.set("b", emptyVariantStats());
       }
@@ -256,19 +293,18 @@ export default async function ExperimentsPage() {
             <span className="text-[#b3412e]">Error loading lead data: {submissionsQuery.error.message}</span>
           ) : experiments.length === 0 ? (
             <>
-              No experiments are currently running and none have collected leads
-              historically. When a Switchable funded / self-funded / loan-funded
-              page YAML carries an <code>experiment:</code> block and the next
-              site deploy lands, it shows up here. Each lead row records which
-              experiment + variant was served via the <code>experiment_id</code>{" "}
+              No experiments are currently running and none have collected data
+              historically. When a page YAML carries an <code>experiment:</code>{" "}
+              block and the next site deploy lands, it shows up here. Page views
+              are logged server-side by the variant-router Edge Function; leads
+              record which variant was served via the <code>experiment_id</code>{" "}
               and <code>experiment_variant</code> columns on{" "}
-              <code>leads.submissions</code>; enrolment counts come from{" "}
-              <code>crm.enrolments</code> joined on submission id.
+              <code>leads.submissions</code>.
             </>
           ) : (
             <>
-              Per-variant lead and enrolment counts for every running A/B test
-              and every historical one with collected data. Variant A is the
+              Per-variant page views, leads, and enrolments for every running A/B
+              test and every historical one with collected data. Variant A is the
               canonical page; variant B is the challenger. Re-applications are
               excluded so lead counts reflect fresh paid impressions only.
               {manifestError && (
@@ -288,12 +324,18 @@ export default async function ExperimentsPage() {
         const variantB = exp.variants.get("b") ?? emptyVariantStats();
         const aQual = variantA.qualifiedCount;
         const bQual = variantB.qualifiedCount;
+        const aViews = variantA.viewCount;
+        const bViews = variantB.viewCount;
         const aBillable = variantA.enrolmentBillable;
         const bBillable = variantB.enrolmentBillable;
 
-        // Lead lift: B vs A on qualified-lead count (50/50 split assumed,
-        // so the variant with more qualified leads has the higher
-        // conversion rate).
+        // 50/50 split check: how close is the view split to equal?
+        const totalViews = aViews + bViews;
+        const splitLabel = totalViews === 0
+          ? "No views yet"
+          : `${aViews.toLocaleString()} A / ${bViews.toLocaleString()} B (${pct(aViews, totalViews)} / ${pct(bViews, totalViews)})`;
+
+        // Lead lift: B vs A on qualified-lead count.
         let leadLift = "—";
         if (aQual > 0 && bQual > 0) {
           const liftPct = ((bQual - aQual) / aQual) * 100;
@@ -305,9 +347,7 @@ export default async function ExperimentsPage() {
           leadLift = "A-only";
         }
 
-        // Enrolment lift: same approach but on billable enrolments. This
-        // is the business-truth metric (lead-gen success means nothing if
-        // the leads don't enrol). Will be NULL for weeks after launch.
+        // Enrolment lift: B vs A on billable enrolments.
         let enrolLift = "—";
         if (aBillable > 0 && bBillable > 0) {
           const liftPct = ((bBillable - aBillable) / aBillable) * 100;
@@ -319,9 +359,13 @@ export default async function ExperimentsPage() {
           enrolLift = "A-only";
         }
 
-        // Lead-confidence threshold: at least 30 qualified leads on each
-        // side. Below that, lift number is noise.
+        // Lead confidence: at least 30 qualified leads on each side.
         const enoughLeadData = aQual >= 30 && bQual >= 30;
+
+        // View split health: within 45/55 is fine; outside that is worth flagging.
+        const splitHealthy = totalViews === 0 || (
+          aViews / totalViews >= 0.45 && aViews / totalViews <= 0.55
+        );
 
         return (
           <section
@@ -351,6 +395,9 @@ export default async function ExperimentsPage() {
                   </>
                 )}
                 {" · "}
+                {totalViews > 0 && (
+                  <>{totalViews.toLocaleString()} view{totalViews === 1 ? "" : "s"} · </>
+                )}
                 {exp.totalLeads} submission{exp.totalLeads === 1 ? "" : "s"} ({exp.totalQualifiedLeads} qualified)
               </span>
             </div>
@@ -365,8 +412,10 @@ export default async function ExperimentsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Variant</TableHead>
+                  <TableHead className="text-right">Views</TableHead>
                   <TableHead className="text-right">Submissions</TableHead>
                   <TableHead className="text-right">Qualified</TableHead>
+                  <TableHead className="text-right">View → lead</TableHead>
                   <TableHead className="text-right">DQ rate</TableHead>
                   <TableHead className="text-right">Enrolled</TableHead>
                   <TableHead className="text-right">In flight</TableHead>
@@ -387,9 +436,15 @@ export default async function ExperimentsPage() {
                               ? "B (challenger)"
                               : variant}
                         </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          {stats.viewCount > 0 ? stats.viewCount.toLocaleString() : "—"}
+                        </TableCell>
                         <TableCell className="text-right">{stats.count}</TableCell>
                         <TableCell className="text-right font-semibold">
                           {stats.qualifiedCount}
+                        </TableCell>
+                        <TableCell className="text-right text-xs text-[#5a6a72]">
+                          {pct(stats.qualifiedCount, stats.viewCount)}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
                           {pct(stats.dqCount, stats.count)}
@@ -413,6 +468,14 @@ export default async function ExperimentsPage() {
             </Table>
 
             <div className="flex items-center gap-8 pt-2 border-t border-[#f0ebe5] flex-wrap">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-[#5a6a72] font-semibold">
+                  View split
+                </div>
+                <div className={`text-sm font-semibold ${splitHealthy ? "text-[#11242e]" : "text-[#b3412e]"}`}>
+                  {splitLabel}
+                </div>
+              </div>
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-[#5a6a72] font-semibold">
                   Lead lift (B vs A)
