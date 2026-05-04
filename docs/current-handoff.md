@@ -1,90 +1,50 @@
-# Platform Handoff, Session 26, 2026-05-03
+# Platform Handoff, Session 27, 2026-05-04
 
 ## Current state
 
-The full Iris dashboard architecture is built end-to-end. Stage 1 (data layer) shipped this morning. Stages 2 (daily flag-compute Edge Function), 3 (Action Centre surface on /admin overview + full /admin/iris-flags page), 4a (/admin/ads tiles + per-ad performance table), 4b (/admin/ads/[ad_id] drill-down with funnel tiles + cost tiles + spend bars + per-provider breakdown + flag history + recent leads list), and 5 (closed-loop attribution view) all shipped this afternoon. The morning's stage 1d patch was rolled back after triggering Meta's "API access blocked" gate; the columns it would have populated stay NULL until Business Verification clears. Channel B sheet-edit-mirror activation runbook handed to owner; awaiting secrets setup. Mable's form-side pixel/CAPI dedup fix shipped same day, closing the P2.3 drift root cause.
+A/B experiment infrastructure now end-to-end: platform side has migration 0061 applied to `leads.submissions` (`experiment_id` + `experiment_variant` nullable text columns + partial composite index), `_shared/ingest.ts` maps the new payload fields, and `/admin/experiments` surfaces both currently-running tests (read from the live site manifest) and per-variant lead + enrolment data. First real test (`counselling-tees-hero-variant-2026-05`) live since 2026-05-04 — counselling-skills-tees-valley with a funded-urgency challenger; awaiting paid traffic. Iris stages 3+4 architecture rebuild (UI nesting under /admin/analytics) still pending from Session 26 carry-over.
 
 ## What was done this session
 
-### Iris stage 3 — flag surface
-- New `/admin/iris-flags` page: 30-day audit history + per-automation summary tiles (active/resolved/suppressed) + full table with severity badges + state pills + metric/threshold formatting per automation type.
-- New `IrisFlagsSection` reusable component, surfaced on `/admin` overview as compact top-of-page card (max visibility per the Action-Centre-not-landing concern). Same component used on `/admin/ads`.
-- Server actions: `markFlagResolved` (stamps `read_by_owner_at = now()`) and `markAllFlagsResolved` (bulk clear with confirm pattern).
-- Sidebar nav: "Iris flags" added to Tools section.
-
-### Iris stage 4a — `/admin/ads` page
-- Period pills (24h / 7d / 30d / lifetime), brand tabs (Switchable | SwitchLeads dormant), funding-segment filter (all / funded / self-funded / loan-funded / other).
-- Five headline tiles: Spend, Leads (Meta), Qualified (DB), Routed, True CPL. All counts use `parent_submission_id IS NULL` for True CPL consistency.
-- Embedded Iris signals card.
-- Per-ad performance table: 11 columns. Sorted qualified-desc then CPL-asc. Signal dots link to /iris-flags. Ad-name cells link through to drill-down.
-- Sidebar nav: "Ads" added to Tools section.
-
-### Iris stage 4b — `/admin/ads/[ad_id]` drill-down
-- Lead funnel tiles: Spend, Meta leads, DB total, Qualified, Routed, Enrolled. Each with % of prior step.
-- Cost tiles: True CPL (highlighted), cost-per-enrolment, revenue, CTR.
-- Server-rendered SVG bars chart for daily spend (no client deps; date labels every 5th bar; tooltip on hover).
-- Per-provider breakdown table (qualified/routed/enrolled per provider, links through to /providers/[id]).
-- Iris flag history for this ad (active + resolved + suppressed).
-- Recent leads list (last 50, with state badge, routing target, enrolment status link-through).
-
-### Iris stage 5 — closed-loop attribution
-- Migration 0065 written: new view `ads_switchable.v_ad_to_enrolment` extending `v_ad_to_routed` with `leads_enrolled` (status IN enrolled, presumed_enrolled), `revenue` (SUM `crm.enrolments.billed_amount`), `cost_per_enrolment`. Returns zero per ad until enrolments populate from real revenue.
-- Schema correction: scope doc said `invoice_amount_pence` but production column is `billed_amount` (NUMERIC, £).
-
-### Stage 1d patch + rollback
-- Built and shipped patched `meta-ads-ingest` adding two new endpoint calls (`/act_X/ads` for status + creative metadata, `/act_X/adsets` for daily_budget) to populate the five metadata columns on `meta_daily`.
-- Within an hour Meta refired the "API access blocked" verification gate. The newly-published app's low-trust state means added endpoints trip a fresh permission check.
-- Rolled back: function returned to morning's working code path (single `/insights` call). Verified via test SQL: 200 with 9 rows upserted.
-- Stage 1d code preserved in git history for re-apply once Business Verification clears.
-
-### P2.3 drift signal — investigated and resolved
-- Pulled the actual lead rows for 2026-05-01/02 (10 rows, the count Iris flagged on).
-- Found: `event_id`, `_fbp`, `_fbc` all NULL on every paid lead for the last 14 days (109 rows, zero exceptions). Only `fbclid` (URL param) was captured.
-- Root cause: form's hidden inputs weren't capturing the Meta dedup/identifier fields. CAPI events arrived at Meta with no shared event_id (over-count days from no dedup) and no browser identifier (under-count days from low-confidence drops). Drift bidirectional, range -71% to +33%.
-- Brief written and passed to Mable via owner. Mable shipped fix same day (switchable-site commit 4437855): new `deploy/js/meta-dedup.js` auto-creates and populates the three hidden inputs on every form on every page, both thank-you pages share the same stashed event_id for the pixel call.
-
-### Channel B activation runbook
-- Verified `sheet-edit-mirror/index.ts` is gated cleanly on `CHANNEL_B_ENABLED` env var, with `ANTHROPIC_API_KEY` and `PENDING_UPDATE_SECRET` checked at use time.
-- Activation steps handed to owner: generate Anthropic API key (with monthly spend cap), generate PENDING_UPDATE_SECRET via openssl, paste both into Supabase secrets, set `CHANNEL_B_ENABLED=true`. Test by editing a provider sheet's `Updates` column.
-
-### Cross-project pushes
-- `switchable/site/docs/current-handoff.md`: original brief for the form fix (now marked done) + Mable's commit reference.
-- `switchable/ads/docs/current-handoff.md`: Iris stage 2 live, P2.3 root cause + fix, recalibration heads-up.
+- **Migration 0061 written + applied to production.** Two new nullable TEXT columns on `leads.submissions` (`experiment_id`, `experiment_variant`) plus a partial composite index `leads_submissions_experiment_idx` on (experiment_id, experiment_variant) WHERE experiment_id IS NOT NULL. Foundation for site-controlled A/B testing on Switchable funded / self-funded / loan-funded landing pages. Additive only; no existing column or row touched. Verified live via `information_schema.columns` lookup. Commit `4dc5088` (migration file). Note: `_shared/ingest.ts` mapping for these fields was bundled into Sasha's Session 26 commit `9c59e9f` (parallel-session collision detected → Sasha renumbered iris-role grant from 0061 to 0063 to avoid the clash; ingest changes shipped with that deploy).
+- **`/admin/experiments` page shipped (commit `0e5459b`).** Reads `leads.submissions` for every row carrying `experiment_id`, groups by experiment + variant in JS, renders one section per experiment with submission count, qualified count (DQ-excluded), DQ rate, lift (B vs A) on qualified deltas, and a confidence flag (≥30 qualified per side before reading the lift). Re-applications excluded. Empty state explains the opt-in mechanism. New "Experiments" entry in `admin-shell` Tools nav between Analytics and Social.
+- **`/admin/experiments` extended (commit `f07dfcc`).** Two extensions per owner request:
+  1. Currently-running tests appear regardless of lead volume. Page now fetches the live experiments manifest from `https://switchable.org.uk/data/experiments.json` (cached 60s) and merges with DB-driven counts. Running tests with zero leads render with empty A/B rows so the test is visibly "in flight" the moment a deploy lands. "Live" / "Ended" pill on each section header. Page URL shown for the live ones.
+  2. Per-variant enrolment counts via `crm.enrolments` JOIN on `submission_id IN (... experiment lead ids)`. Status grouping: `enrolled` + `presumed_enrolled` = billable, `open` + `cannot_reach` = in flight, `lost` = lost. New columns: Enrolled, In flight, Lead → enrol % per variant. New "Enrolment lift (B vs A)" stat alongside the existing "Lead lift". Footnote on each section reminds owner enrolment data takes 2-6 weeks to stabilise.
+- **Changelog entries added.** Migration 0061 entry + `/admin/experiments` page-live entry, both at the top of `platform/docs/changelog.md`. Commits `4dc5088` (migration entry as part of file) and `ee2cac3` (page-live entry).
 
 ## Next steps
 
-1. **Channel B activation** (owner action). Generate Anthropic API key + PENDING_UPDATE_SECRET, paste into Supabase secrets, flip CHANNEL_B_ENABLED=true. Then test by editing a provider sheet Updates column.
-2. **Apply migration 0065** (Iris stage 5 view). Single transaction, no password placeholder. Once applied, /admin/ads cost-per-enrolment tile + drill-down revenue numbers will start showing data when enrolments accumulate.
-3. **Meta Business Verification** (owner action, Meta Business Manager → Security Centre). 1-3 business days for Meta to process. Unblocks re-deploy of stage 1d patch (preserved in git history pre-rollback).
-4. **Meta App Review** for `ads_management` + `ads_read` Advanced Access. After Business Verification. 5-10 business days. ClickUp [869d4xtng](https://app.clickup.com/t/869d4xtng).
-5. **Watch P2.3 over next 7 days** as post-fix submissions accumulate. Drift should normalise from -71/+33 to single-digit %. If it doesn't, fix wasn't sufficient and Stape CAPI dedup config needs investigation.
-6. **Riverside apprenticeship pilot call** (Tue 5 May 14:00, per master plan critical path). If they say yes, apprenticeships data model + routing becomes the next platform priority over stage 1d backfill.
+1. **Iris stages 3+4 architecture rebuild (`869d511uk`, high priority, Session 26 carry-over).** Owner rejected the standalone /admin/iris-flags + /admin/ads architecture. Nest under /admin/analytics with brand selector (Switchable | SwitchLeads) + Ads as one analytics view. Strip "Iris" from ALL user-facing UI labels (page titles, card headings, button labels, sidebar nav). DB table stays `iris_flags` internally. Plus deploy verification: owner couldn't see Session 26 evening dashboard on /admin overview, confirm push went through. Full detail in `switchable/ads/` Session 24 cross-project push at top of the previous handoff.
+2. **`/admin/analytics:418` Blended CPL surgical fix (Session 26 carry-over).** Add `const freshLeads = subs.filter(s => s.parent_submission_id === null).length`, use `freshLeads` in the CPL calc only at line 418. Leave totalLeads/totalQualified alone (events-vs-people distinction is intentional).
+3. **Channel B activation (owner action, Session 26 carry-over).** Generate Anthropic API key + PENDING_UPDATE_SECRET, paste into Supabase secrets, flip `CHANNEL_B_ENABLED=true`. Test by editing a provider sheet Updates column.
+4. **Apply migration 0065 (Iris stage 5 view, Session 26 carry-over).** Single transaction, no password placeholder. Once applied, /admin/ads cost-per-enrolment tile + drill-down revenue start populating when enrolments accumulate.
+5. **Meta Business Verification (owner action, Session 26 carry-over).** Meta Business Manager → Security Centre. 1-3 business days. Unblocks re-deploy of stage 1d patch (preserved in git history pre-rollback).
+6. **Meta App Review for `ads_management` + `ads_read` Advanced Access (Session 26 carry-over).** After Business Verification. 5-10 business days. ClickUp `869d4xtng`.
+7. **Watch P2.3 over next 7 days (Session 26 carry-over).** Post-fix submissions should normalise drift from -71/+33% to single-digit %. If not, Stape CAPI dedup config is the next layer. Mable's form-side fix (commit `4437855` + follow-up `e8953f3`) shipped + verified working on lead id 262.
+8. **Riverside apprenticeship pilot call (Session 26 carry-over).** Tue 5 May 14:00 per master plan critical path. If yes, apprenticeships data model + routing becomes next priority.
+9. **`/admin/experiments` cleanup once first test ends.** When the counselling test winner is locked and the page YAML's `experiment:` block is removed, that experiment moves to "Ended" pill. No code action needed; it stays in the historical record automatically.
 
 ## Decisions and open questions
 
 **Decisions made this session:**
-- **Rolled back stage 1d patch.** Adding `/act_X/ads` and `/act_X/adsets` calls to a low-trust Meta app refired the verification gate within an hour. Lesson: don't expand a low-trust Meta app's API surface; saved as feedback memory.
-- **Iris flags surface lives on /admin overview, not /admin/actions.** Owner had said /admin/actions wasn't landing; putting flags there alone would inherit that problem. /admin overview is the daily-glance surface where flags get max visibility. Same component dropped into /admin/ads as well.
-- **Per-ad drill-down at `/admin/ads/[ad_id]` route, not side drawer.** Routes are deep-linkable, no client state, matches existing dashboard pattern. Side drawer would have needed client component + sheet primitive.
-- **Spend trend chart as inline server-rendered SVG**, no chart library added. Sufficient at pilot scale (≤30 days = ≤30 bars). Revisit if multi-axis chart becomes a frequent need.
-- **Cost-per-enrolment tile shipped on /admin/ads/[ad_id] showing "—" until enrolments accumulate.** Better than hiding the tile entirely; surfaces what the metric WILL show once Phase 4 is real.
-- **Migration 0065 ships even though crm.enrolments is empty.** No-op-but-correct. When enrolments land, no further deploy needed.
+- **Migration 0061 lands two columns on `leads.submissions` rather than a separate `experiments` table.** Reasoning: per-lead attribution is read-heavy + low cardinality (one experiment_id per submission, one variant per submission); a JOIN to a second table on every analytics read would cost more than two extra columns. Aligned with the existing pattern of attribution columns on the lead row (utm_*, fbclid, gclid).
+- **`/admin/experiments` reads experiments.json at runtime rather than mirroring it into the DB.** Reasoning: the manifest is small (a few hundred bytes), updated only on site deploy, fetch+cache at the dashboard layer is simpler than a sync job. If the dashboard ever needs to query "what experiments ran in 2026-Q2?" we'd revisit and persist the manifest history.
+- **Enrolment lift surfaced alongside lead lift, not instead of.** Lead lift is the leading indicator (fast, noisy at low volume); enrolment lift is the lagging business-truth indicator (slow, accurate). Surfacing both in the same row lets the owner read the leading early and trust the lagging later. Footnote spells this out.
 
 **Open questions:**
-- Will Mable's pixel/CAPI fix fully close the drift, or is there a Stape CAPI dedup config also wrong? Watch over next 7 days.
-- When Business Verification + App Review clear, the rolled-back stage 1d patch needs re-applying. Check git history for the exact diff (rollback commit `ea683b0`).
+- **Should the experiments manifest history be persisted?** Currently the dashboard only sees experiments that are CURRENTLY running OR have leads in the DB. If an experiment ends with zero leads (dead drop), it disappears. Probably fine for now; revisit if it becomes a gap.
+- **Per-variant CPL numbers** would close the loop with `/admin/ads` (which has cost data). Out of scope today; needs joining `meta_daily` ad spend to lead variant — possible future enhancement.
 
 ## Watch items
 
-- **Channel B activation pending owner secrets.** Until ANTHROPIC_API_KEY + PENDING_UPDATE_SECRET set + CHANNEL_B_ENABLED=true flipped, sheet-edit-mirror returns "Channel B disabled" on Updates-column edits. No silent failure — function explicitly says it's gated.
-- **Migration 0065 pending application.** v_ad_to_enrolment view doesn't exist in production yet; cost-per-enrolment column on /admin/ads/[ad_id] will show "—" until applied (and even after, until crm.enrolments has rows).
-- **Stage 1d columns NULL across all rows** (delivery_state, daily_budget, status, headline, primary_text). Re-deploy the rolled-back patch when Meta verification clears.
-- **First scheduled iris-daily-flags cron at 09:30 BST tomorrow** (08:30 UTC 2026-05-04). Verify it ran cleanly. Expected: in-flight P2.3 flag from today suppressed by 7-day rule; new P2.3 should be smaller after Mable's fix; P1.2/P2.2 quiet.
-- **Meta App un-Development-Moded but no Business Verification yet.** Recurring "API access blocked" gate keeps firing — twice this session (morning + when stage 1d patch added new endpoints). Each gate fire requires Charlotte to log into developers.facebook.com and clear a verification screen. Will keep happening until Business Verification clears.
-- **CLI migration tracking now includes 0056-0065.** Next `db push` will need `migration repair --status applied 0048 0050 0051 0052 0053 0054 0055 0056 0057 0058 0059 0060 0061 0063 0064 0065` (excluding 0049 HubSpot, no 0062 in production). Run before next CLI push.
+- A/B experiment `counselling-tees-hero-variant-2026-05` running on `/funded/counselling-skills-tees-valley/`. First leads with `experiment_id` populated will appear on `/admin/experiments`. Need ≥30 qualified per side for lift to be readable.
+- Iris P2.3 drift watch (Session 26 carry-over): 7-day window from 2026-05-03. Confirm Meta/CAPI dedup normalises post-fix.
+- Migration 0065 unapplied (Session 26 carry-over). Owner action.
+- Riverside call Tue 5 May 14:00 (Session 26 carry-over).
 
 ## Next session
 
-- **Folder:** `platform/`
-- **First task:** Check Channel B activation status. If owner has set up secrets, do a manual sheet-edit test to confirm the AI suggestion email lands. If not yet, defer Channel B and verify the morning's iris-daily-flags cron ran cleanly (check `net._http_response` after 08:31 UTC for a 200 from iris-daily-flags). Then if Business Verification has cleared, re-deploy the rolled-back stage 1d patch (commit `ea683b0`).
-- **Cross-project:** Mable's form fix and the resulting P2.3 normalisation both flagged in `switchable/ads/`; confirm Iris isn't surprised by the changing flag pattern over the next week.
+- **Folder:** platform/
+- **First task:** Owner decides which Session 26 carry-over to tackle first. Top of the list is the Iris stages 3+4 architecture rebuild (`869d511uk`) since it has owner-rejected work that needs replacing AND a deploy-visibility issue to resolve.
+- **Cross-project:** Counterpart `switchable/site/` Session 50 handoff covers the site-side A/B work whose lead/variant data this dashboard reads. No new tasks pushed to other projects this session — `/admin/experiments` is read-only against existing DB columns + a public site URL.
