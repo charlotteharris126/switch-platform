@@ -4,6 +4,25 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-04: Migration 0067 — referral voucher trigger restricted to confirmed enrolment only
+
+**Type:** Schema change. Two Postgres functions replaced via CREATE OR REPLACE.
+
+**Status:** Applied and verified via pg_proc.prosrc.
+
+**Why:** Charlotte (via Clara) decided the referral voucher should fire only when a provider has confirmed the learner actually started. Presumed-enrolment rows are billing placeholders; paying out a voucher against a row that later gets disputed would mean paying for an enrolment that didn't happen.
+
+**Changes:**
+- `crm.upsert_enrolment_outcome`: `IF p_status IN ('enrolled', 'presumed_enrolled')` narrowed to `IF p_status = 'enrolled'`
+- `crm.run_enrolment_auto_flip`: FOREACH referral flip loop removed entirely; `v_flipped_id BIGINT` declaration removed. Brevo sync loop unaffected.
+- Migration history repaired via `supabase migration repair --status applied 0067` after manual SQL editor apply.
+
+**Consumers affected:** leads.referrals voucher_status; admin /admin/referrals dashboard; referrer Brevo attributes.
+
+**Signed off:** Owner (session 2026-05-04, via Clara instruction)
+
+---
+
 ## 2026-05-03: Migration 0065 — Iris stage 5: ads_switchable.v_ad_to_enrolment view (closed-loop attribution)
 
 **Type:** Schema change. New view extending v_ad_to_routed with enrolment counts + revenue + cost-per-enrolment.
