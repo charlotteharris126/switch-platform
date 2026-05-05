@@ -4,6 +4,34 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-05: Migration 0070 — is_test flag on leads.submissions
+
+**Type:** Schema change. New column, index, access policy, view updates.
+
+**Status:** Migration file written. Apply via SQL editor, then run data fix below.
+
+**Why:** Test submissions (e.g. Charlotte Harris #277, owner QA) were polluting KPI views, CPL calculations, and the "needs attention" routing queue. The flag lets the admin mark any submission as a test so it is silently excluded from all metrics.
+
+**Changes:**
+- `leads.submissions.is_test BOOLEAN NOT NULL DEFAULT false` — new column
+- Sparse partial index `leads_submissions_is_test_idx` (WHERE is_test = true)
+- `GRANT UPDATE (is_test) ON leads.submissions TO authenticated`
+- `admin_update_submissions_is_test` RLS UPDATE policy (gated on admin.is_admin())
+- `public.vw_attribution` replaced — adds `WHERE NOT s.is_test`
+- `public.vw_weekly_kpi` replaced — adds `WHERE NOT is_test` to weekly_leads CTE
+- `leads.vw_needs_status_update` replaced — adds `AND s.is_test = false`
+- `public.vw_admin_health` replaced — both lead counts exclude is_test rows
+- Dashboard: TEST badge added to leads list and lead detail page header
+
+**Data fix (run after migration):**
+```sql
+UPDATE leads.submissions SET is_test = true WHERE id = 277;
+```
+
+**Signed off:** Owner (session 2026-05-05)
+
+---
+
 ## 2026-05-04: Migration 0069 — INSERT RLS policy for functions_writer on page_views
 
 **Type:** Schema change. New RLS policy.

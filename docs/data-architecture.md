@@ -301,6 +301,11 @@ CREATE TABLE leads.submissions (
   experiment_id              TEXT,
   experiment_variant         TEXT,
 
+  -- Test flag (added in migration 0070). Set to true for owner-submitted
+  -- QA / test submissions. Excluded from all KPI views, CPL calculations,
+  -- and the routing queue. Default false — all real leads land here.
+  is_test                    BOOLEAN NOT NULL DEFAULT false,
+
   -- Audit
   raw_payload                JSONB NOT NULL,
   archived_at                TIMESTAMPTZ,
@@ -319,6 +324,11 @@ CREATE INDEX ON leads.submissions (session_id) WHERE session_id IS NOT NULL;
 -- Referral programme indexes (migration 0053)
 CREATE UNIQUE INDEX leads_submissions_referral_code_uniq ON leads.submissions (referral_code);
 CREATE INDEX leads_submissions_referrer_lead_id_idx ON leads.submissions (referrer_lead_id) WHERE referrer_lead_id IS NOT NULL;
+
+-- Test flag index (migration 0070). Partial — only test rows (< 1% of volume).
+CREATE INDEX leads_submissions_is_test_idx
+  ON leads.submissions (submitted_at DESC)
+  WHERE is_test = true;
 
 -- A/B experiment attribution index (migration 0061). Partial — only rows in a
 -- running experiment. Composite supports the analytics page's "leads per
@@ -1147,7 +1157,8 @@ These are read-only analytical surfaces, not source of truth. Defined in migrati
 Joins `leads.submissions` against `ads_switchable.meta_daily` on campaign/ad UTM conventions. Shows which ad generated which lead.
 
 ```sql
-CREATE VIEW public.vw_attribution AS
+CREATE VIEW public.vw_attribution
+  WITH (security_invoker = true) AS
 SELECT
   s.id AS submission_id,
   s.submitted_at,
@@ -1165,7 +1176,8 @@ SELECT
 FROM leads.submissions s
 LEFT JOIN ads_switchable.meta_daily m
   ON m.ad_id = s.utm_content
- AND m.date = DATE(s.submitted_at);
+ AND m.date = DATE(s.submitted_at)
+WHERE NOT s.is_test; -- migration 0070: exclude test submissions from CPL calcs
 ```
 
 Naming convention the ads team must follow: `utm_campaign` = Meta campaign_id, `utm_content` = Meta ad_id. Set in ad URL parameters at campaign creation.
@@ -1185,6 +1197,7 @@ WITH weekly_leads AS (
     COUNT(*) FILTER (WHERE is_dq) AS dq_leads,
     COUNT(DISTINCT primary_routed_to) FILTER (WHERE primary_routed_to IS NOT NULL) AS providers_served
   FROM leads.submissions
+  WHERE NOT is_test -- migration 0070: exclude test submissions from KPI counts
   GROUP BY 1
 ),
 weekly_spend AS (
@@ -1286,7 +1299,7 @@ Routed leads older than 14 days where no non-open enrolment outcome exists. Feed
 ```sql
 CREATE VIEW leads.vw_needs_status_update
   WITH (security_invoker = true) AS
--- leads routed > 14 days ago, not DQ, not archived,
+-- leads routed > 14 days ago, not DQ, not archived, not test (migration 0070),
 -- with no enrolments row in status ('enrolled','not_enrolled','disputed','presumed_enrolled')
 -- ORDER BY routed_at ASC
 ```
@@ -1299,8 +1312,8 @@ Single-row snapshot of the headline counters rendered on the admin dashboard top
 CREATE VIEW public.vw_admin_health
   WITH (security_invoker = true) AS
 SELECT
-  leads_last_7d,             -- submissions in last 7 days
-  unrouted_over_48h,         -- qualified, unrouted, > 48h old
+  leads_last_7d,             -- submissions in last 7 days (excludes is_test, migration 0070)
+  unrouted_over_48h,         -- qualified, unrouted, > 48h old (excludes is_test)
   errors_over_7d,            -- dead_letter unresolved > 7 days (stale)
   errors_unresolved_total,   -- dead_letter unresolved
   needs_status_update_count; -- rows in leads.vw_needs_status_update
