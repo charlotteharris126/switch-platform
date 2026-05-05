@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 1 of the email platform rearchitecture is built and deployed. Three new tables live in production (`crm.email_log`, `crm.consent_history`, `audit.access_requests`), and the `brevo-event-webhook` Edge Function is deployed waiting for `BREVO_WEBHOOK_SECRET` + Brevo dashboard config (owner tasks, instructions in changelog). No live behaviour change yet — Phase 1 is foundations only. Earlier in the same session, a wrong-path `is_test` column (migration 0070) was added then immediately reverted (0071) when the existing `dq_reason='owner_test_submission'` mechanism was rediscovered; two test leads were back-tagged correctly; a one-click test-tag toggle was added to the dashboard (migration 0072 + new server action).
+Phase 1 of the email platform rearchitecture is **commissioned end-to-end**. Three new tables live in production (`crm.email_log`, `crm.consent_history`, `audit.access_requests`). `brevo-event-webhook` Edge Function deployed, `BREVO_WEBHOOK_SECRET` set in Vault, Brevo dashboard webhook configured with matching bearer, real Brevo event verified hitting the function with 200 (counter on Brevo side: 1 successful delivery). No live behaviour change yet — Phase 1 is foundations only; writers come in Phase 2. Earlier in the same session, a wrong-path `is_test` column (migration 0070) was added then immediately reverted (0071) when the existing `dq_reason='owner_test_submission'` mechanism was rediscovered; two test leads were back-tagged correctly; a one-click test-tag toggle was added to the dashboard (migration 0072 + new server action).
 
 ## What was done this session
 
@@ -27,11 +27,10 @@ Phase 1 of the email platform rearchitecture is built and deployed. Three new ta
 
 ## Next steps
 
-1. **Owner config to make Phase 1 live:** generate `openssl rand -hex 32`, paste into Supabase Vault as `BREVO_WEBHOOK_SECRET`, configure Brevo webhook with matching `Authorization: Bearer <SECRET>` custom header pointing at `https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/brevo-event-webhook`. Smoke test by triggering any Brevo event and checking `crm.email_log` / `crm.consent_history`. Full instructions in changelog 2026-05-05 entry for migrations 0073-0075.
-2. **Phase 2a (next platform session):** stand up `sendTransactional` helper in `_shared/brevo.ts` (with optional `forceResend` param, idempotency check on `crm.email_log`, retry + dead-letter), set up transactional templates in Brevo (`BREVO_TEMPLATE_U1_FUNDED` etc.), wire up `routing-confirm` to call it for U1, ship `BREVO_SHADOW_MODE` env flag (default true). Live U1 sends still go via the existing automation; the new path runs in parallel for parity verification.
-3. **Phase 2b (one platform session after 2a):** `email-stalled-cron` (09:00 UTC daily), update `admin-brevo-chase` to use `forceResend: true`, `email-u4-cron` (09:30 UTC daily). Stalled cron query MUST include `is_dq = false AND archived_at IS NULL` per spec amendment.
-4. Courses Direct: chase Ranjit for HubSpot form URL. Once received: assign `crm_webhook_url` + generate `crm_webhook_token` on `crm.providers.courses-direct`. No further code/schema work needed.
-5. Update infrastructure manifest "Last verified" date for `iris-daily-flags` once it has its first scheduled run (08:30 UTC daily).
+1. **Phase 2a (next platform session):** stand up `sendTransactional` helper in `_shared/brevo.ts` (with optional `forceResend` param, idempotency check on `crm.email_log`, retry + dead-letter), set up transactional templates in Brevo (`BREVO_TEMPLATE_U1_FUNDED` etc.), wire up `routing-confirm` to call it for U1, ship `BREVO_SHADOW_MODE` env flag (default true). Live U1 sends still go via the existing automation; the new path runs in parallel for parity verification.
+2. **Phase 2b (one platform session after 2a):** `email-stalled-cron` (09:00 UTC daily), update `admin-brevo-chase` to use `forceResend: true`, `email-u4-cron` (09:30 UTC daily). Stalled cron query MUST include `is_dq = false AND archived_at IS NULL` per spec amendment.
+3. Courses Direct: chase Ranjit for HubSpot form URL. Once received: assign `crm_webhook_url` + generate `crm_webhook_token` on `crm.providers.courses-direct`. No further code/schema work needed.
+4. Update infrastructure manifest "Last verified" date for `iris-daily-flags` once it has its first scheduled run (08:30 UTC daily).
 
 ## Decisions and open questions
 
@@ -41,12 +40,12 @@ Phase 1 of the email platform rearchitecture is built and deployed. Three new ta
 
 ## Watch items
 
-- `BREVO_WEBHOOK_SECRET` set + Brevo dashboard configured before any test event is fired (function will return 500 until the secret env var is populated, since it throws at module load).
 - First scheduled `iris-daily-flags` cron run (08:30 UTC daily) — verify it fires and produces flags.
 - Courses Direct HubSpot integration remains dormant pending Ranjit's form URL.
 - EMS Susan auto-flip billing trigger — first billable enrolment forecast imminent.
 - `admin_update_owner_test_flags` RLS policy is the first UPDATE policy on `leads.submissions` for the `authenticated` role — watch for any unintended writes via other code paths.
-- DKIM/SPF/DMARC for switchable.org.uk — Charlotte working on this with Brevo. Phase 1 builds without it but Phase 1 success criteria gates on green records.
+- DKIM/SPF/DMARC for switchable.org.uk — Charlotte working on this with Brevo. Required before Phase 2a deliverability is trustworthy.
+- Phase 1 commissioning lessons (worth carrying forward to any future webhook setup): Supabase secrets dashboard shows SHA-256 digest, NOT the secret value — set secrets via CLI; Brevo's Token-auth method auto-prepends `Bearer ` so paste only the hex into Brevo.
 
 ## Next session
 

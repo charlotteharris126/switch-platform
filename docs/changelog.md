@@ -23,11 +23,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 **Webhook auth pattern note:** Brevo's public docs do not document HMAC payload signing (verified 2026-05-05 against `developers.brevo.com` — only event schemas published). Brevo's dashboard supports custom HTTP headers on webhook calls, so we use a high-entropy bearer secret in the `Authorization` header. Spec amended in same session to reflect this.
 
-**Owner tasks before Phase 1 is "live":**
-1. Generate webhook secret: `openssl rand -hex 32`
-2. **Paste directly into Supabase Vault** (Dashboard → Project Settings → Edge Functions → Manage secrets). Add new secret named `BREVO_WEBHOOK_SECRET` with the generated value. Do NOT paste the value into chat or any iCloud-synced file.
-3. In Brevo dashboard: Settings → Transactional → Webhooks. Add a new webhook with the events of interest (delivered, hard_bounce, soft_bounce, spam, unsubscribed at minimum; opens/clicks optional but useful). Set URL to `https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/brevo-event-webhook`. Add custom header `Authorization` with value `Bearer <PASTE_THE_SAME_SECRET_HERE>`.
-4. Smoke test: trigger any Brevo event and check `crm.email_log` / `crm.consent_history` for the row.
+**Owner tasks before Phase 1 is "live":** ✅ Complete (2026-05-05). End-to-end verified with a real Brevo event hitting the function with valid bearer, returning 200, and Brevo's webhook counter showing 1 successful delivery.
+
+**Lessons learnt during commissioning (worth capturing for future webhook setups):**
+- The Supabase secrets dashboard shows the **SHA-256 digest** of each secret, not the value. Copying the digest from the dashboard list and pasting it as the secret value is the most common bug — and ate ~30 minutes of this session. Always set the secret via CLI (`supabase secrets set NAME=$VALUE --project-ref X`) and copy the value directly from the terminal output you ran `openssl rand -hex 32` in. Never trust dashboard display values as secret values.
+- Brevo's Token authentication method **auto-prepends `Bearer `** to the value field. Paste ONLY the hex into Brevo's Token value, never `Bearer <hex>` (would result in `Bearer Bearer <hex>` being sent).
+- A long-lived diagnostic mode in the Edge Function (returning length + 4-char head/tail prefixes in the 401 response without leaking the full secret) was the tool that finally pinpointed the digest-vs-value mistake. Pattern is reusable for any future shared-secret webhook auth — keep it as a deployable diagnostic in `_shared/` if a similar bug ever bites again.
 
 **Signed off:** Owner (session 2026-05-05).
 
