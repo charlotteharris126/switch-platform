@@ -5,10 +5,13 @@
 // event into the right side-effect:
 //
 //   - Update `crm.email_log.status` for the matching brevo_message_id row
-//   - For unsubscribe / spam complaint: append a row to `crm.consent_history`
-//     and flip `SW_CONSENT_MARKETING` to false on the contact in Brevo
-//     (deferred to Phase 3 — Phase 1 only logs the consent_history row;
-//     Phase 3's _shared/brevo.ts upgrade will handle the round-trip)
+//   - For unsubscribe / spam complaint: append a row to `crm.consent_history`,
+//     flip `leads.submissions.marketing_opt_in` to false (every row matching
+//     the recipient email), and push `SW_CONSENT_MARKETING=false` as an
+//     attribute update to Brevo. Brevo's own channel-level unsubscribe is
+//     already handled by Brevo when the user clicks the unsub link — the
+//     attribute push keeps our DB and Brevo's contact attribute in sync so
+//     marketing automation entry filters can rely on the attribute.
 //
 // Auth: Brevo's public docs do not document HMAC payload signing, so we use
 // a shared-secret bearer token in the Authorization header. Brevo's webhook
@@ -16,10 +19,11 @@
 // `Authorization: Bearer <BREVO_WEBHOOK_SECRET>` and the function checks
 // constant-time against the env var.
 //
-// Phase 1 of the email platform rearchitecture. Spec at
+// Phase 1 + Phase 3a of the email platform rearchitecture. Spec at
 // platform/docs/email-platform-rearchitecture-spec.md.
 
 import postgres from "npm:postgres@3";
+import { upsertBrevoContact } from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 const WEBHOOK_SECRET = Deno.env.get("BREVO_WEBHOOK_SECRET");
@@ -197,7 +201,43 @@ async function processEvent(event: BrevoEvent): Promise<void> {
       )
     `;
 
-    // Note: flipping SW_CONSENT_MARKETING in Brevo + Supabase happens in
-    // Phase 3's _shared/brevo.ts upgrade. Phase 1 only logs the event.
+    // Phase 3a: flip marketing_opt_in to false on every matching submission.
+    // Idempotent (UPDATE ... WHERE marketing_opt_in = true). Uses
+    // functions_writer role — column-level grant + RLS policy in migration
+    // 0079. Multiple submissions per contact are possible (re-applications,
+    // re-submissions) so we update all rows for this email rather than just
+    // the most recent.
+    try {
+      await sql.begin(async (trx) => {
+        await trx`SET LOCAL ROLE functions_writer`;
+        await trx`
+          UPDATE leads.submissions
+             SET marketing_opt_in = false
+           WHERE LOWER(email) = LOWER(${recipientEmail})
+             AND marketing_opt_in = true
+        `;
+      });
+    } catch (err) {
+      // Non-fatal: consent_history is already logged, channel state at Brevo
+      // is already correct (user clicked their unsub link), only our DB
+      // mirror is stale until Phase 3d's daily reconcile cron catches it.
+      console.error(`brevo-event-webhook: marketing_opt_in flip failed for ${recipientEmail}:`, String(err));
+    }
+
+    // Push the attribute update to Brevo so SW_CONSENT_MARKETING on the
+    // contact agrees with our DB. Brevo's channel-level state is already
+    // correct (set when user clicked unsub); this keeps the attribute in
+    // sync so future automation entry filters that read the attribute
+    // see the right value.
+    const upsertResult = await upsertBrevoContact({
+      email: recipientEmail.toLowerCase(),
+      attributes: { SW_CONSENT_MARKETING: false },
+    });
+    if (!upsertResult.ok) {
+      console.error(
+        `brevo-event-webhook: SW_CONSENT_MARKETING push to Brevo failed for ${recipientEmail}:`,
+        upsertResult.error,
+      );
+    }
   }
 }

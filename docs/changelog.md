@@ -4,6 +4,31 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-05: Phase 3a — brevo-event-webhook now flips marketing_opt_in on unsub/spam events (migration 0079)
+
+**Type:** Behaviour change in `brevo-event-webhook` Edge Function. New RLS UPDATE policy + column-level grant on `leads.submissions` for the `functions_writer` role. No table or column added.
+
+**Status:** Migration 0079 applied. Function redeployed `--no-verify-jwt`. Phase 3 lifecycle gate is now closed end-to-end for the webhook reactor side; the proactive-push side (Phase 3b — `upsertBrevoContact` syncing channel state on every contact upsert) and backfill (3c) and reconciliation cron (3d) are queued for next session.
+
+**Why:** Phase 1 of the rearchitecture left a known gap: when a Brevo unsubscribe / spam event arrives, the function logged it to `crm.consent_history` but did NOT flip the source-of-truth `marketing_opt_in` flag on `leads.submissions`. Without this, the moment Phase 5 marketing automations launch, an entry filter reading the attribute on the Brevo contact would be correct, but our admin dashboard view of "did this person consent?" would show stale data — and any future code that re-evaluates marketing eligibility from our DB would target unsubscribed learners.
+
+**Changes:**
+- Migration 0079: column-level `GRANT UPDATE (marketing_opt_in) ON leads.submissions TO functions_writer` + RLS policy `functions_writer_consent_updates` (USING true / WITH CHECK true). Mirrors the column-level grant pattern from migration 0072 for owner-test toggling.
+- `brevo-event-webhook/index.ts`: on `unsubscribed` / `spam` / `complaint` events, after the `consent_history` insert, the function now (1) flips `marketing_opt_in=false` on every `leads.submissions` row matching the recipient email (idempotent — `WHERE marketing_opt_in = true`), and (2) pushes `SW_CONSENT_MARKETING=false` as an attribute update via `upsertBrevoContact` so the Brevo contact's attribute matches our DB. Both are best-effort — failures log and continue, since the `consent_history` row already captures what happened and Brevo's channel-level unsubscribe is already in place from when the user clicked the unsub link.
+
+**What this does NOT do (queued for next session):**
+- Push channel-subscription state on every routing-time contact upsert (Phase 3b). New contacts who said "no" at signup still get channel=subscribed at Brevo by default until 3b ships.
+- One-off backfill of existing contacts (Phase 3c).
+- Daily reconciliation cron between Brevo and Supabase (Phase 3d).
+
+These are not blocking — Brevo's own channel-level unsubscribe handling is the actual deliverability gate, and there are zero marketing automations live yet to mistarget. The remaining Phase 3 pieces tighten the belt-and-braces layer; Phase 3a closes the most-visible compliance gap (the admin dashboard's view of consent state was about to start lying).
+
+**Smoke test:** no live event to test against until either a Phase 5 marketing email gets unsubscribed OR a current utility email gets marked spam. The function's path is type-checked + deployed; first real unsub will exercise it. Pre-existing `sql.json` deno-check warnings (also present in route-lead.ts and unrelated) noted but not blocking — Edge Function deploys aren't strict-mode.
+
+**Signed off:** Owner (session 2026-05-05).
+
+---
+
 ## 2026-05-05: Phase 2 shadow mode flipped from real-send to log-only
 
 **Type:** Behaviour change in `_shared/brevo.ts` `sendTransactional`. No schema change.
