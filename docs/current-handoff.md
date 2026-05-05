@@ -1,55 +1,78 @@
-# Platform Handoff, Session 31, 2026-05-05
+# Platform Handoff, Session 32, 2026-05-05
 
 ## Current state
 
-Phase 1 of the email platform rearchitecture is **commissioned end-to-end**. Three new tables live in production (`crm.email_log`, `crm.consent_history`, `audit.access_requests`). `brevo-event-webhook` Edge Function deployed, `BREVO_WEBHOOK_SECRET` set in Vault, Brevo dashboard webhook configured with matching bearer, real Brevo event verified hitting the function with 200 (counter on Brevo side: 1 successful delivery). No live behaviour change yet — Phase 1 is foundations only; writers come in Phase 2. Earlier in the same session, a wrong-path `is_test` column (migration 0070) was added then immediately reverted (0071) when the existing `dq_reason='owner_test_submission'` mechanism was rediscovered; two test leads were back-tagged correctly; a one-click test-tag toggle was added to the dashboard (migration 0072 + new server action).
+Email platform rearchitecture: Phase 1 + 2a + 2b + 3a + 6a all shipped and deployed in this session. Shadow mode is **log-only** (new transactional path writes `crm.email_log` rows but does NOT call Brevo — old automations remain the actual sender during the parity window). Cutover target Thursday 2026-05-08 after the 48h parity window. Phase 3a closed the consent-writeback gap (webhook now flips `marketing_opt_in` + pushes attribute to Brevo on unsub/spam). Phases 3b/3c/3d (channel-state push at every contact upsert, backfill, daily reconcile cron) and 6b (admin/automations status page) queued for next session.
 
 ## What was done this session
 
-**Email rearchitecture, Phase 1:**
-- Migration 0073 `crm.email_log`: per-send audit row, idempotency key, indexes on submission+type / status+time / brevo_message_id. RLS: admin + analytics read, functions_writer ALL.
-- Migration 0074 `crm.consent_history`: append-only consent state log (no UPDATE/DELETE policy by design). Submission_id nullable for future newsletter-only contacts.
-- Migration 0075 `audit.access_requests`: GDPR right-of-access log mirroring the existing `audit.erasure_requests` shape from migration 0016. Spec originally proposed parallel `crm.erasure_log`; on review of 0016 the spec was amended to reuse `audit.erasure_requests` rather than duplicate.
-- New Edge Function `brevo-event-webhook` deployed (`--no-verify-jwt`, with bearer-token auth). Maps Brevo events → `crm.email_log.status` updates by `brevo_message_id`. For unsubscribe/spam events, also writes `crm.consent_history`. Phase 3 will add the round-trip to flip `SW_CONSENT_MARKETING` in Brevo + Supabase; Phase 1 only logs.
-- Webhook auth: shared-secret bearer in `Authorization` header. Brevo's public docs do not document HMAC payload signing (verified 2026-05-05 against developers.brevo.com). Spec amendment 3 was corrected from "HMAC sig verification" to "shared-secret bearer in custom header" — Brevo's dashboard supports custom headers per webhook, which gives equivalent protection when the secret is high-entropy.
-- `data-architecture.md` updated with all three new tables.
-- `infrastructure-manifest.md` updated with new function row, new secret row (`BREVO_WEBHOOK_SECRET`), and refreshed owner-test allowlist.
-- Spec also patched mid-session for the `audit.erasure_requests` reuse and the Brevo HMAC correction.
+**Phase 2a — sendTransactional + U1 hook:**
+- `_shared/brevo.ts`: new `sendTransactional({sql, templateId, recipient, params, submissionId, emailType, forceResend?})` helper. Idempotent on `crm.email_log` (submission_id, email_type), retries 429/5xx with 250ms/1s/4s backoff, dead-letters on final failure, marks `metadata.shadow=true` while shadow mode on.
+- `_shared/route-lead.ts`: new `sendU1Transactional` hook fires after `upsertLearnerInBrevo` for both auto-route and manual-confirm. Branches `BREVO_TEMPLATE_U1_FUNDED` (gov/loan) vs `BREVO_TEMPLATE_U1_SELF`. Skips silently for re-applications, missing email, null funding, or unset template env.
+- Env vars set in Vault: `BREVO_TEMPLATE_U1_FUNDED=5`, `BREVO_TEMPLATE_U1_SELF=10`, `BREVO_SHADOW_MODE=true`.
+- `routing-confirm` + `netlify-lead-router` redeployed.
+- End-to-end smoke test passed: submission 288, real Brevo send, `brevo_message_id` populated, two U1s arrived in test inbox.
 
-**Earlier this session (test-lead cleanup, separate concern):**
-- Migration 0070 (`is_test` flag) shipped, then reverted by 0071 — net effect on schema zero.
-- Two test leads back-tagged: #277 `hello@charlie-harris.com`, #284 `kieranwrites@gmail.com`. Owner cleared the EMS Google Sheet rows manually (both had been routed before back-tagging).
-- Allowlist in `_shared/ingest.ts` extended: domain `charlie-harris.com`, email `kieranwrites@gmail.com`. `netlify-lead-router` + `netlify-leads-reconcile` redeployed.
-- Migration 0072: column-level `GRANT UPDATE (is_dq, dq_reason, archived_at)` + `admin_update_owner_test_flags` RLS policy.
-- Dashboard: `markOwnerTestSubmission` server action + `OwnerTestToggle` button on lead detail page.
-- Migration history repairs: 0049, 0068, 0069 marked applied (schema was already in prod from prior SQL-editor applies — verified before repair).
-- Session 30 handoff stale claims corrected (0049's columns exist in prod; route-lead.ts HubSpot edits are committed at `16cb56b`).
+**Phase 2b — stalled + chaser + U4:**
+- New Edge Function `email-stalled-cron`: daily 09:00 UTC, Phase-2-gated (EXISTS u1_*_funded/self in email_log), throttled 250ms.
+- New Edge Function `email-u4-cron`: daily 09:30 UTC, same gate. Scheduled job over DB trigger by spec amendment.
+- `admin-brevo-chase`: refactored to dual-fire chaser via `sendTransactional` with `forceResend=true`. Per-row `transactional` field added to results.
+- Migrations 0076 + 0077: cron schedules.
+- Migration 0078: split `email_type='chaser'` into `chaser_funded` + `chaser_self` to match Charlotte's actual Brevo template setup. Required because spec assumed one chaser template.
+- Env vars set: `BREVO_TEMPLATE_STALLED_FUNDED=17`, `STALLED_SELF=19`, `CHASER_FUNDED=6`, `CHASER_SELF=12`, `U4_FUNDED=22`, `U4_SELF=24`.
+- All three functions redeployed.
+
+**Phase 6a — admin dashboard email visibility:**
+- Lead detail page (`app/admin/leads/[id]/page.tsx`): new "Email log" Card with chronological `crm.email_log` table (status badges, shadow/forced metadata pills, brevo_message_id).
+- Leads list (`app/admin/leads/page.tsx`): new "U1" column. Per-row badge — green for sent/delivered/opened/clicked, red "missing" for routed Phase-2 leads with no U1 row, dash for DQ/unrouted/pre-Phase-2.
+- Auto-deploys via Netlify on push to main.
+
+**Shadow mode flipped from real-send to log-only** mid-session after Charlotte flagged duplicate-email concern:
+- `sendTransactional` now short-circuits when `BREVO_SHADOW_MODE=true`: writes the `email_log` queued row, immediately flips to `status='sent'`, returns without calling Brevo. `metadata.shadow_log_only=true` set on insert. `brevo_message_id` stays NULL — the unambiguous signal.
+- Lead detail page metadata pill renders "log-only" with tooltip explaining old automation handled the actual send.
+- All 5 callers redeployed. Three real leads (288, 290, 292) received duplicate U1s before the switch took effect; small one-off brand impact, contained.
+
+**Phase 3a — webhook consent writeback (migration 0079):**
+- Migration 0079: column-level `GRANT UPDATE (marketing_opt_in)` + `functions_writer_consent_updates` RLS policy on `leads.submissions`.
+- `brevo-event-webhook`: on unsub/spam/complaint events, now flips `marketing_opt_in=false` on every matching `leads.submissions` row AND pushes `SW_CONSENT_MARKETING=false` to Brevo via `upsertBrevoContact`. Both best-effort (consent_history already logged + Brevo channel-level unsub already in place).
+- Function redeployed.
+
+**Diagnostics:**
+- Investigated kieranwrites@gmail.com auto-resubmissions (3 today). Diagnosed: same browser session_id across all three suggests a tab-still-open or test-runner re-firing the form. System handled correctly (allowlist DQ'd 289 + 291, no provider routed, no email_log rows for those). Charlotte chose to leave the residual Brevo contact alone; will exit legacy automation naturally.
 
 ## Next steps
 
-1. **Phase 2a (next platform session):** stand up `sendTransactional` helper in `_shared/brevo.ts` (with optional `forceResend` param, idempotency check on `crm.email_log`, retry + dead-letter), set up transactional templates in Brevo (`BREVO_TEMPLATE_U1_FUNDED` etc.), wire up `routing-confirm` to call it for U1, ship `BREVO_SHADOW_MODE` env flag (default true). Live U1 sends still go via the existing automation; the new path runs in parallel for parity verification.
-2. **Phase 2b (one platform session after 2a):** `email-stalled-cron` (09:00 UTC daily), update `admin-brevo-chase` to use `forceResend: true`, `email-u4-cron` (09:30 UTC daily). Stalled cron query MUST include `is_dq = false AND archived_at IS NULL` per spec amendment.
-3. Courses Direct: chase Ranjit for HubSpot form URL. Once received: assign `crm_webhook_url` + generate `crm_webhook_token` on `crm.providers.courses-direct`. No further code/schema work needed.
-4. Update infrastructure manifest "Last verified" date for `iris-daily-flags` once it has its first scheduled run (08:30 UTC daily).
+1. **Tonight + tomorrow (Charlotte):** run U1 parity check via the new dashboard view (leads list U1 column). Look for any "missing" red badges on routed Phase-2 leads. None expected. If anything's red, flag.
+2. **Thursday 2026-05-08 (cutover):** Charlotte pings Sasha "ready for cutover". Sasha runs wider query covering U1 + stalled + chaser + U4. If green, flips `BREVO_SHADOW_MODE=false` + redeploys 5 functions (`routing-confirm`, `netlify-lead-router`, `email-stalled-cron`, `email-u4-cron`, `admin-brevo-chase`). Charlotte then disables old utility automations in Brevo same day (Phase 4).
+3. **Phase 3b (next platform session):** make `upsertBrevoContact` push channel-subscription state to Brevo on every contact upsert (not just attribute). Research Brevo's exact channel-state API endpoint first — couple of candidates (`emailBlacklisted`, channel-level subscription endpoints) need confirming before code.
+4. **Phase 3c (next platform session):** one-off backfill script `data-ops/00XX_backfill_email_campaigns_channel.ts`. Batches of 100, 250ms inter-call delay, halts on >0.5% error rate per batch, checkpoint-resumable. Owner reviews dry-run output before live run.
+5. **Phase 3d (next platform session):** new `brevo-consent-reconcile-daily` Edge Function + cron migration. 04:00 UTC daily. Pulls Brevo channel state, compares to Supabase `marketing_opt_in`, auto-corrects, alerts if drift > 2%.
+6. **Phase 6b (lower priority):** `/admin/automations` status page showing each cron's last run, recent send counts, failure counts, latest failures. Failure alert email at >3 consecutive utility send failures. ~30-60 min platform.
+7. **Phase 5 (Charlotte-led, after Phase 3 complete):** build N1/N2/N3 nurture, referral cold-lead, referral lost-lead automations in Brevo with `SW_CONSENT_MARKETING=true` entry filters.
+8. **Standing:** Courses Direct HubSpot integration dormant pending Ranjit's form URL. iris-daily-flags first scheduled run still pending verification.
 
 ## Decisions and open questions
 
-- `audit.erasure_requests` (live since migration 0016) is reused for GDPR Article 17 erasure tracking; new `audit.access_requests` mirrors it for Article 15 access. The original spec proposal of parallel `crm.erasure_log` + `crm.access_log` was retired in favour of reusing existing audit infrastructure.
-- Brevo webhook auth uses shared-secret bearer in custom header rather than HMAC payload signing. Decided after verifying Brevo's docs don't document HMAC — the bearer pattern with a high-entropy secret gives equivalent protection. Spec amendment 3 corrected accordingly.
-- Owner-test tagging belongs to the canonical DQ path, not a parallel `is_test` column. Decided this session after audit. One mechanism, one source of truth.
+- **Shadow mode switched from real-send to log-only** mid-session. Why: Charlotte flagged real-send shadow's "every routed lead gets 2 U1s" as not worth the rendering-verification benefit. Trade-off: lose end-to-end Brevo deliverability check for U1 self / stalled / chaser / U4 in the shadow window. Mitigated by: U1 funded already verified end-to-end this morning; the others use identical code paths with different template IDs.
+- **Pre-Phase-2 lifecycle gate** on stalled + U4 crons (`EXISTS u1_*_funded/self in email_log`). Why: prevents pre-Phase-2 leads from being re-stalled/re-U4'd on top of whatever the old automation already did. Acceptable risk: pre-Phase-2 in-flight leads at cutover time lose access to utility emails (small cohort, 1-2 weeks of overlap). Alternative (backfilling email_log rows) was rejected — would mean re-sending utility emails to historical learners.
+- **Chaser email_type split (migration 0078)** — spec assumed one chaser template, Charlotte's Brevo has funded (id 6) + self (id 12). Splitting matches the funded/self pattern used by U1, stalled, U4.
+- **Phase 3a only this session, not full Phase 3.** Why: 3b touches Brevo channel-state API (research needed), 3c writes to thousands of production contacts (needs dry-run + green-light), 3d is new cron with compliance impact. All three deserve fresh-head treatment. Owner accepted the framing.
+- **Open question: Brevo channel-state API endpoint for Phase 3b.** Brevo offers a few mechanisms (`emailBlacklisted` boolean, list-level unsubscribes, dedicated channel endpoints). Need to research and pick before coding. Doesn't block tonight or Thursday cutover.
 
 ## Watch items
 
-- **🔴 Shadow mode monitoring (Charlotte) — cutover target Thursday 2026-05-08.** Charlotte runs the U1-only parity query against `crm.email_log` once tonight and once tomorrow night. Thursday she pings Sasha "ready for cutover" — Sasha then runs a wider query covering U1 + stalled + chaser + U4 (since Phase 2 will have shipped by then and day-4 leads will be candidates), and flips `BREVO_SHADOW_MODE = false` + redeploys 5 functions if all green. 48h after cutover Charlotte pauses the old utility automations in Brevo. Why 48h not 24h: gives ~4-6 real Phase-2 leads through the parity window vs ~2-3, more cutover confidence. Query and full procedure in `switchable/email/docs/current-handoff.md`.
-- First scheduled `iris-daily-flags` cron run (08:30 UTC daily) — verify it fires and produces flags.
-- Courses Direct HubSpot integration remains dormant pending Ranjit's form URL.
-- EMS Susan auto-flip billing trigger — first billable enrolment forecast imminent.
-- `admin_update_owner_test_flags` RLS policy is the first UPDATE policy on `leads.submissions` for the `authenticated` role — watch for any unintended writes via other code paths.
-- DKIM/SPF/DMARC for switchable.org.uk — Charlotte working on this with Brevo. Required before Phase 2a deliverability is trustworthy.
-- Phase 1 commissioning lessons (worth carrying forward to any future webhook setup): Supabase secrets dashboard shows SHA-256 digest, NOT the secret value — set secrets via CLI; Brevo's Token-auth method auto-prepends `Bearer ` so paste only the hex into Brevo.
+- **🔴 Shadow mode monitoring + cutover target Thursday 2026-05-08.** Tonight + tomorrow Charlotte runs the dashboard parity check (U1 column on leads list). Thursday cutover sequence in step 2 of Next steps.
+- **Three real leads received duplicate U1s today** before the log-only switch took effect (submissions 288, 290, 292 — recipients charliemarieharris+phase2a@icloud.com, krithigudipally76@gmail.com, kayleighxaviagray@gmail.com). One-off, contained, no further action.
+- **Kieran's residual Brevo contact** still in legacy automation — Charlotte chose to leave it (will exit SF8 sequence naturally). Watch for further automated form re-submissions from the same browser session_id (`ddfa3877-838f-4c70-9c44-c0c2ff74e1f1`).
+- **First scheduled `iris-daily-flags` run** (08:30 UTC daily) — still pending verification per Session 31. Tomorrow morning 09:30 BST is the first opportunity.
+- **First scheduled `email-stalled-cron-daily` run** (09:00 UTC tomorrow) and `email-u4-cron-daily` (09:30 UTC tomorrow). Both will return `candidates: 0` initially because no Phase-2 lead has hit day-4 yet. That's the correct empty case; verify via `net._http_response` showing 200.
+- **DKIM/SPF/DMARC for switchable.org.uk** — Charlotte ongoing with Brevo. Required before Thursday cutover for deliverability confidence.
+- **Courses Direct HubSpot integration** dormant pending Ranjit's form URL.
+- **EMS Susan auto-flip billing trigger** — first billable enrolment forecast imminent.
+- **Phase 3a smoke test deferred** — no live unsub/spam event yet to exercise the new writeback path. First real event will exercise it.
 
 ## Next session
 
 - **Folder:** platform/
-- **First task:** Phase 2a of email rearchitecture — stand up `sendTransactional` helper in `_shared/brevo.ts`, set up Brevo transactional templates for U1 (funded + self), wire up `routing-confirm` to call it, ship `BREVO_SHADOW_MODE` env flag. Spec at `platform/docs/email-platform-rearchitecture-spec.md`. Phase 1 already commissioned end-to-end so no setup gating Phase 2a.
-- **Cross-project:** switchable/email session 12 produced the spec; Phase 1 (this session) and Phase 3 (channel enforcement + backfill) must ship before email returns to Phase 5 (build N1/N2/N3 + referral automations in Brevo). Charlotte's parallel task: finish DKIM/SPF/DMARC setup for switchable.org.uk in Brevo (in progress).
+- **First task:** Phase 3b — research Brevo's channel-state API endpoint, then make `upsertBrevoContact` push channel-subscription state on every contact upsert (not just attribute). Spec at `platform/docs/email-platform-rearchitecture-spec.md` Phase 3.
+- **Cross-project:** switchable/email/ Phase 5 (N1/N2/N3 + referral automations in Brevo) is gated on Phases 3b + 3c + 3d completing. Pushed an updated entry to switchable/email/docs/current-handoff.md reflecting Phase 1+2+3a shipped, cutover Thursday, Phase 5 still gated. Charlotte's parallel pre-cutover task: DKIM/SPF/DMARC for switchable.org.uk.
