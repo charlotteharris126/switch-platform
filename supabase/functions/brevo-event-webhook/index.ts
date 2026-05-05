@@ -39,23 +39,38 @@ const sql = postgres(DATABASE_URL, {
 });
 
 // Map Brevo event names → our crm.email_log.status enum.
-// Brevo event names per https://developers.brevo.com/docs/transactional-webhooks
-// Events we don't map (e.g. "request", "deferred", "blocked") are logged with
-// raw_event but don't change status — they'd usually be intermediate states.
+//
+// Brevo's webhook payload uses lowercase, snake-case event names. The UI in
+// Brevo's dashboard labels some of them differently (e.g. UI says "Complaint"
+// while the payload field is "spam"; UI says "Clicked" while the payload field
+// is "click"). Both name variants are mapped where ambiguous so a future Brevo
+// rename doesn't silently drop events.
+//
+// Events not mapped (deferred, sent, first_opening, proxy_open, error) are
+// expected to be left OFF in the Brevo dashboard. If they arrive anyway they
+// land in metadata.last_event but don't change status.
 const EVENT_TO_STATUS: Record<string, string> = {
-  delivered:    "delivered",
-  hard_bounce:  "bounced_hard",
-  soft_bounce:  "bounced_soft",
-  opened:       "opened",
-  uniqueOpened: "opened",
-  click:        "clicked",
-  spam:         "complained",
-  unsubscribed: "complained", // we log unsubscribe in consent_history; complained captures the email_log side
+  delivered:        "delivered",
+  hard_bounce:      "bounced_hard",
+  hardBounce:       "bounced_hard",   // camelCase variant seen in some Brevo accounts
+  soft_bounce:      "bounced_soft",
+  softBounce:       "bounced_soft",
+  blocked:          "bounced_hard",   // Brevo refused to send (suppression list etc.) — treat as hard bounce semantically
+  invalid_email:    "bounced_hard",   // bad address — same as hard bounce
+  invalidEmail:     "bounced_hard",
+  opened:           "opened",
+  uniqueOpened:     "opened",
+  unique_opened:    "opened",
+  click:            "clicked",
+  clicked:          "clicked",
+  spam:             "complained",
+  complaint:        "complained",     // UI label variant
+  unsubscribed:     "complained",     // we log unsubscribe in consent_history; complained captures the email_log side
 };
 
 // Consent-affecting events. These trigger a consent_history insert in addition
-// to the email_log status update.
-const CONSENT_EVENTS = new Set(["unsubscribed", "spam"]);
+// to the email_log status update. Both UI/payload name variants covered.
+const CONSENT_EVENTS = new Set(["unsubscribed", "spam", "complaint"]);
 
 interface BrevoEvent {
   event?: string;
