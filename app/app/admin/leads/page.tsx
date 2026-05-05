@@ -243,9 +243,9 @@ export default async function LeadsPage({
 
   const { data, count, error } = await q;
 
-  // Load filter dropdown options + enrolment statuses for the rows on this page in parallel.
+  // Load filter dropdown options + enrolment statuses + email_log status for the rows on this page in parallel.
   const submissionIdsOnPage = (data ?? []).map((r: { id: number }) => r.id);
-  const [categoriesRes, routesRes, coursesRes, providersRes, enrolmentsRes] = await Promise.all([
+  const [categoriesRes, routesRes, coursesRes, providersRes, enrolmentsRes, emailLogRes] = await Promise.all([
     supabase.schema("leads").from("submissions").select("funding_category").not("funding_category", "is", null),
     supabase.schema("leads").from("submissions").select("funding_route").not("funding_route", "is", null),
     supabase.schema("leads").from("submissions").select("course_id").not("course_id", "is", null),
@@ -257,12 +257,33 @@ export default async function LeadsPage({
           .select("submission_id, status, lost_reason, disputed_at, last_chaser_at")
           .in("submission_id", submissionIdsOnPage)
       : Promise.resolve({ data: [], error: null }),
+    submissionIdsOnPage.length > 0
+      ? supabase
+          .schema("crm")
+          .from("email_log")
+          .select("submission_id, email_type, status, triggered_at")
+          .in("submission_id", submissionIdsOnPage)
+          .order("triggered_at", { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
   ]);
 
   // Map submission_id → latest enrolment row for fast lookup in the table render.
   const enrolmentBySubId = new Map<number, { status: string; lost_reason: string | null; disputed_at: string | null; last_chaser_at: string | null }>();
   for (const e of (enrolmentsRes.data ?? []) as Array<{ submission_id: number; status: string; lost_reason: string | null; disputed_at: string | null; last_chaser_at: string | null }>) {
     enrolmentBySubId.set(e.submission_id, { status: e.status, lost_reason: e.lost_reason, disputed_at: e.disputed_at, last_chaser_at: e.last_chaser_at });
+  }
+
+  // Map submission_id → latest U1 transactional status (Phase 2 parity check).
+  // The query already orders triggered_at DESC, so the first row per (sub_id,
+  // email_type) wins. Only U1 is surfaced in the list view for now —
+  // stalled/chaser/U4 live on the detail page email log.
+  const u1StatusBySubId = new Map<number, string>();
+  for (const e of (emailLogRes.data ?? []) as Array<{ submission_id: number; email_type: string; status: string }>) {
+    if (e.email_type === "u1_funded" || e.email_type === "u1_self") {
+      if (!u1StatusBySubId.has(e.submission_id)) {
+        u1StatusBySubId.set(e.submission_id, e.status);
+      }
+    }
   }
 
   const fundingCategories = Array.from(
@@ -324,6 +345,7 @@ export default async function LeadsPage({
               <TableHead>Course</TableHead>
               <TableHead>Funding</TableHead>
               <TableHead>Lead status</TableHead>
+              <TableHead>U1</TableHead>
               <TableHead>Last chaser</TableHead>
               <TableHead>Campaign</TableHead>
               <TableHead>Routed</TableHead>
@@ -332,7 +354,7 @@ export default async function LeadsPage({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center text-[#5a6a72] py-10">
+                <TableCell colSpan={12} className="text-center text-[#5a6a72] py-10">
                   No leads match these filters.
                 </TableCell>
               </TableRow>
@@ -409,6 +431,31 @@ export default async function LeadsPage({
                         </Badge>
                       )}
                     </div>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {(() => {
+                      // Phase 2 U1 parity at-a-glance.
+                      // - Routed leads should have a u1_funded or u1_self row.
+                      // - Pre-Phase-2 leads (anyone routed before 2026-05-05)
+                      //   never had a transactional U1 sent. Showing "—" for
+                      //   them is the right answer; "missing" would be a false
+                      //   positive.
+                      // - DQ + unrouted leads correctly never get a U1.
+                      const u1 = u1StatusBySubId.get(r.id);
+                      if (u1) {
+                        const healthy = u1 === "sent" || u1 === "delivered" || u1 === "opened" || u1 === "clicked";
+                        const cls = healthy
+                          ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-100"
+                          : "bg-[#b3412e] text-white hover:bg-[#b3412e]";
+                        return <Badge className={`text-xs ${cls}`} title={`U1 status: ${u1}`}>{u1}</Badge>;
+                      }
+                      if (r.is_dq) return <span className="text-[#5a6a72]">—</span>;
+                      if (!r.primary_routed_to) return <span className="text-[#5a6a72]">—</span>;
+                      // Routed, non-DQ, no U1 row. Pre-2026-05-05 leads land here legitimately.
+                      const isPrePhase2 = new Date(r.submitted_at).getTime() < new Date("2026-05-05T12:00:00Z").getTime();
+                      if (isPrePhase2) return <span className="text-[#5a6a72]" title="Pre-Phase-2 lead, no transactional U1 expected">—</span>;
+                      return <Badge className="text-xs bg-[#b3412e] text-white hover:bg-[#b3412e]" title="Routed Phase-2 lead with no U1 send recorded">missing</Badge>;
+                    })()}
                   </TableCell>
                   <TableCell className="text-xs text-[#5a6a72] whitespace-nowrap">
                     {(() => {

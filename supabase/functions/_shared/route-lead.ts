@@ -27,6 +27,7 @@ import { getOwnerEmail, adminLeadUrl } from "./owner-email.ts";
 import {
   type BrevoAttributes,
   sendBrevoEmail,
+  sendTransactional,
   upsertBrevoContact,
 } from "./brevo.ts";
 
@@ -212,6 +213,13 @@ export async function routeLead(
   // owner finishes the Brevo dashboard wiring) — no error, no dead_letter
   // spam, just a no-op until the env vars land.
   await upsertLearnerInBrevo(sql, provider, submission);
+
+  // U1 transactional send (Phase 2a of email rearchitecture). Same posture as
+  // upsertLearnerInBrevo: best-effort, both routing paths, fails silently if
+  // template env vars haven't been set yet. While BREVO_SHADOW_MODE=true the
+  // existing list-add automation also fires (via upsertLearnerInBrevo above),
+  // so the learner gets two U1s during parity verification.
+  await sendU1Transactional(sql, provider, submission, trigger);
 
   // Side effects (best-effort): sheet append + provider notification.
   //
@@ -649,6 +657,78 @@ export async function upsertLearnerInBrevo(
     return { ok: false, error: upsertResult.error ?? "unknown" };
   }
   return { ok: true };
+}
+
+// Phase 2a U1 send. Composes the per-send template params from the same matrix
+// + submission shape that upsertLearnerInBrevo uses (so contact attributes and
+// transactional params stay consistent), routes to U1_FUNDED vs U1_SELF based
+// on funding_category, and delegates idempotency / retry / dead_letter to
+// sendTransactional. Best-effort: missing template env, missing email, or null
+// funding_category all skip silently. Re-applications skip too — the parent
+// submission already received U1, the new submission_id would otherwise pass
+// the per-submission idempotency check and double-send.
+async function sendU1Transactional(
+  sql: Sql,
+  provider: ProviderRow,
+  submission: SubmissionRow,
+  trigger: RouteTrigger,
+): Promise<void> {
+  if (trigger === "re_application") return;
+  if (!submission.email) return;
+  if (!submission.funding_category) {
+    console.error(`U1 skipped for submission ${submission.id}: funding_category null`);
+    return;
+  }
+
+  const isFunded = submission.funding_category === "gov" || submission.funding_category === "loan";
+  const templateEnvName = isFunded ? "BREVO_TEMPLATE_U1_FUNDED" : "BREVO_TEMPLATE_U1_SELF";
+  const emailType: "u1_funded" | "u1_self" = isFunded ? "u1_funded" : "u1_self";
+
+  const templateId = parseEnvInt(templateEnvName);
+  if (templateId == null) {
+    // Mirror the BREVO_LIST_ID_SWITCHABLE_UTILITY posture: silently skip until
+    // Charlotte sets the env var, no dead_letter spam during shadow setup.
+    return;
+  }
+
+  const ctx = await composeBrevoCourseContext(submission);
+
+  const params: Record<string, string | number | boolean | null> = {
+    FIRSTNAME: submission.first_name ?? "",
+    LASTNAME: submission.last_name ?? "",
+    SW_COURSE_NAME: ctx.courseTitle,
+    SW_COURSE_SLUG: ctx.courseSlug,
+    SW_COURSE_INTAKE_ID: ctx.intakeId,
+    SW_COURSE_INTAKE_DATE: ctx.intakeDate,
+    SW_REGION_NAME: ctx.regionName,
+    SW_SECTOR: ctx.sector,
+    SW_PROVIDER_NAME: provider.company_name,
+    SW_PROVIDER_TRUST_LINE: provider.trust_line ?? "",
+    SW_FUNDING_CATEGORY: submission.funding_category,
+    SW_FUNDING_ROUTE: submission.funding_route ?? "",
+    SW_REFERRAL_CODE: submission.referral_code ?? "",
+    SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
+  };
+
+  const recipientName = [submission.first_name, submission.last_name]
+    .filter(Boolean)
+    .join(" ") || undefined;
+
+  const result = await sendTransactional({
+    sql,
+    templateId,
+    recipient: { email: submission.email, name: recipientName },
+    params,
+    submissionId: submission.id,
+    emailType,
+    brand: "switchable",
+    tags: ["u1", emailType, trigger],
+  });
+
+  if (!result.ok && result.status === "failed") {
+    // sendTransactional already wrote the email_log + dead_letter rows.
+    console.error(`U1 send failed for submission ${submission.id}: ${result.error ?? "unknown"}`);
+  }
 }
 
 // Same Brevo upsert as upsertLearnerInBrevo, minus the provider attributes,

@@ -457,3 +457,9 @@ verify_jwt = false
 
 [functions.brevo-event-webhook]
 verify_jwt = false
+
+[functions.email-stalled-cron]
+verify_jwt = false
+
+[functions.email-u4-cron]
+verify_jwt = false

@@ -34,6 +34,8 @@
 // One email = one Brevo contact across both brands; namespacing prevents
 // brand-specific fields colliding on shared records.
 
+import type { Sql } from "npm:postgres@3";
+
 const BREVO_TRANSACTIONAL_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
 const BREVO_CONTACTS_ENDPOINT = "https://api.brevo.com/v3/contacts";
 
@@ -166,6 +168,277 @@ export async function addBrevoContactToList(args: { email: string; listId: numbe
 
   const url = `${BREVO_CONTACTS_ENDPOINT}/lists/${args.listId}/contacts/add`;
   return await fetchBrevo(url, "POST", apiKey, { emails: [args.email] });
+}
+
+// =============================================================================
+// Transactional templated send (Phase 2 of email rearchitecture, 2026-05-05)
+// =============================================================================
+// sendTransactional is the canonical helper for utility emails (U1, stalled,
+// chaser, U4) under the spec at platform/docs/email-platform-rearchitecture-spec.md.
+// It dedupes one-shot sends via crm.email_log, retries 429 / 5xx / transient
+// network errors with exponential backoff, persists a leads.dead_letter row on
+// final failure, and tags the row metadata with { shadow: true } when
+// BREVO_SHADOW_MODE is on so the parallel-run period can be filtered out of
+// post-cutover analytics.
+//
+// The chaser is the only email type that uses forceResend — every chaser send
+// is a deliberate re-fire by the owner or by a sheet edit. All other email
+// types are one-shot per submission_id.
+
+const BREVO_TRANSACTIONAL_RETRY_DELAYS_MS = [250, 1000, 4000] as const;
+
+export type EmailLogType =
+  | "u1_funded" | "u1_self"
+  | "stalled_funded" | "stalled_self"
+  | "chaser_funded" | "chaser_self"
+  | "u4_funded" | "u4_self"
+  | "n1" | "n2" | "n3"
+  | "referral_cold" | "referral_lost"
+  | "newsletter";
+
+export interface SendTransactionalArgs {
+  sql: Sql;
+  templateId: number;
+  recipient: { email: string; name?: string };
+  params: Record<string, string | number | boolean | null>;
+  submissionId: number;
+  emailType: EmailLogType;
+  /** Sender selection. Defaults to "switchable" — every utility email under the
+   *  rearchitecture is learner-facing. */
+  brand?: BrevoBrand;
+  tags?: string[];
+  replyTo?: { email: string; name?: string };
+  /** Only the chaser path sets this. Skips the email_log idempotency check;
+   *  every forced send still gets its own queued row. */
+  forceResend?: boolean;
+}
+
+export type SendTransactionalStatus =
+  | "sent"
+  | "failed"
+  | "skipped_duplicate"
+  | "skipped_missing_template";
+
+export interface SendTransactionalResult {
+  ok: boolean;
+  status: SendTransactionalStatus;
+  emailLogId?: number;
+  brevoMessageId?: string;
+  error?: string;
+  shadowMode: boolean;
+}
+
+export async function sendTransactional(args: SendTransactionalArgs): Promise<SendTransactionalResult> {
+  const shadowMode = (Deno.env.get("BREVO_SHADOW_MODE") ?? "true").toLowerCase() !== "false";
+
+  if (!args.templateId) {
+    return { ok: false, status: "skipped_missing_template", error: "templateId not set", shadowMode };
+  }
+  if (!args.recipient?.email) {
+    return { ok: false, status: "failed", error: "recipient.email required", shadowMode };
+  }
+
+  // Idempotency: skip if a non-failed send already exists for this
+  // (submission_id, email_type). 'failed' rows do not block — a previous
+  // failure must not silently silence the next attempt. The chaser passes
+  // forceResend=true to bypass this entirely.
+  if (!args.forceResend) {
+    try {
+      const existing = await args.sql<Array<{ id: number }>>`
+        SELECT id FROM crm.email_log
+         WHERE submission_id = ${args.submissionId}
+           AND email_type    = ${args.emailType}
+           AND status IN ('queued','sent','delivered','opened','clicked')
+         LIMIT 1
+      `;
+      if (existing.length > 0) {
+        return { ok: true, status: "skipped_duplicate", emailLogId: Number(existing[0].id), shadowMode };
+      }
+    } catch (err) {
+      console.error("sendTransactional idempotency check failed:", String(err));
+      return { ok: false, status: "failed", error: `idempotency check: ${describeFetchError(err)}`, shadowMode };
+    }
+  }
+
+  // Insert the queued row up front so post-mortem traces show the attempt
+  // even if the Brevo call hangs the function or the host process dies
+  // mid-send.
+  let emailLogId: number;
+  try {
+    emailLogId = await args.sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      const rows = await trx<Array<{ id: number }>>`
+        INSERT INTO crm.email_log (
+          submission_id, email_type, channel, template_id, recipient_email,
+          status, metadata
+        ) VALUES (
+          ${args.submissionId},
+          ${args.emailType},
+          'transactional',
+          ${String(args.templateId)},
+          ${args.recipient.email},
+          'queued',
+          ${trx.json({
+            shadow: shadowMode,
+            shadow_log_only: shadowMode,
+            force_resend: !!args.forceResend,
+          })}
+        )
+        RETURNING id
+      `;
+      return Number(rows[0].id);
+    });
+  } catch (err) {
+    console.error("sendTransactional email_log insert failed:", String(err));
+    return { ok: false, status: "failed", error: `email_log insert: ${describeFetchError(err)}`, shadowMode };
+  }
+
+  // Phase 2 shadow window: skip the actual Brevo call so learners only
+  // receive the legacy automation email, not a duplicate from the new
+  // path. The email_log row is still flipped to status='sent' so parity
+  // dashboards register the would-have-been send. metadata.shadow_log_only
+  // is set on insert so post-cutover analytics can filter these out.
+  // brevo_message_id stays NULL — that's the unambiguous signal that the
+  // row didn't actually leave Brevo's transactional API.
+  if (shadowMode) {
+    try {
+      await args.sql.begin(async (trx) => {
+        await trx`SET LOCAL ROLE functions_writer`;
+        await trx`
+          UPDATE crm.email_log
+             SET status = 'sent',
+                 sent_at = now()
+           WHERE id = ${emailLogId}
+        `;
+      });
+    } catch (err) {
+      console.error("sendTransactional shadow log-only update failed:", String(err));
+    }
+    return { ok: true, status: "sent", emailLogId, shadowMode };
+  }
+
+  const brand = args.brand ?? "switchable";
+  const cfg = BRANDS[brand];
+  const senderEmail = Deno.env.get(cfg.senderEmailEnv);
+  const apiKey = Deno.env.get("BREVO_API_KEY");
+
+  if (!apiKey || !senderEmail) {
+    const reason = !apiKey ? "BREVO_API_KEY not set" : `${cfg.senderEmailEnv} not set`;
+    await markEmailLogFailed(args.sql, emailLogId, reason);
+    await persistTransactionalDeadLetter(args.sql, args, emailLogId, reason);
+    return { ok: false, status: "failed", error: reason, emailLogId, shadowMode };
+  }
+
+  const body = {
+    sender: { email: senderEmail, name: cfg.senderName },
+    to: [args.recipient],
+    templateId: Number(args.templateId),
+    params: args.params,
+    replyTo: args.replyTo,
+    tags: args.tags,
+  };
+
+  const sendResult = await callTransactionalWithRetry(apiKey, body);
+  if (!sendResult.ok) {
+    const errMsg = sendResult.error ?? `brevo ${sendResult.status ?? "?"}`;
+    await markEmailLogFailed(args.sql, emailLogId, errMsg);
+    await persistTransactionalDeadLetter(args.sql, args, emailLogId, errMsg);
+    return { ok: false, status: "failed", error: errMsg, emailLogId, shadowMode };
+  }
+
+  let messageId: string | undefined;
+  try {
+    const data = await sendResult.response!.json() as { messageId?: string };
+    messageId = data.messageId;
+  } catch {
+    // Brevo returned 2xx with no parseable body. Send happened; just no id.
+  }
+
+  try {
+    await args.sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      await trx`
+        UPDATE crm.email_log
+           SET status = 'sent',
+               sent_at = now(),
+               brevo_message_id = ${messageId ?? null}
+         WHERE id = ${emailLogId}
+      `;
+    });
+  } catch (err) {
+    console.error("sendTransactional email_log update failed (sent path):", String(err));
+    // Send already happened. Don't surface as failure; the row is just stale.
+  }
+
+  return { ok: true, status: "sent", emailLogId, brevoMessageId: messageId, shadowMode };
+}
+
+async function callTransactionalWithRetry(apiKey: string, body: unknown): Promise<InternalResult> {
+  let lastResult: InternalResult = { ok: false };
+  const maxAttempts = BREVO_TRANSACTIONAL_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      const delay = BREVO_TRANSACTIONAL_RETRY_DELAYS_MS[attempt - 1];
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    lastResult = await fetchBrevo(BREVO_TRANSACTIONAL_ENDPOINT, "POST", apiKey, body);
+    if (lastResult.ok) return lastResult;
+    const status = lastResult.status ?? 0;
+    // Treat status-undefined (network error / timeout) as retryable.
+    const isRetryable = !status || status === 429 || (status >= 500 && status < 600);
+    if (!isRetryable) return lastResult;
+  }
+  return lastResult;
+}
+
+async function markEmailLogFailed(sql: Sql, emailLogId: number, errorText: string): Promise<void> {
+  try {
+    await sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      await trx`
+        UPDATE crm.email_log
+           SET status     = 'failed',
+               error_text = ${errorText.slice(0, 4000)}
+         WHERE id = ${emailLogId}
+      `;
+    });
+  } catch (err) {
+    console.error("markEmailLogFailed failed:", String(err));
+  }
+}
+
+async function persistTransactionalDeadLetter(
+  sql: Sql,
+  args: SendTransactionalArgs,
+  emailLogId: number,
+  errorContext: string,
+): Promise<void> {
+  try {
+    await sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      await trx`
+        INSERT INTO leads.dead_letter (source, raw_payload, error_context)
+        VALUES (
+          'brevo_transactional',
+          ${trx.json({
+            submission_id: args.submissionId,
+            email_type: args.emailType,
+            template_id: args.templateId,
+            recipient_email: args.recipient.email,
+            email_log_id: emailLogId,
+          })},
+          ${errorContext.slice(0, 4000)}
+        )
+      `;
+    });
+  } catch (err) {
+    console.error("persistTransactionalDeadLetter failed:", String(err));
+  }
+}
+
+function describeFetchError(err: unknown): string {
+  if (err instanceof Error) return err.message ?? String(err);
+  return String(err);
 }
 
 // =============================================================================

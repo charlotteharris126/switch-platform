@@ -6,12 +6,22 @@
 // this from /admin/leads when a provider reports they couldn't reach
 // the learner.
 //
+// Phase 2b of the email platform rearchitecture (spec at
+// platform/docs/email-platform-rearchitecture-spec.md): in addition to the
+// legacy list-add (which keeps firing while BREVO_SHADOW_MODE is on), the
+// function also calls sendTransactional with the chaser template and
+// forceResend=true. The chaser is the only email_type that bypasses
+// per-submission idempotency — every chaser send is a deliberate re-fire.
+// Branches on the submission's funding_category to pick the funded vs self
+// chaser template. Skips the transactional path silently per-email if the
+// per-funding template env var is unset (legacy list-add still runs).
+//
 // Auth: same x-audit-key / AUDIT_SHARED_SECRET pattern as
 // admin-brevo-resync. config.toml verify_jwt=false.
 //
 // Body: {
 //   "emails": ["a@b.com", ...],
-//   "submissionIds": [123, ...]   // for dead_letter context only
+//   "submissionIds": [123, ...]   // for dead_letter context AND transactional send
 // }
 //
 // Failure handling:
@@ -23,7 +33,7 @@
 //     audit trail of what was attempted.)
 
 import postgres from "npm:postgres@3";
-import { addBrevoContactToList } from "../_shared/brevo.ts";
+import { addBrevoContactToList, sendTransactional } from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -42,6 +52,9 @@ interface ChaseResult {
   submissionId: number | null;
   status: "ok" | "error" | "skipped";
   reason?: string;
+  /** Phase 2b: status of the parallel transactional send. */
+  transactional?: "sent" | "skipped" | "failed";
+  transactionalError?: string;
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -91,14 +104,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const THROTTLE_MS = 250;
   const results: ChaseResult[] = [];
 
+  // Phase 2b: per-funded-route chaser templates. Either may be missing;
+  // sends to that funding route silently skip the transactional path.
+  const chaserTemplateFundedId = parseEnvInt("BREVO_TEMPLATE_CHASER_FUNDED");
+  const chaserTemplateSelfId = parseEnvInt("BREVO_TEMPLATE_CHASER_SELF");
+
   for (let i = 0; i < stringEmails.length; i++) {
     if (i > 0) await sleep(THROTTLE_MS);
     const email = stringEmails[i];
     const submissionId = typeof submissionIds[i] === "number" ? (submissionIds[i] as number) : null;
+
+    // 1. Legacy list-add (still runs while shadow mode is on).
     const r = await addBrevoContactToList({ email, listId });
-    if (r.ok) {
-      results.push({ email, submissionId, status: "ok" });
-    } else {
+    let listAddStatus: ChaseResult["status"] = "ok";
+    let listAddReason: string | undefined;
+    if (!r.ok) {
+      listAddStatus = "error";
+      listAddReason = r.error ?? "unknown";
       try {
         await sql`
           INSERT INTO leads.dead_letter (source, raw_payload, error_context, received_at)
@@ -112,17 +134,95 @@ Deno.serve(async (req: Request): Promise<Response> => {
       } catch (dlErr) {
         console.error("dead_letter write failed:", String(dlErr));
       }
-      results.push({
-        email,
-        submissionId,
-        status: "error",
-        reason: r.error ?? "unknown",
-      });
     }
+
+    // 2. New transactional send (Phase 2b). Skips silently when:
+    //   - submissionId not provided by caller (can't write a per-submission email_log row)
+    //   - submission has no funding_category (can't pick funded vs self template)
+    //   - the relevant per-funded-route template env var is not set
+    let transactional: ChaseResult["transactional"];
+    let transactionalError: string | undefined;
+    if (submissionId !== null) {
+      // Resolve first name + funding category for template params + branching.
+      let first_name: string | null = null;
+      let last_name: string | null = null;
+      let funding_category: string | null = null;
+      try {
+        const [row] = await sql<Array<{ first_name: string | null; last_name: string | null; funding_category: string | null }>>`
+          SELECT first_name, last_name, funding_category
+            FROM leads.submissions
+           WHERE id = ${submissionId}
+        `;
+        first_name = row?.first_name ?? null;
+        last_name = row?.last_name ?? null;
+        funding_category = row?.funding_category ?? null;
+      } catch (err) {
+        console.error(`submission ${submissionId} lookup failed:`, String(err));
+      }
+
+      if (!funding_category) {
+        transactional = "skipped";
+      } else {
+        const isFunded = funding_category === "gov" || funding_category === "loan";
+        const templateId = isFunded ? chaserTemplateFundedId : chaserTemplateSelfId;
+        const emailType: "chaser_funded" | "chaser_self" = isFunded ? "chaser_funded" : "chaser_self";
+
+        if (templateId === null) {
+          transactional = "skipped";
+        } else {
+          const recipientName = [first_name, last_name].filter(Boolean).join(" ") || undefined;
+          const sendResult = await sendTransactional({
+            sql,
+            templateId,
+            recipient: { email, name: recipientName },
+            params: {
+              FIRSTNAME: first_name ?? "",
+              LASTNAME: last_name ?? "",
+              SW_FUNDING_CATEGORY: funding_category,
+            },
+            submissionId,
+            emailType,
+            brand: "switchable",
+            tags: ["chaser", emailType, "admin-brevo-chase"],
+            forceResend: true,
+          });
+
+          if (sendResult.ok && sendResult.status === "sent") {
+            transactional = "sent";
+          } else if (
+            sendResult.status === "skipped_duplicate" ||
+            sendResult.status === "skipped_missing_template"
+          ) {
+            transactional = "skipped";
+          } else {
+            transactional = "failed";
+            transactionalError = sendResult.error;
+          }
+        }
+      }
+    } else {
+      transactional = "skipped";
+    }
+
+    results.push({
+      email,
+      submissionId,
+      status: listAddStatus,
+      reason: listAddReason,
+      transactional,
+      transactionalError,
+    });
   }
 
   return json({ results }, 200);
 });
+
+function parseEnvInt(name: string): number | null {
+  const raw = Deno.env.get(name);
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : null;
+}
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {

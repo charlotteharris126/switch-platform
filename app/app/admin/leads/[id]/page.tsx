@@ -67,8 +67,8 @@ export default async function LeadDetailPage({
   const parent = (parentRes.data ?? null) as { id: number; submitted_at: string; primary_routed_to: string | null } | null;
   const children = (childrenRes.data ?? []) as Array<{ id: number; submitted_at: string; primary_routed_to: string | null }>;
 
-  // Parallel fetch: routing history, dead letter, partial captures on the same session_id, current enrolment outcome.
-  const [routingRes, deadLetterRes, partialsRes, enrolmentRes] = await Promise.all([
+  // Parallel fetch: routing history, dead letter, partial captures on the same session_id, current enrolment outcome, email log.
+  const [routingRes, deadLetterRes, partialsRes, enrolmentRes, emailLogRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("routing_log")
@@ -97,6 +97,12 @@ export default async function LeadDetailPage({
       .order("status_updated_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    supabase
+      .schema("crm")
+      .from("email_log")
+      .select("id, email_type, channel, template_id, status, brevo_message_id, error_text, metadata, triggered_at, sent_at")
+      .eq("submission_id", leadId)
+      .order("triggered_at", { ascending: false }),
   ]);
 
   const enrolment = (enrolmentRes.data ?? null) as
@@ -139,6 +145,19 @@ export default async function LeadDetailPage({
     upsert_count: number | null;
     first_seen_at: string;
     last_seen_at: string;
+  }>;
+
+  const emailLog = (emailLogRes.data ?? []) as Array<{
+    id: number;
+    email_type: string;
+    channel: string;
+    template_id: string;
+    status: string;
+    brevo_message_id: string | null;
+    error_text: string | null;
+    metadata: Record<string, unknown> | null;
+    triggered_at: string;
+    sent_at: string | null;
   }>;
 
   const fullName = [lead.first_name, lead.last_name].filter(Boolean).join(" ") || "—";
@@ -323,6 +342,81 @@ export default async function LeadDetailPage({
                     <TableCell className="text-xs text-[#5a6a72]">{r.route_reason ?? "—"}</TableCell>
                   </TableRow>
                 ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Email log (Phase 2 of email rearchitecture). Shows transactional sends
+          per crm.email_log. While BREVO_SHADOW_MODE=true, rows have
+          metadata.shadow=true to mark parallel-run sends. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Email log ({emailLog.length})</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {emailLog.length === 0 ? (
+            <p className="text-xs text-[#5a6a72] p-4">No transactional email sends recorded for this lead.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Triggered</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Channel</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Sent</TableHead>
+                  <TableHead>Brevo ID</TableHead>
+                  <TableHead>Notes</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {emailLog.map((e) => {
+                  const isHealthy = e.status === "sent" || e.status === "delivered" || e.status === "opened" || e.status === "clicked";
+                  const isError = e.status === "failed" || e.status === "bounced_hard" || e.status === "bounced_soft" || e.status === "complained";
+                  const meta = e.metadata as { shadow?: boolean; shadow_log_only?: boolean; force_resend?: boolean } | null;
+                  const shadow = meta?.shadow === true;
+                  const shadowLogOnly = meta?.shadow_log_only === true;
+                  const forced = meta?.force_resend === true;
+                  return (
+                    <TableRow key={e.id}>
+                      <TableCell className="text-xs whitespace-nowrap">
+                        {formatDateTime(e.triggered_at)}
+                      </TableCell>
+                      <TableCell className="text-xs font-mono">{e.email_type}</TableCell>
+                      <TableCell className="text-xs">{e.channel}</TableCell>
+                      <TableCell className="text-xs">
+                        {isHealthy ? (
+                          <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">{e.status}</Badge>
+                        ) : isError ? (
+                          <Badge variant="destructive" className="text-xs">{e.status}</Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-xs">{e.status}</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{formatDateTime(e.sent_at)}</TableCell>
+                      <TableCell className="text-xs font-mono text-[#5a6a72] break-all max-w-[180px]">
+                        {e.brevo_message_id ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-xs text-[#5a6a72]">
+                        {e.error_text ? (
+                          <span className="text-[#b3412e]">{e.error_text}</span>
+                        ) : (
+                          <>
+                            {shadowLogOnly ? (
+                              <Badge variant="outline" className="text-[10px] mr-1" title="Logged but not sent — old automation handled the actual send during shadow window">log-only</Badge>
+                            ) : shadow ? (
+                              <Badge variant="outline" className="text-[10px] mr-1">shadow</Badge>
+                            ) : null}
+                            {forced && <Badge variant="outline" className="text-[10px] mr-1">forced</Badge>}
+                            <span>template {e.template_id}</span>
+                          </>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

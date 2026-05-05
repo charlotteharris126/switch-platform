@@ -40,6 +40,7 @@ Phase 1 of the email platform rearchitecture is **commissioned end-to-end**. Thr
 
 ## Watch items
 
+- **🔴 Shadow mode monitoring (Charlotte) — cutover target Thursday 2026-05-08.** Charlotte runs the U1-only parity query against `crm.email_log` once tonight and once tomorrow night. Thursday she pings Sasha "ready for cutover" — Sasha then runs a wider query covering U1 + stalled + chaser + U4 (since Phase 2 will have shipped by then and day-4 leads will be candidates), and flips `BREVO_SHADOW_MODE = false` + redeploys 5 functions if all green. 48h after cutover Charlotte pauses the old utility automations in Brevo. Why 48h not 24h: gives ~4-6 real Phase-2 leads through the parity window vs ~2-3, more cutover confidence. Query and full procedure in `switchable/email/docs/current-handoff.md`.
 - First scheduled `iris-daily-flags` cron run (08:30 UTC daily) — verify it fires and produces flags.
 - Courses Direct HubSpot integration remains dormant pending Ranjit's form URL.
 - EMS Susan auto-flip billing trigger — first billable enrolment forecast imminent.

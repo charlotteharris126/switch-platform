@@ -4,6 +4,134 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-05: Phase 2 shadow mode flipped from real-send to log-only
+
+**Type:** Behaviour change in `_shared/brevo.ts` `sendTransactional`. No schema change.
+
+**Status:** Code shipped. Will take effect on next redeploy of the 5 callers (`routing-confirm`, `netlify-lead-router`, `email-stalled-cron`, `email-u4-cron`, `admin-brevo-chase`).
+
+**Why:** Initial Phase 2a/2b implementation matched the spec's "still adds to utility list AND sends transactional" wording — every routed lead would receive the U1 (and eventually stalled/U4/chaser) twice during the parity window, once from the legacy automation and once from the new transactional path. Owner flagged the duplicate-email annoyance for real learners as not worth the parity-verification benefit, especially given the U1 funded path was already verified end-to-end via this morning's smoke test.
+
+**Changes:**
+- `sendTransactional` now short-circuits when `BREVO_SHADOW_MODE=true`: writes the `crm.email_log` queued row, immediately flips it to `status='sent'`, and returns without calling the Brevo API. `metadata.shadow_log_only=true` is set on insert so post-cutover analytics can filter these rows out cleanly. `brevo_message_id` stays NULL — that's the unambiguous signal that the row didn't actually leave Brevo.
+- Lead detail page metadata pill now shows "log-only" instead of generic "shadow" for these rows, with a tooltip explaining the old automation handled the actual send.
+
+**What this changes for the 48h window:**
+- Real learners receive ONE U1 (from the legacy automation), not two.
+- The new code path still runs end-to-end except for the Brevo HTTP call: query selects the right template, params compute, `email_log` row written, idempotency works.
+- `email_log` parity check (today's SQL query / new dashboard column) still works — rows show `status=sent`.
+- Verification gap: we don't re-verify Brevo's actual rendering / DKIM / deliverability for U1 self, stalled, chaser, U4 in this window. Mitigation: U1 funded already verified this morning; the others use identical code paths with different template IDs. Risk is small, contained to first real send post-cutover (Thursday).
+
+**Cutover Thursday:** flip `BREVO_SHADOW_MODE=false` and redeploy the 5 functions. Same redeploy step disables the legacy automations in Brevo (Charlotte's task in dashboard, not code).
+
+**Signed off:** Owner (session 2026-05-05).
+
+---
+
+## 2026-05-05: Email platform rearchitecture, Phase 6a — admin dashboard email_log visibility
+
+**Type:** Two dashboard pages updated. No DB change. Read-only consumer of `crm.email_log`.
+
+**Status:** Code shipped to `main`. Local production build green. Will deploy on next git push (Netlify auto-builds from `./app` on every push to main).
+
+**Why:** The Phase 2 shadow window needs ongoing parity verification — "did this lead get U1?" — across the next 48-72h. Without dashboard visibility Charlotte would be running raw Supabase SQL twice a day. Phase 6 in the spec eventually grows into a full automations-status page; Phase 6a is the minimum viable surface that replaces the manual SQL workflow.
+
+**Changes:**
+- `app/admin/leads/[id]/page.tsx`: new "Email log" Card between Routing history and Error replays. Shows chronological table of every `crm.email_log` row for the lead (email_type, channel, status, sent_at, brevo_message_id, error_text). Status badges colour-coded by family (`sent`/`delivered`/`opened`/`clicked` = healthy green, `failed`/`bounced_*`/`complained` = red, others neutral). Shadow + forced metadata rendered as small outline pills.
+- `app/admin/leads/page.tsx`: new "U1" column between "Lead status" and "Last chaser". Per-row badge shows the latest U1 status for that submission. Pre-Phase-2 leads (submitted before 2026-05-05 12:00 UTC) and DQ/unrouted leads correctly render as `—` rather than "missing" — that distinction is the at-a-glance parity check.
+- Both pages stay within the existing supabase-server / RLS read pattern (admin policy on `crm.email_log` from migration 0073). No new Edge Function or migration.
+
+**Smoke test:** `npm run build` clean. Routes `/admin/leads` and `/admin/leads/[id]` listed in build output. Detail page already validated against today's `crm.email_log` row (submission 288 u1_funded, sent, shadow=true) — column shape matches the page's typing.
+
+**Signed off:** Owner (session 2026-05-05).
+
+---
+
+## 2026-05-05: Migration 0078 — split chaser email_type into funded + self (Phase 2b follow-up)
+
+**Type:** Constraint change on `crm.email_log.email_type` CHECK. No data migration (no `chaser` rows existed yet — verified before applying).
+
+**Status:** Applied to production via `supabase db push --linked`. `admin-brevo-chase` redeployed with funded/self branching. `BREVO_TEMPLATE_CHASER_FUNDED=6` + `BREVO_TEMPLATE_CHASER_SELF=12` set in Supabase Vault. Chaser dual-fire now end-to-end live.
+
+**Why:** The Phase 2b spec assumed a single chaser template, but Charlotte's actual Brevo setup has two (funded id 6, self id 12), matching the funded/self pattern already used by U1, stalled, and U4. Splitting the email_type value keeps the per-funded-route distinction visible in `email_log` analytics and matches the rest of the schema.
+
+**Changes:**
+- Migration 0078: `ALTER TABLE crm.email_log DROP CONSTRAINT email_log_email_type_check` then `ADD CONSTRAINT` with `chaser_funded` + `chaser_self` replacing `chaser`. All other values preserved.
+- `_shared/brevo.ts`: `EmailLogType` union updated to match.
+- `admin-brevo-chase/index.ts`: replaced single `BREVO_TEMPLATE_CHASER` lookup with funded/self branch on `submission.funding_category`. Per-funded-route silent skip if the relevant env var is unset (was previously a global skip).
+- `infrastructure-manifest.md`: replaced `BREVO_TEMPLATE_CHASER` row with the two new ones.
+
+**Signed off:** Owner (session 2026-05-05).
+
+---
+
+## 2026-05-05: Email platform rearchitecture, Phase 2b — stalled cron + U4 cron + chaser dual-fire (migrations 0076 + 0077)
+
+**Type:** Two new Edge Functions (`email-stalled-cron`, `email-u4-cron`), one Edge Function refactor (`admin-brevo-chase` dual-fires the chaser), two cron schedules, five new template-id env vars. No new tables.
+
+**Status:** Code shipped to `main`. Migrations 0076 + 0077 applied. Both new functions deployed `--no-verify-jwt`. `admin-brevo-chase` redeployed. Three of the four template env vars set in Supabase Vault (stalled funded=17, stalled self=19, U4 funded=22, U4 self=24). Chaser template id deferred — Charlotte hasn't created a standalone chaser template yet (the existing one only lives inline in the SF2 automation). `admin-brevo-chase` continues to fire the legacy list-add and silently skips the transactional chaser path until `BREVO_TEMPLATE_CHASER` is set. `BREVO_SHADOW_MODE=true` already set by Phase 2a, applies globally to all `sendTransactional` callers.
+
+**Why:** Phase 2b of the email platform rearchitecture (spec at `platform/docs/email-platform-rearchitecture-spec.md`, owner-signed 2026-05-05). Phase 2a stood up the `sendTransactional` helper and wired U1 into the routing flow. Phase 2b stands up the three remaining utility paths (stalled, chaser, U4) so the cutover from the old automation engine can flip all four utility paths in one go.
+
+**Pre-Phase-2 lifecycle gate (important):** the new stalled and U4 cron queries gate on `EXISTS (u1_funded/u1_self row in crm.email_log)`. This means leads that came in BEFORE Phase 2a (any submission before 2026-05-05) never enter the new stalled or U4 paths — they continue to be served by the old Brevo automations only. After cutover (Charlotte pauses the old automations), pre-Phase-2 in-flight leads will lose access to utility emails. Acceptable risk: small cohort, 1-2 weeks of overlap. Alternative (backfilling email_log rows for historical leads) was rejected — would mean re-sending U1/stalled/U4 to historical learners.
+
+**Changes:**
+- New Edge Function `email-stalled-cron`: daily 09:00 UTC scan for day-4 open leads (Phase-2-gated). Per-row send via `sendTransactional`. Throttled 250ms. Returns `{candidates, sent, skipped, failed, missing_template_env, outcomes[]}` JSON. Auth via `x-audit-key`.
+- New Edge Function `email-u4-cron`: daily 09:30 UTC scan for enrolled / presumed_enrolled leads (Phase-2-gated). Same shape as stalled-cron. Scheduled job over DB trigger by design — sync trigger calling Brevo would block writers if Brevo is slow.
+- `admin-brevo-chase`: refactored to call `sendTransactional(BREVO_TEMPLATE_CHASER, ..., {forceResend: true})` per email after the legacy list-add. Per-row response now includes `transactional` field (`sent` | `skipped` | `failed`). Skips silently per-email if `submissionId` is missing or `BREVO_TEMPLATE_CHASER` is unset.
+- Migration 0076: `cron.schedule('email-stalled-cron-daily', '0 9 * * *', ...)` POSTing to the function URL with the vault-stored audit key.
+- Migration 0077: same for `email-u4-cron-daily` at `'30 9 * * *'`.
+- `config.toml`: added `verify_jwt = false` blocks for both new functions.
+- `infrastructure-manifest.md`: added 2 Edge Function rows, 2 cron job rows, 5 new env-var rows. Updated the "Currently `<id>`" annotations on the U1 env vars too.
+
+**Owner tasks before Phase 2b is "live":**
+1. **Stalled + U4 are live now in shadow mode.** The cron jobs will pick up any new (post-Phase-2a) leads that hit day-4 or get marked enrolled. During shadow, learners get one stalled / U4 from the old automation AND one from the new transactional path — same pattern as U1.
+2. **Chaser is gated on a missing template.** Either:
+   - (preferred) Find the inline template inside the existing SF2 automation in Brevo, save it as a standalone template, get its numeric id, set `BREVO_TEMPLATE_CHASER=<id>` via `supabase secrets set`. Then the chaser will dual-fire too.
+   - (fallback) Leave it for now. Chaser keeps working on legacy list-add only. Set the env var before flipping `BREVO_SHADOW_MODE=false`, otherwise post-cutover chasers stop sending entirely.
+3. **48h hold for parity** is now ~Thursday 2026-05-07. After parity-verifying U1 + stalled + chaser + U4 across that window (no missed sends, no double-sends to wrong addresses, templates render correctly), set `BREVO_SHADOW_MODE=false` and redeploy `routing-confirm`, `netlify-lead-router`, `email-stalled-cron`, `email-u4-cron`, `admin-brevo-chase`. Another 48h with single emails, then pause the old utility automations in Brevo (don't delete — Phase 4 retains for 90 days post-cutover per spec).
+
+**Smoke test (post-deploy):** `email-stalled-cron` and `email-u4-cron` both expose POST endpoints. Trigger ad-hoc via the cron-equivalent CLI: `curl -X POST -H "x-audit-key: <secret>" https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/email-stalled-cron`. Expect `200 {candidates: 0|N, sent: ..., ...}`. With no day-4 Phase-2 leads yet, candidates will be 0 — that's the correct empty case. Re-test once a real Phase-2 lead crosses day-4 (~2026-05-09 for today's test lead, but it's archived, so realistically wait for a real lead).
+
+**Signed off:** Owner (session 2026-05-05).
+
+---
+
+## 2026-05-05: Email platform rearchitecture, Phase 2a — `sendTransactional` helper + U1 hook wired into route-lead.ts
+
+**Type:** New shared helper + new call site in the routing flow. No schema change. No new Edge Function. New env vars (3).
+
+**Status:** Code shipped to `main` (not yet deployed). Deploys with the next `routing-confirm` + `netlify-lead-router` redeploy. Live U1 transactional sends are gated on Charlotte setting `BREVO_TEMPLATE_U1_FUNDED` and `BREVO_TEMPLATE_U1_SELF` in Supabase secrets — until then, `sendU1Transactional` silently no-ops (same posture as the missing-list-id path in `upsertLearnerInBrevo`).
+
+**Why:** Phase 2a of the email platform rearchitecture (spec at `platform/docs/email-platform-rearchitecture-spec.md`, owner-signed 2026-05-05; Session 31 commissioned Phase 1). Phase 2a stands up the canonical transactional path so utility emails (U1, stalled, chaser, U4) stop riding the Brevo automation engine — see Phase 1 entry for the compliance + audit motivation. This step ships the infrastructure (`sendTransactional`) and the first consumer (U1 on routing success). Phase 2b adds stalled + chaser + U4. Shadow mode keeps the existing list-add automation firing in parallel for ≥48h after Charlotte sets the templates so we can verify parity before cutover.
+
+**Changes:**
+- `_shared/brevo.ts`:
+  - New `sendTransactional({ sql, templateId, recipient, params, submissionId, emailType, brand?, tags?, replyTo?, forceResend? })`. Inserts a `crm.email_log` queued row up front, calls Brevo's templated transactional API, retries 429 / 5xx / network errors with 250ms / 1s / 4s backoff (4 attempts total), updates the row to `sent` with `brevo_message_id` on success or to `failed` + writes a `leads.dead_letter` row (`source='brevo_transactional'`) on final failure. Idempotent on `(submission_id, email_type)` against any non-failed prior row; the chaser bypasses this with `forceResend=true`.
+  - New `BREVO_SHADOW_MODE` env flag (default `true`). When on, every `crm.email_log` row carries `metadata.shadow=true` so the parallel-run period is filterable from post-cutover analytics. Functional behaviour does not change in shadow mode — both the new transactional path and the existing list-add automation fire; recipients get two U1s during the parity window. Charlotte flips to `false` after ≥48h of parity-verified shadow.
+  - Added `import type { Sql } from "npm:postgres@3"` at the top — runtime-zero, just brings the type in for `sendTransactional`'s `sql` arg. Brevo helper file is no longer DB-naive but stays runtime-pure (no postgres runtime import).
+- `_shared/route-lead.ts`:
+  - New private `sendU1Transactional(sql, provider, submission, trigger)` helper. Composes per-send template params from the same matrix + submission shape that `upsertLearnerInBrevo` uses (so contact attributes and per-send params stay aligned), routes to `BREVO_TEMPLATE_U1_FUNDED` (gov / loan) vs `BREVO_TEMPLATE_U1_SELF` (self), delegates idempotency / retry / dead_letter to `sendTransactional`. Hooks in immediately after `upsertLearnerInBrevo` so both auto-route and manual-confirm paths fire identically.
+  - Skips silently for: `trigger='re_application'` (parent submission already received U1 — new submission_id would otherwise pass per-submission idempotency and double-send), submissions with no email, null `funding_category`, or unset template env var.
+- `infrastructure-manifest.md`: added `BREVO_TEMPLATE_U1_FUNDED`, `BREVO_TEMPLATE_U1_SELF`, `BREVO_SHADOW_MODE` rows under Edge Function secrets. Updated `routing-confirm` row to mention the new U1 hook. Logged the change in the manifest's own change log table.
+
+**Owner tasks before Phase 2a is "live":**
+1. In Brevo, duplicate the existing automation U1 templates (one funded, one self-funded) into the **Transactional** template section. Use `{{ params.SW_COURSE_NAME }}`, `{{ params.SW_PROVIDER_NAME }}`, etc. for variables (per-send params, not contact attributes — both are present, params win during transactional sends).
+2. Note the numeric template IDs.
+3. Set the env vars in Supabase via CLI (NEVER via the dashboard — see Phase 1 lesson on digest-vs-value):
+   ```
+   supabase secrets set BREVO_TEMPLATE_U1_FUNDED=<numeric_id> --project-ref <ref>
+   supabase secrets set BREVO_TEMPLATE_U1_SELF=<numeric_id> --project-ref <ref>
+   supabase secrets set BREVO_SHADOW_MODE=true --project-ref <ref>
+   ```
+4. Redeploy `routing-confirm` and `netlify-lead-router` with `--no-verify-jwt` to pick up the new shared code.
+5. Submit a non-owner-test form (owner-test domains auto-DQ and never reach routing). Verify two U1 emails arrive (one from the existing automation, one from the new transactional path), and a `crm.email_log` row exists with `status='sent'`, `metadata.shadow=true`, and a populated `brevo_message_id`.
+6. Hold for ≥48h. Spot-check the email_log for missed sends, double-sends, or rendering issues. Once parity holds, set `BREVO_SHADOW_MODE=false` and redeploy. After another ≥48h, disable the old utility automation in Brevo (per Phase 4 — don't delete, just turn off).
+
+**Signed off:** Owner (session 2026-05-05).
+
+---
+
 ## 2026-05-05: Migrations 0073 + 0074 + 0075 — email platform rearchitecture, Phase 1 (DB foundations + webhook receiver)
 
 **Type:** Three new tables, new Edge Function, new secret. No live behaviour change yet (writers come in Phase 2).
