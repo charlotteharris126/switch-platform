@@ -50,5 +50,5 @@ Phase 1 of the email platform rearchitecture is **commissioned end-to-end**. Thr
 ## Next session
 
 - **Folder:** platform/
-- **First task:** Phase 2a of email rearchitecture — stand up `sendTransactional` helper in `_shared/brevo.ts`, set up Brevo transactional templates for U1 (funded + self), wire up `routing-confirm` to call it, ship `BREVO_SHADOW_MODE` env flag. Spec at `platform/docs/email-platform-rearchitecture-spec.md`. Confirm Brevo webhook is configured + secret pasted before starting (Phase 1 owner tasks).
+- **First task:** Phase 2a of email rearchitecture — stand up `sendTransactional` helper in `_shared/brevo.ts`, set up Brevo transactional templates for U1 (funded + self), wire up `routing-confirm` to call it, ship `BREVO_SHADOW_MODE` env flag. Spec at `platform/docs/email-platform-rearchitecture-spec.md`. Phase 1 already commissioned end-to-end so no setup gating Phase 2a.
 - **Cross-project:** switchable/email session 12 produced the spec; Phase 1 (this session) and Phase 3 (channel enforcement + backfill) must ship before email returns to Phase 5 (build N1/N2/N3 + referral automations in Brevo). Charlotte's parallel task: finish DKIM/SPF/DMARC setup for switchable.org.uk in Brevo (in progress).
