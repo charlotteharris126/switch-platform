@@ -4,29 +4,17 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
-## 2026-05-05: Migration 0070 — is_test flag on leads.submissions
+## 2026-05-05: Migrations 0070 + 0071 — is_test flag added then REVERTED
 
-**Type:** Schema change. New column, index, access policy, view updates.
+**Type:** Schema change applied then fully reverted in the same session.
 
-**Status:** Migration file written. Apply via SQL editor, then run data fix below.
+**Status:** Both migrations applied to production. Net effect: schema and views are back at pre-0070 state.
 
-**Why:** Test submissions (e.g. Charlotte Harris #277, owner QA) were polluting KPI views, CPL calculations, and the "needs attention" routing queue. The flag lets the admin mark any submission as a test so it is silently excluded from all metrics.
+**Why reverted:** The `is_test` column was a parallel mechanism that duplicated existing functionality. Owner-test submissions are already handled at ingest by `applyOwnerTestOverrides` in `_shared/ingest.ts` (sets `is_dq=true`, `dq_reason='owner_test_submission'`, `archived_at=now()` based on `OWNER_TEST_DOMAINS` / `OWNER_TEST_EMAILS` allowlists). For manual tagging of leads that bypassed the allowlist, the same DQ + archived state should be applied directly. A second flag is redundant and leaves leads in an ambiguous open-but-test state.
 
-**Changes:**
-- `leads.submissions.is_test BOOLEAN NOT NULL DEFAULT false` — new column
-- Sparse partial index `leads_submissions_is_test_idx` (WHERE is_test = true)
-- `GRANT UPDATE (is_test) ON leads.submissions TO authenticated`
-- `admin_update_submissions_is_test` RLS UPDATE policy (gated on admin.is_admin())
-- `public.vw_attribution` replaced — adds `WHERE NOT s.is_test`
-- `public.vw_weekly_kpi` replaced — adds `WHERE NOT is_test` to weekly_leads CTE
-- `leads.vw_needs_status_update` replaced — adds `AND s.is_test = false`
-- `public.vw_admin_health` replaced — both lead counts exclude is_test rows
-- Dashboard: TEST badge added to leads list and lead detail page header
+**Operational note from this session:** Leads #277 (`hello@charlie-harris.com`) and #284 (`kieranwrites@gmail.com`) were tagged retrospectively with `is_dq=true`, `dq_reason='owner_test_submission'`, `archived_at=now()`. Both had already been routed to enterprise-made-simple via the sheet webhook before the DQ — those rows are still sitting in EMS's Google Sheet and need follow-up (DB DQ does not propagate back to provider sheets).
 
-**Data fix (run after migration):**
-```sql
-UPDATE leads.submissions SET is_test = true WHERE id = 277;
-```
+**Gap surfaced:** there is no dashboard action to manually mark a lead as DQ + owner_test_submission. Today this requires direct SQL. A future session may add a `markOwnerTestSubmission` server action mirroring the existing DQ mechanism (no new column).
 
 **Signed off:** Owner (session 2026-05-05)
 
