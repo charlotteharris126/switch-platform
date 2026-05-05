@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
 import { EnrolmentOutcomeForm } from "./enrolment-outcome-form";
-import { TestFlagToggle } from "./test-flag-toggle";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 export default async function LeadDetailPage({
@@ -160,10 +159,7 @@ export default async function LeadDetailPage({
         <h1 className="text-[28px] font-extrabold text-[#11242e] mt-2 tracking-tight">
           Lead #{lead.id} — {fullName}
         </h1>
-        <div className="flex gap-2 mt-2 items-center flex-wrap">
-          {lead.is_test && (
-            <Badge className="bg-slate-200 text-slate-600 hover:bg-slate-200">TEST</Badge>
-          )}
+        <div className="flex gap-2 mt-2 items-center">
           {lead.is_dq ? (
             <Badge variant="destructive">DQ{lead.dq_reason ? `: ${lead.dq_reason}` : ""}</Badge>
           ) : lead.primary_routed_to ? (
@@ -176,7 +172,6 @@ export default async function LeadDetailPage({
           <span className="text-xs text-[#5a6a72]">
             Submitted {formatDateTime(lead.submitted_at)}
           </span>
-          <TestFlagToggle submissionId={lead.id} isTest={lead.is_test} />
         </div>
       </div>
 

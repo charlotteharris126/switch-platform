@@ -81,7 +81,6 @@ type LeadRow = {
   funding_route: string | null;
   primary_routed_to: string | null;
   is_dq: boolean;
-  is_test: boolean;
   dq_reason: string | null;
   utm_campaign: string | null;
   re_submission_count: number;
@@ -156,7 +155,7 @@ export default async function LeadsPage({
     .schema("leads")
     .from("submissions")
     .select(
-      "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,is_test,dq_reason,utm_campaign,re_submission_count",
+      "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign,re_submission_count",
       { count: "exact" }
     )
     .order("submitted_at", { ascending: false })
@@ -402,11 +401,6 @@ export default async function LeadsPage({
                       ) : (
                         <Badge variant="secondary" className="text-xs">
                           Unrouted
-                        </Badge>
-                      )}
-                      {r.is_test && (
-                        <Badge className="text-xs bg-slate-200 text-slate-600 hover:bg-slate-200">
-                          TEST
                         </Badge>
                       )}
                       {r.re_submission_count > 0 && (

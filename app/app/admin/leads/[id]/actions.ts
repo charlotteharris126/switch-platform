@@ -3,23 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 
-export async function toggleTestFlag(
-  submissionId: number,
-  newValue: boolean,
-): Promise<{ ok: boolean; error?: string }> {
-  const supabase = await createClient();
-
-  const { error } = await supabase
-    .schema("leads")
-    .from("submissions")
-    .update({ is_test: newValue })
-    .eq("id", submissionId);
-
-  if (error) return { ok: false, error: error.message };
-
-  revalidatePath(`/leads/${submissionId}`);
-  return { ok: true };
-}
 
 export type EnrolmentStatus =
   | "open"
