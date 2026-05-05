@@ -3,6 +3,32 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 
+// Tag (or untag) a submission as an owner test. Writes the same shape as the
+// auto-DQ path in _shared/ingest.ts so a manually-tagged row is indistinguishable
+// from one caught at ingest. Only admins can call this (RLS gate, migration 0072).
+export async function markOwnerTestSubmission(
+  submissionId: number,
+  markAsTest: boolean,
+): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createClient();
+
+  const update = markAsTest
+    ? { is_dq: true, dq_reason: "owner_test_submission", archived_at: new Date().toISOString() }
+    : { is_dq: false, dq_reason: null, archived_at: null };
+
+  const { error } = await supabase
+    .schema("leads")
+    .from("submissions")
+    .update(update)
+    .eq("id", submissionId);
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/leads/${submissionId}`);
+  revalidatePath("/leads");
+  return { ok: true };
+}
+
 
 export type EnrolmentStatus =
   | "open"

@@ -135,6 +135,7 @@ const OWNER_TEST_DOMAINS = [
   "switchable.careers",
   "switchable.com",
   "switchleads.co.uk",
+  "charlie-harris.com",
 ];
 
 // Dummy / placeholder domains common in test submissions (owner typing without
@@ -155,6 +156,7 @@ const DUMMY_TEST_DOMAINS = [
 // Exact email match, case-insensitive. Storage is lowercase.
 const OWNER_TEST_EMAILS = [
   "charliemarieharris@icloud.com",
+  "kieranwrites@gmail.com",
 ];
 
 // ---- public entry points ----

@@ -4,6 +4,25 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-05: Migration 0072 — admin column-level UPDATE on leads.submissions for owner-test tagging
+
+**Type:** Access policy. Column-level GRANT + RLS UPDATE policy.
+
+**Status:** Applied to production via `supabase db push --linked`. Edge functions `netlify-lead-router` and `netlify-leads-reconcile` redeployed in same session with extended allowlist.
+
+**Why:** Today's session needed two manual SQL UPDATE statements to back-tag leads #277 (`hello@charlie-harris.com`) and #284 (`kieranwrites@gmail.com`) as owner-test submissions after they slipped past the `_shared/ingest.ts` allowlist. The dashboard had no UI for this. Migration adds the minimum privilege surface for a `markOwnerTestSubmission` admin server action — pattern mirrors migration 0051.
+
+**Changes:**
+- `GRANT UPDATE (is_dq, dq_reason, archived_at) ON leads.submissions TO authenticated`
+- `admin_update_owner_test_flags` RLS UPDATE policy on `leads.submissions` (gated on `admin.is_admin()`)
+- `_shared/ingest.ts`: `OWNER_TEST_DOMAINS` extended with `charlie-harris.com`; `OWNER_TEST_EMAILS` extended with `kieranwrites@gmail.com`
+- `app/admin/leads/[id]/actions.ts`: `markOwnerTestSubmission(submissionId, markAsTest)` server action (writes the canonical DQ shape; clears it back to NULLs on un-mark)
+- `app/admin/leads/[id]/owner-test-toggle.tsx`: client toggle showing "Mark as test lead" or "Remove test flag" depending on `dq_reason`. Confirm prompt on mark; un-mark only available when `dq_reason='owner_test_submission'` so legitimate DQ rows (waitlist, no_match, etc.) are never touched.
+
+**Signed off:** Owner (session 2026-05-05)
+
+---
+
 ## 2026-05-05: Migrations 0070 + 0071 — is_test flag added then REVERTED
 
 **Type:** Schema change applied then fully reverted in the same session.

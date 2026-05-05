@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
 import { EnrolmentOutcomeForm } from "./enrolment-outcome-form";
+import { OwnerTestToggle } from "./owner-test-toggle";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 export default async function LeadDetailPage({
@@ -172,6 +173,7 @@ export default async function LeadDetailPage({
           <span className="text-xs text-[#5a6a72]">
             Submitted {formatDateTime(lead.submitted_at)}
           </span>
+          <OwnerTestToggle submissionId={lead.id} dqReason={lead.dq_reason} />
         </div>
       </div>
 
