@@ -76,30 +76,31 @@ The migration runs in 6 phases. Phases 1-3 must be completed before any marketin
 - [ ] Migration `00XX_consent_history_table.sql` — create `crm.consent_history` with:
   - `id`, `submission_id`, `field_changed` (e.g. `SW_CONSENT_MARKETING`), `old_value`, `new_value`, `changed_at`, `changed_by` (user/system/contact-action), `source` (form/unsubscribe/admin/api)
   - Used as audit trail for consent changes
-- [ ] Migration `00XX_erasure_and_access_log.sql` — create two GDPR audit tables (deferred from compliance section, now in scope for Phase 1):
-  - `crm.erasure_log`: `id`, `submission_id` (nullable, since contact may exist outside our submissions), `requester_email`, `requested_at`, `completed_at`, `request_source` (form/email/api), `what_was_anonymised` JSONB (per-table summary), `processed_by`, `notes`. RLS: admin-read only.
-  - `crm.access_log`: `id`, `submission_id` (nullable), `requester_email`, `requested_at`, `completed_at`, `request_source`, `export_format`, `processed_by`, `notes`. RLS: admin-read only.
-  - Both tables `functions_writer` insert + admin read. No PII in the audit row itself beyond requester_email.
+- [ ] Migration `00XX_audit_access_requests.sql` — add the right-of-access counterpart to the existing `audit.erasure_requests` table (which has been live since migration 0016, Session C, 2026-04-24, and was missed in the original spec):
+  - `audit.access_requests` mirrors `audit.erasure_requests`'s shape: `id`, `received_at`, `requester_email`, `identity_verified_at`, `status` ('pending' | 'verifying' | 'in_progress' | 'completed' | 'rejected'), `rejection_reason`, per-system result JSONBs (`supabase_result`, `brevo_result`, `netlify_result`, `meta_capi_result`, `google_ads_result`), `completed_at`, `processed_by`, `notes`, plus `export_url` TEXT (signed Storage URL where the JSON export lives once completed).
+  - RLS: read for admin + readonly_analytics, write for functions_writer (mirroring 0016's pattern).
+  - **No `crm.erasure_log` is created — `audit.erasure_requests` is the source of truth for right-to-erasure.** The original spec proposal duplicated existing infrastructure and has been retired.
 - [ ] New Edge Function `brevo-event-webhook`:
   - Receives Brevo webhook events (delivered, opened, clicked, hard_bounce, soft_bounce, spam, unsubscribed, etc.)
   - Updates `crm.email_log.status` based on event
   - For hard_bounce, soft_bounce: log + flag for suppression
   - For spam complaint: auto-unsubscribe from Email campaigns channel, log to `crm.consent_history`
   - For unsubscribe: log to `crm.consent_history`, update `SW_CONSENT_MARKETING = false` in Supabase, sync to Brevo
-  - **Auth: HMAC signature verification on every request** using Brevo's webhook signing (shared secret stored in Supabase Vault as `BREVO_WEBHOOK_SECRET`). Reject any request whose signature header doesn't match. Header-based, never URL query string. Reference: Brevo docs on webhook signature verification.
-  - Deploy with `--no-verify-jwt` (auth handled by HMAC, not JWT)
-- [ ] Configure the Brevo webhook in Brevo dashboard pointing to `brevo-event-webhook` URL, with the matching shared secret configured for signing
-- [ ] Update `infrastructure-manifest.md` with new function, new tables (email_log, consent_history, erasure_log, access_log), new secret (BREVO_WEBHOOK_SECRET)
-- [ ] Update `data-architecture.md` with all four new tables
+  - **Auth: shared-secret bearer token in custom header.** Brevo's public docs do not document HMAC payload signing (verified 2026-05-05 against developers.brevo.com — schema docs only, no security/auth section). Brevo's dashboard does support setting custom HTTP headers on webhook calls. Approach: generate a 64-char hex secret, store as `BREVO_WEBHOOK_SECRET` in Supabase Vault, configure Brevo to send `Authorization: Bearer <SECRET>` on every webhook delivery. Edge Function does a constant-time compare against the env var. Reject anything else with 401.
+  - Header-based only — never URL query string (URLs end up in proxy logs, browser history, referrers).
+  - Deploy with `--no-verify-jwt` (auth is the bearer header, not Supabase JWT).
+- [ ] Configure the Brevo webhook in Brevo dashboard pointing to `brevo-event-webhook` URL, with custom header `Authorization: Bearer <SECRET>` matching the value of `BREVO_WEBHOOK_SECRET` in Supabase Vault
+- [ ] Update `infrastructure-manifest.md` with new function, new tables (email_log, consent_history, access_requests), new secret (BREVO_WEBHOOK_SECRET)
+- [ ] Update `data-architecture.md` with the three new tables (audit.erasure_requests already documented from migration 0016)
 
 #### Charlotte tasks
 - [ ] Finish DKIM/SPF/DMARC setup for `switchable.org.uk` with Brevo (in progress as of 2026-05-05). Phase 1 Edge Function work can ship before this completes, but the success criteria below is gated on green DNS records.
 - [ ] Decide owner-test domain handling — recommend: send utility emails to test domains as normal (lets us test end-to-end) but flag in Brevo with subject prefix `[TEST]` controlled by an env flag
 
 #### Success criteria
-- All four migration tables exist (email_log, consent_history, erasure_log, access_log)
-- Webhook URL configured in Brevo, signed test event arrives at Edge Function (HMAC verified) and lands in `crm.email_log`
-- Unsigned/wrong-signature test request is rejected with 401
+- All three new tables exist (email_log, consent_history, access_requests). `audit.erasure_requests` already lives in prod from migration 0016.
+- Webhook URL configured in Brevo with custom Authorization header. Test event arrives at Edge Function with valid bearer, function authenticates and lands the event in `crm.email_log`.
+- Test request with missing/wrong bearer is rejected with 401.
 - DKIM/SPF/DMARC all green for switchable.org.uk
 
 #### Rollback
@@ -314,12 +315,12 @@ This is the only existing column with this dual-write risk. Future email-status 
 
 ### GDPR
 
-- **Right to erasure (Article 17):** new SOP — when a deletion request comes in:
-  1. Sasha runs script: delete contact from Brevo via API, anonymise/delete `leads.submissions`, `crm.enrolments`, `crm.email_log` rows (cascade with anonymisation, not full delete, to preserve aggregate stats with email/PII redacted)
-  2. Log the erasure event in a new `crm.erasure_log` table with timestamp, request source, what was deleted/anonymised
-  3. Confirm to requester within 30 days per GDPR
+- **Right to erasure (Article 17):** SOP uses the existing `audit.erasure_requests` table (live since migration 0016) — when a deletion request comes in:
+  1. Insert a row into `audit.erasure_requests` with `status='pending'`, `requester_email`, identity verification fields populated as Charlotte confirms.
+  2. Sasha runs script: delete contact from Brevo via API, anonymise/delete `leads.submissions`, `crm.enrolments`, `crm.email_log` rows (cascade with anonymisation, not full delete, to preserve aggregate stats with email/PII redacted). Per-system results captured in the JSONB columns of the same row (`supabase_result`, `brevo_result`, etc.).
+  3. Update row to `status='completed'`. Confirm to requester within 30 days per GDPR.
 
-- **Right of access (Article 15):** new SOP — Sasha runs export script that pulls all data on a contact across submissions, enrolments, email_log, consent_history, partials, dead_letter. Returns as JSON. Log to `crm.access_log`.
+- **Right of access (Article 15):** SOP uses the new `audit.access_requests` table (Phase 1) — same pattern as erasure: Sasha runs export script that pulls all data on a contact across submissions, enrolments, email_log, consent_history, partials, dead_letter. Returns as JSON, uploaded to Supabase Storage as a signed URL recorded in `export_url`. Log row tracks status from pending → completed.
 
 - **Consent withdrawal:** automatically logged via `crm.consent_history`. Audit trail shows when, where, how.
 
@@ -427,7 +428,7 @@ The blog launches soon and the monthly newsletter will be a high-volume marketin
 When the build ships:
 
 - `platform/docs/infrastructure-manifest.md` — new Edge Functions, new cron jobs, new tables, new secrets, retired automations
-- `platform/docs/data-architecture.md` — `crm.email_log`, `crm.consent_history`, `crm.erasure_log`, `crm.access_log` (all four ship in Phase 1)
+- `platform/docs/data-architecture.md` — `crm.email_log`, `crm.consent_history`, `audit.access_requests` (all three ship in Phase 1; `audit.erasure_requests` already documented from migration 0016)
 - `platform/docs/changelog.md` — full migration entry (migrations 00XX through 00YY)
 - `switchable/email/CLAUDE.md` — replace the "list-add triggers automation" architecture description with transactional model
 - `switchable/email/docs/current-handoff.md` — current state at end of migration
@@ -460,7 +461,7 @@ After spec review, the following corrections were made before Phase 1 starts:
 - **Stalled-email query (Phase 2):** added `is_dq = false` and `archived_at IS NULL` filters. Without these, owner-test and DQ leads would have received the stalled email.
 - **Stalled-email framing (Phase 2):** copy is "have you heard from your provider yet?" — checking on the provider's response, not chasing the learner. Subject line and body must use that framing.
 - **Chaser idempotency (Phase 2):** `sendTransactional` gains an optional `forceResend` param. The chaser is the only email type that uses it (every chaser send is a deliberate re-send).
-- **Webhook auth (Phase 1):** `brevo-event-webhook` requires HMAC signature verification using Brevo's webhook signing, with `BREVO_WEBHOOK_SECRET` in Supabase Vault. Header-based, never URL query string. Reject unsigned/wrong-signature requests with 401.
+- **Webhook auth (Phase 1):** `brevo-event-webhook` uses a shared-secret bearer token in a custom Authorization header (configured in Brevo's dashboard), with `BREVO_WEBHOOK_SECRET` in Supabase Vault. Constant-time compared. Brevo's public docs do not document HMAC signing (verified against developers.brevo.com 2026-05-05 — only event schemas are documented), so the bearer approach is the reliable equivalent. Header-based, never URL query string. Reject missing/wrong bearer with 401.
 - **`last_chaser_at` source of truth (Phase 2 → Phase 4):** explicit dual-write in Phase 2; cutover to email_log-derived in Phase 4. Future email-status fields are added to email_log, never to `crm.enrolments`.
 - **GDPR audit tables (Phase 1):** `crm.erasure_log` and `crm.access_log` moved into Phase 1 scope (previously listed in compliance section but not phased — would have been forgotten).
 - **U4 trigger (Phase 2):** scheduled job at 09:30 UTC daily, matching today's existing Brevo automation cadence. Not a DB trigger (sync DB triggers calling Brevo would block writers if Brevo is slow).

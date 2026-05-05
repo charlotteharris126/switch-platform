@@ -833,6 +833,58 @@ CREATE TABLE crm.billing_events (
 
 Per-enrolment billing fires one `enrolment_confirmed` row per confirmed enrolment. Per-lead billing (future marketplace) fires one `lead_delivered` row per routed lead. Credits model fires `credit_debit` on each routed lead and `credit_topup` on each provider payment.
 
+### `crm.email_log` (migration 0073, 2026-05-05)
+
+One row per email send attempt. Covers both transactional (utility: U1, stalled, chaser, U4) and email_campaigns (marketing: N1-N3, referrals, newsletter) channels. Source of truth for "did Sarah get her welcome email?" and the idempotency key for one-shot emails. Webhook events from Brevo (`brevo-event-webhook` Edge Function) update `status` from `sent` through `delivered` / `opened` / `clicked` / `bounced_*` / `complained`. Phase 1 of the email platform rearchitecture — full design in `platform/docs/email-platform-rearchitecture-spec.md`.
+
+```sql
+CREATE TABLE crm.email_log (
+  id                BIGSERIAL PRIMARY KEY,
+  submission_id     BIGINT NOT NULL REFERENCES leads.submissions(id) ON DELETE RESTRICT,
+  email_type        TEXT NOT NULL,                         -- u1_funded | u1_self | stalled_funded | stalled_self | chaser | u4_funded | u4_self | n1 | n2 | n3 | referral_cold | referral_lost | newsletter
+  channel           TEXT NOT NULL,                         -- transactional | email_campaigns
+  template_id       TEXT NOT NULL,
+  recipient_email   TEXT NOT NULL,
+  triggered_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at           TIMESTAMPTZ,
+  status            TEXT NOT NULL,                         -- queued | sent | failed | bounced_hard | bounced_soft | complained | delivered | opened | clicked
+  brevo_message_id  TEXT,                                  -- correlation key for brevo-event-webhook updates
+  error_text        TEXT,
+  metadata          JSONB                                  -- shadow-mode flag, retry counts, last_event from webhook, etc.
+);
+
+CREATE INDEX email_log_submission_type_idx    ON crm.email_log (submission_id, email_type);
+CREATE INDEX email_log_status_triggered_idx   ON crm.email_log (status, triggered_at DESC);
+CREATE INDEX email_log_brevo_message_id_idx   ON crm.email_log (brevo_message_id) WHERE brevo_message_id IS NOT NULL;
+```
+
+Idempotency rule: `sendTransactional()` checks `(submission_id, email_type)` for an existing row in status `(queued, sent, delivered, opened, clicked)` and skips the send if found, UNLESS the caller passes `forceResend: true`. Chaser is the only email type that uses `forceResend`.
+
+### `crm.consent_history` (migration 0074, 2026-05-05)
+
+Append-only audit log of every consent state change. Both Brevo-attribute changes (`SW_CONSENT_MARKETING`) and Brevo channel-subscription changes (Email campaigns vs Transactional) are tracked. Powers GDPR Article 7(1) ("controller shall be able to demonstrate that the data subject has consented") and the dashboard's per-lead consent timeline. Phase 1.
+
+```sql
+CREATE TABLE crm.consent_history (
+  id              BIGSERIAL PRIMARY KEY,
+  submission_id   BIGINT REFERENCES leads.submissions(id) ON DELETE SET NULL,  -- nullable for newsletter-only contacts (future)
+  contact_email   TEXT NOT NULL,                                                -- preserved across PII anonymisation
+  field_changed   TEXT NOT NULL,                                                -- SW_CONSENT_MARKETING | SW_CONSENT_TRANSACTIONAL | email_campaigns_subscription | transactional_subscription
+  old_value       TEXT,
+  new_value       TEXT,
+  changed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  changed_by      TEXT NOT NULL,                                                -- contact | system | admin | backfill
+  source          TEXT NOT NULL,                                                -- form | unsubscribe_link | spam_complaint | admin_dashboard | api | reconcile_cron | backfill
+  metadata        JSONB
+);
+
+CREATE INDEX consent_history_submission_idx        ON crm.consent_history (submission_id, changed_at DESC) WHERE submission_id IS NOT NULL;
+CREATE INDEX consent_history_email_idx             ON crm.consent_history (contact_email, changed_at DESC);
+CREATE INDEX consent_history_field_changed_at_idx  ON crm.consent_history (field_changed, changed_at DESC);
+```
+
+Append-only by RLS: `functions_writer` has INSERT only, no UPDATE or DELETE. Erasure flow (GDPR Article 17) anonymises `contact_email` in-place rather than deleting rows, preserving the audit trail with PII removed.
+
 ---
 
 ## Schema: `social`
@@ -1135,6 +1187,30 @@ CREATE TABLE audit.erasure_requests (
 ```
 
 One row per erasure request. Per-system JSONB fields record the receipt from each downstream system so the erasure is provable end-to-end.
+
+### `audit.access_requests` (migration 0075, 2026-05-05)
+
+GDPR Article 15 right-of-access log. Sibling to `audit.erasure_requests`, same shape. One row per access request from receipt through to completion. Per-system JSONB columns capture the data pulled from each consumer system. `export_url` is the signed Supabase Storage URL where the requester's JSON export lives once completed (short-lived signed link, regenerated on demand if requester needs it again). Phase 1 of the email platform rearchitecture.
+
+```sql
+CREATE TABLE audit.access_requests (
+  id                   BIGSERIAL PRIMARY KEY,
+  received_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  requester_email      TEXT NOT NULL,
+  identity_verified_at TIMESTAMPTZ,
+  status               TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'verifying' | 'in_progress' | 'completed' | 'rejected'
+  rejection_reason     TEXT,
+  supabase_result      JSONB,
+  brevo_result         JSONB,
+  netlify_result       JSONB,
+  meta_capi_result     JSONB,
+  google_ads_result    JSONB,
+  export_url           TEXT,                              -- signed Storage URL, populated when status='completed'
+  completed_at         TIMESTAMPTZ,
+  processed_by         UUID REFERENCES auth.users(id),
+  notes                TEXT
+);
+```
 
 ---
 

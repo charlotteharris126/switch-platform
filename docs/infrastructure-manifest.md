@@ -29,12 +29,18 @@ Deployed functions that the live pipe depends on. Verify via `supabase functions
 | `pending-update-confirm` | Yes (Channel B) | Handles Approve/Reject/Override clicks from AI suggestion emails. Verifies HMAC token (binds `pending_update_id` + `action` + 7-day expiry), idempotent on `crm.pending_updates.status` (must be `pending`). Approve/Override both apply the chosen status to `crm.enrolments` and sync Brevo. Returns a small confirmation HTML page. **Must deploy with `--no-verify-jwt`** — auth is the signed token. Migration 0047. | Trigger a test note edit, click Approve on the resulting email, confirm `crm.pending_updates.status = 'approved'` and `crm.enrolments.status` reflects the choice. | 2026-05-04 (Approve path verified end-to-end) |
 | `meta-ads-ingest` | Yes | Daily pull of yesterday's per-ad spend, impressions, leads, and CTR from the Meta Marketing API into `ads_switchable.meta_daily`. Idempotent via the unique `(date, ad_id)` index. Failures land in `leads.dead_letter` with `source='meta-ads-ingest'`. Auth via `META_ACCESS_TOKEN` (long-lived system user token). Triggered by `meta-ads-ingest-daily` cron at 08:00 UTC; can be POSTed manually with optional `?date=YYYY-MM-DD` for backfill. **Must deploy with `--no-verify-jwt`** so the cron-triggered HTTP call (no JWT) can reach it. | POST `?date=YYYY-MM-DD` against the function URL, response JSON reports `inserted` count. Then `SELECT COUNT(*) FROM ads_switchable.meta_daily WHERE date = '<that date>'` should match. | 2026-05-03 (post-migration-0052 widening of `ctr` column) |
 | `iris-daily-flags` | Yes (advisory; flag-only, no auto-pause) | Daily ads-performance flag computation per `switchable/ads/docs/iris-automation-spec.md`. Reads from `meta_daily`, `v_ad_to_routed`, `v_ad_baselines`, `leads.submissions`. Writes to `ads_switchable.iris_flags`. Implements P1.2 (fatigue), P2.1 (daily health, requires migration 0060 columns populated), P2.2 (CPL anomaly), P2.3 (pixel/CAPI drift, account-wide). 7-day suppression rule prevents duplicate notified flags. SET LOCAL ROLE iris_writer wraps the INSERT transaction. Optional `?date=YYYY-MM-DD` query param to recompute against a specific day; defaults to `current_date - 1`. **Must deploy with `--no-verify-jwt`** — auth is the audit-key header. Migration 0056-0058 dependencies. Iris stage 2 (2026-05-03). | POST manually with `?date=2026-05-02` against function URL; response JSON reports `candidates`, `inserted_notified`, `inserted_suppressed`, per-automation breakdown. Then `SELECT automation, severity, COUNT(*) FROM ads_switchable.iris_flags GROUP BY 1,2` should reflect the candidates. | Pending first deploy |
+| `brevo-event-webhook` | Yes (Phase 1 of email rearchitecture) | Receives Brevo webhook events (delivered/opened/clicked/hard_bounce/soft_bounce/spam/unsubscribed) and updates `crm.email_log.status` for the matching `brevo_message_id` row. For `unsubscribed` and `spam` events, also writes a `crm.consent_history` row. Phase 1 logs the consent change; Phase 3 will add the round-trip to flip `SW_CONSENT_MARKETING` in Brevo + Supabase. Auth: shared-secret bearer in `Authorization` header (Brevo dashboard supports custom headers per webhook), constant-time compared against `BREVO_WEBHOOK_SECRET`. Deploy with `--no-verify-jwt` — auth is the bearer header, not Supabase JWT. Migration 0073/0074 dependencies. | POST a sample Brevo event JSON to function URL with the bearer header set; expect 200 with `{processed: 1, ...}` and a row in `crm.email_log` (if a matching brevo_message_id existed) or `crm.consent_history` (if event was unsubscribed/spam). POST without bearer should return 401. | Pending first event from Brevo |
 
-**Owner-test domain list** - exact-match, case-insensitive, in `netlify-lead-router/index.ts` as `OWNER_TEST_DOMAINS`:
+**Owner-test domain list** - exact-match, case-insensitive, in `_shared/ingest.ts` as `OWNER_TEST_DOMAINS`:
 - `switchable.org.uk`
 - `switchable.careers`
 - `switchable.com`
 - `switchleads.co.uk`
+- `charlie-harris.com`
+
+**Owner-test email list** - exact-match, case-insensitive, in `_shared/ingest.ts` as `OWNER_TEST_EMAILS`:
+- `charliemarieharris@icloud.com`
+- `kieranwrites@gmail.com`
 
 Update the constant + redeploy whenever a new owner-owned domain starts being used for testing.
 
@@ -85,6 +91,7 @@ Runtime env vars for Edge Functions. Set via Supabase Dashboard → Edge Functio
 | `ROUTING_CONFIRM_SHARED_SECRET` | `netlify-lead-router` (signs) + `routing-confirm` (verifies) | Generated via `openssl rand -hex 32` | Yes - see `secrets-rotation.md` |
 | `META_ACCESS_TOKEN` | `meta-ads-ingest` | Meta Business Manager → System users → Generate token (long-lived, scopes: `ads_read`, `ads_management`). Bound to the Switchable Ads Account system user. | Yes - see `secrets-rotation.md` |
 | `META_AD_ACCOUNT_ID` | `meta-ads-ingest` | Meta Ads Manager URL (e.g. `act_1234567890`); not strictly secret but lives in env to avoid hardcoding | n/a |
+| `BREVO_WEBHOOK_SECRET` | `brevo-event-webhook` | Generated via `openssl rand -hex 32`. Same value pasted into Brevo dashboard webhook config as `Authorization: Bearer <SECRET>` custom header. Phase 1 of email rearchitecture. | Yes - see `secrets-rotation.md` |
 
 ---
 

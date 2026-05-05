@@ -454,3 +454,6 @@ verify_jwt = false
 
 [functions.log-page-view]
 verify_jwt = false
+
+[functions.brevo-event-webhook]
+verify_jwt = false

@@ -4,6 +4,35 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-05: Migrations 0073 + 0074 + 0075 — email platform rearchitecture, Phase 1 (DB foundations + webhook receiver)
+
+**Type:** Three new tables, new Edge Function, new secret. No live behaviour change yet (writers come in Phase 2).
+
+**Status:** Migrations applied to production via `supabase db push --linked`. `brevo-event-webhook` Edge Function deployed. Brevo dashboard webhook config and `BREVO_WEBHOOK_SECRET` paste are owner tasks (instructions below).
+
+**Why:** Phase 1 of the email platform rearchitecture (spec at `platform/docs/email-platform-rearchitecture-spec.md`, owner-signed 2026-05-05 with 9 amendments same session). The current setup runs both utility (contract-basis) and marketing (consent-basis) emails through Brevo automations on the Email campaigns channel — when a contact unsubscribes from marketing, Brevo blocks them from utility emails too. Phase 1 lays the DB foundations (audit log, consent history, GDPR right-of-access log) and stands up the bounce/complaint receiver. Phases 2-4 cut utility over to the Transactional API; Phase 5 builds proper marketing automations.
+
+**Changes:**
+- Migration 0073: `crm.email_log` — one row per email send. Idempotency key for one-shot sends, audit log, target for `brevo-event-webhook` status updates. Indexes on `(submission_id, email_type)`, `(status, triggered_at DESC)`, and partial on `brevo_message_id`. RLS: admin + analytics read, functions_writer ALL.
+- Migration 0074: `crm.consent_history` — append-only audit log of every consent state change. RLS: admin + analytics read, functions_writer INSERT only (no UPDATE/DELETE policy — append-only by design). Submission_id nullable to support future newsletter-only contacts.
+- Migration 0075: `audit.access_requests` — GDPR Article 15 right-of-access log. Mirrors the existing `audit.erasure_requests` table from migration 0016 (which the original spec missed; spec amended same session to reuse it rather than create a duplicate `crm.erasure_log`). Adds `export_url` for the signed Storage URL of completed exports.
+- Edge Function `brevo-event-webhook`: receives Brevo webhook events (delivered/opened/clicked/bounce/spam/unsubscribed). Updates `crm.email_log.status` by `brevo_message_id`. For unsubscribe/spam events also inserts a `crm.consent_history` row. Auth: shared-secret bearer in `Authorization` header, constant-time compared against `BREVO_WEBHOOK_SECRET`. Phase 3 will add the round-trip to flip `SW_CONSENT_MARKETING` in Brevo + Supabase; Phase 1 only logs.
+- `supabase/config.toml`: `[functions.brevo-event-webhook] verify_jwt = false`.
+- `data-architecture.md` updated with all three new tables.
+- `infrastructure-manifest.md` updated with new function row, new secret row, and the owner-test allowlist refresh from earlier this session.
+
+**Webhook auth pattern note:** Brevo's public docs do not document HMAC payload signing (verified 2026-05-05 against `developers.brevo.com` — only event schemas published). Brevo's dashboard supports custom HTTP headers on webhook calls, so we use a high-entropy bearer secret in the `Authorization` header. Spec amended in same session to reflect this.
+
+**Owner tasks before Phase 1 is "live":**
+1. Generate webhook secret: `openssl rand -hex 32`
+2. **Paste directly into Supabase Vault** (Dashboard → Project Settings → Edge Functions → Manage secrets). Add new secret named `BREVO_WEBHOOK_SECRET` with the generated value. Do NOT paste the value into chat or any iCloud-synced file.
+3. In Brevo dashboard: Settings → Transactional → Webhooks. Add a new webhook with the events of interest (delivered, hard_bounce, soft_bounce, spam, unsubscribed at minimum; opens/clicks optional but useful). Set URL to `https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/brevo-event-webhook`. Add custom header `Authorization` with value `Bearer <PASTE_THE_SAME_SECRET_HERE>`.
+4. Smoke test: trigger any Brevo event and check `crm.email_log` / `crm.consent_history` for the row.
+
+**Signed off:** Owner (session 2026-05-05).
+
+---
+
 ## 2026-05-05: Migration 0072 — admin column-level UPDATE on leads.submissions for owner-test tagging
 
 **Type:** Access policy. Column-level GRANT + RLS UPDATE policy.
