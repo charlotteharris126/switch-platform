@@ -16,9 +16,10 @@ Platform healthy. Migration history clean (local and remote both at 0072). Two t
 
 ## Next steps
 
-1. Open switchable/email — update U1 and U4 Brevo templates with referral CTAs (carried from session 29-30, still unblocked).
+1. **TOP PRIORITY (new): Phase 1 of email platform rearchitecture.** Spec at `platform/docs/email-platform-rearchitecture-spec.md` (owner-signed 2026-05-05; reviewed and amended by Sasha same session — see "Spec amendments" section). Phase 1 = four migrations (`crm.email_log`, `crm.consent_history`, `crm.erasure_log`, `crm.access_log`), new `brevo-event-webhook` Edge Function with HMAC signature verification, configure Brevo webhook to point at it. Decision-blocker resolved at email session 12 — switchable/email is waiting on platform to ship Phase 1 before any new marketing automations can launch. Phase sequencing locked: 1 → 2a (U1 + shadow infra) → 2b (stalled + chaser + U4) → 3 → 4 → 5/6 in parallel.
 2. Courses Direct: chase Ranjit for HubSpot form URL. Once received: assign `crm_webhook_url` + generate `crm_webhook_token` on `crm.providers.courses-direct`. No further code/schema work needed.
 3. Update infrastructure manifest "Last verified" date for `iris-daily-flags` once it has its first scheduled run (08:30 UTC daily).
+4. ~~Open switchable/email — update U1 and U4 Brevo templates with referral CTAs~~ — **superseded by email session 12.** Referral content removed from utility emails entirely (legal-basis correction). The full rearchitecture supersedes this work.
 
 ## Decisions and open questions
 
@@ -34,6 +35,6 @@ Platform healthy. Migration history clean (local and remote both at 0072). Two t
 
 ## Next session
 
-- **Folder:** switchable/email
-- **First task:** Update U1 and U4 Brevo templates in Brevo dashboard with referral CTAs (template HTML files in switchable/email/templates/).
-- **Cross-project:** None.
+- **Folder:** platform/
+- **First task:** Start Phase 1 of the email platform rearchitecture. Four migrations (`crm.email_log`, `crm.consent_history`, `crm.erasure_log`, `crm.access_log`), then `brevo-event-webhook` Edge Function with HMAC signature verification, then configure Brevo webhook in dashboard. Spec is at `platform/docs/email-platform-rearchitecture-spec.md` — already reviewed and amended this session. No further design work needed before code starts.
+- **Cross-project:** switchable/email session 12 produced the spec and is now blocked on platform delivering Phase 1 through Phase 3. Once Phase 3 (channel enforcement + backfill) ships, switchable/email returns to build N1/N2/N3 and referral automations in Brevo (Phase 5). Charlotte's parallel task: finish DKIM/SPF/DMARC setup for switchable.org.uk in Brevo (in progress).
