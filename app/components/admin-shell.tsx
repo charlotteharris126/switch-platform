@@ -31,6 +31,7 @@ const NAV_SECTIONS: Array<{
     items: [
       { href: "/analytics", label: "Analytics" },
       { href: "/experiments", label: "Experiments" },
+      { href: "/automations", label: "Automations" },
       { href: "/social/drafts", label: "Social" },
       { href: "/profit", label: "Profit tracker" },
       { href: "/agents", label: "Agents" },
