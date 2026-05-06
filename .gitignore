@@ -21,3 +21,6 @@ supabase/.branches/
 
 # Edge Function build artefacts
 supabase/functions/_shared/dist/
+
+# Phase 3c backfill checkpoint (resume state, not source-controlled)
+supabase/data-ops/.backfill-checkpoint.json

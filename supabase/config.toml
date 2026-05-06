@@ -463,3 +463,12 @@ verify_jwt = false
 
 [functions.email-u4-cron]
 verify_jwt = false
+
+[functions.brevo-consent-reconcile-daily]
+verify_jwt = false
+
+[functions.email-failure-alert-daily]
+verify_jwt = false
+
+[functions.email-presumed-warning-cron]
+verify_jwt = false

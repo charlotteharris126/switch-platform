@@ -648,6 +648,7 @@ export async function upsertLearnerInBrevo(
     email: submission.email,
     attributes,
     listIds,
+    marketingOptIn: submission.marketing_opt_in ?? null,
   });
 
   if (!upsertResult.ok) {
@@ -818,6 +819,7 @@ export async function upsertLearnerInBrevoNoMatch(
     email: submission.email,
     attributes,
     listIds,
+    marketingOptIn: submission.marketing_opt_in ?? null,
   });
 
   if (!upsertResult.ok) {

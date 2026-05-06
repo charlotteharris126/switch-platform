@@ -23,10 +23,12 @@ const STATUSES: Array<{ value: EnrolmentStatus; label: string; description: stri
 ];
 
 const LOST_REASONS: Array<{ value: LostReason; label: string }> = [
-  { value: "not_interested", label: "Not interested" },
-  { value: "wrong_course",   label: "Wrong course" },
-  { value: "funding_issue",  label: "Funding issue" },
-  { value: "other",          label: "Other" },
+  { value: "not_interested",            label: "Not interested" },
+  { value: "wrong_course",              label: "Wrong course" },
+  { value: "funding_issue",             label: "Funding issue" },
+  { value: "cancelled",                 label: "Cancelled (pre-start)" },
+  { value: "withdrew_after_enrolment",  label: "Withdrew (post-enrolment)" },
+  { value: "other",                     label: "Other" },
 ];
 
 export function EnrolmentOutcomeForm({
@@ -220,5 +222,10 @@ function isStatus(value: string | null): value is EnrolmentStatus {
 }
 
 function isLostReason(value: string | null): value is LostReason {
-  return value === "not_interested" || value === "wrong_course" || value === "funding_issue" || value === "other";
+  return value === "not_interested"
+    || value === "wrong_course"
+    || value === "funding_issue"
+    || value === "cancelled"
+    || value === "withdrew_after_enrolment"
+    || value === "other";
 }

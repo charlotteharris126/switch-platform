@@ -109,6 +109,12 @@ interface SheetEdit {
   new_value: string | null;
   editor_email: string | null;
   edited_at: string;
+  // Cross-check field (added 2026-05-06 after Lana/Lucy paste-error incident).
+  // Apps Script reads the row's email column and sends it; we verify it
+  // matches the email on file for the resolved submission. Optional for
+  // backward compat — old Apps Script versions that don't include this
+  // field skip the check (legacy behaviour preserved).
+  row_email?: string | null;
 }
 
 interface EnrolmentRow {
@@ -165,11 +171,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // Verify submission exists before any audit log INSERT (the log's
   // submission_id column has a FK to leads.submissions; a non-existent id
-  // would 500 the FK constraint).
-  const subRows = await sql<Array<{ id: number }>>`
-    SELECT id FROM leads.submissions WHERE id = ${submissionId} LIMIT 1
+  // would 500 the FK constraint). Pull email at the same time so we can
+  // cross-check against the row_email the Apps Script sent.
+  const subRows = await sql<Array<{ id: number; email: string | null }>>`
+    SELECT id, email FROM leads.submissions WHERE id = ${submissionId} LIMIT 1
   `;
   const validSubmissionId: number | null = subRows.length > 0 ? submissionId : null;
+  const submissionEmail: string | null = subRows.length > 0 ? subRows[0].email : null;
 
   // Idempotency: same edit within 60s = duplicate
   const recent = await sql<Array<{ id: number }>>`
@@ -202,6 +210,36 @@ Deno.serve(async (req: Request): Promise<Response> => {
       reason: `Sheet row references a Lead ID that does not exist in the database. Sheet may have been edited manually.`,
     });
     return json({ ok: false, action: "rejected", reason: "lead not found" }, 200);
+  }
+
+  // Row-email cross-check (added 2026-05-06).
+  // If the Apps Script sent a row_email AND it doesn't match the email on
+  // file for the resolved submission, this row's lead_id is misaligned with
+  // its visible name (paste-error pattern, Lana/Lucy 2026-05-06). Reject the
+  // update without applying it, log, alert owner. The legitimate fix is to
+  // correct the sheet's lead_id column, not to mutate the wrong DB record.
+  //
+  // Comparison is case-insensitive + trimmed. Empty / null row_email skips
+  // the check (legacy Apps Script versions or rows where the email column
+  // is genuinely blank — fall back to lead_id-only routing as before).
+  const rowEmailNormalised = body.row_email ? body.row_email.trim().toLowerCase() : "";
+  const submissionEmailNormalised = submissionEmail ? submissionEmail.trim().toLowerCase() : "";
+  if (rowEmailNormalised && submissionEmailNormalised && rowEmailNormalised !== submissionEmailNormalised) {
+    await logEdit({
+      body,
+      enrolmentId: null,
+      submissionId: validSubmissionId,
+      action: "rejected",
+      reason: `row_email "${rowEmailNormalised}" does not match submission email "${submissionEmailNormalised}" (lead_id ${body.lead_id} resolves to submission ${validSubmissionId} but the visible row carries a different email — likely paste-error duplicate lead_id)`,
+    });
+    await safeSendAnomalyEmail({
+      providerId: body.provider_id,
+      leadId: body.lead_id,
+      column: body.column,
+      newValue: body.new_value,
+      reason: `Sheet row alignment mismatch. Lead ID ${body.lead_id} maps to a contact whose email is "${submissionEmailNormalised}" in our DB, but the visible row in the provider's sheet shows "${rowEmailNormalised}". This is the paste-error pattern from Lana/Lucy. Update was NOT applied. Fix: correct the lead_id cell in the provider's sheet to match the row's actual contact, then re-edit if still relevant.`,
+    });
+    return json({ ok: false, action: "rejected", reason: "row email mismatch (paste-error guard)" }, 200);
   }
 
   // Resolve enrolment row

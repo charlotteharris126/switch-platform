@@ -128,6 +128,18 @@ export interface UpsertContactArgs {
   attributes?: BrevoAttributes;
   /** Optional list IDs to add the contact to in the same call. */
   listIds?: number[];
+  /**
+   * Phase 3b channel-state push (spec: email-platform-rearchitecture-spec.md).
+   * When boolean, sets `emailBlacklisted` on the Brevo contact in the same
+   * request that updates attributes/listIds — keeps the Email campaigns
+   * channel subscription state in lockstep with our DB's `marketing_opt_in`.
+   *   true  → emailBlacklisted: false (subscribed, can receive marketing)
+   *   false → emailBlacklisted: true  (unsubscribed from marketing channel)
+   *   null/undefined → field omitted, Brevo leaves channel state untouched
+   * Transactional sends are unaffected — Brevo gates those via a separate
+   * `smtpBlacklistSender`/transac-blocked mechanism.
+   */
+  marketingOptIn?: boolean | null;
 }
 
 /**
@@ -148,6 +160,9 @@ export async function upsertBrevoContact(args: UpsertContactArgs): Promise<Brevo
   };
   if (args.attributes) body.attributes = args.attributes;
   if (args.listIds && args.listIds.length > 0) body.listIds = args.listIds;
+  if (typeof args.marketingOptIn === "boolean") {
+    body.emailBlacklisted = !args.marketingOptIn;
+  }
 
   return await fetchBrevo(BREVO_CONTACTS_ENDPOINT, "POST", apiKey, body);
 }
@@ -194,7 +209,8 @@ export type EmailLogType =
   | "u4_funded" | "u4_self"
   | "n1" | "n2" | "n3"
   | "referral_cold" | "referral_lost"
-  | "newsletter";
+  | "newsletter"
+  | "provider_presumed_warning";
 
 export interface SendTransactionalArgs {
   sql: Sql;

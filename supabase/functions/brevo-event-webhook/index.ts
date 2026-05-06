@@ -232,6 +232,7 @@ async function processEvent(event: BrevoEvent): Promise<void> {
     const upsertResult = await upsertBrevoContact({
       email: recipientEmail.toLowerCase(),
       attributes: { SW_CONSENT_MARKETING: false },
+      marketingOptIn: false,
     });
     if (!upsertResult.ok) {
       console.error(

@@ -90,6 +90,16 @@ function onEdit(e) {
     console.log('leadId=' + leadId);
     if (!leadId) { console.log('skip: no leadId in row'); return; }
 
+    // Cross-check field — read the row's email column too. The Edge Function
+    // verifies it matches the email on file for the lead_id, catching paste-
+    // error duplicates (where the visible name in a row has someone else's
+    // lead_id, e.g. Lana/Lucy 2026-05-06). Optional: if the email column
+    // doesn't exist or is blank, the Edge Function falls back to lead_id-only
+    // routing so legacy sheets keep working.
+    const emailCol = findColumnByHeader_(sheet, 'email')
+      || findColumnByHeader_(sheet, 'emailaddress');
+    const rowEmail = emailCol ? sheet.getRange(editedRow, emailCol).getValue() : null;
+
     const editorEmail = (e.user && typeof e.user.getEmail === 'function')
       ? e.user.getEmail()
       : null;
@@ -101,6 +111,7 @@ function onEdit(e) {
       old_value: e.oldValue == null ? null : String(e.oldValue),
       new_value: e.value == null ? null : String(e.value),
       editor_email: editorEmail,
+      row_email: rowEmail ? String(rowEmail).trim() : null,
       edited_at: new Date().toISOString()
     };
 

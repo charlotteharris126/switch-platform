@@ -109,6 +109,11 @@ const UTILITY_TYPES: Array<{
     display_name: "U4 — Self-funded enrolment",
     trigger_description: "Daily cron at 09:30 UTC. Triggered by SW_ENROL_STATUS flip to enrolled/presumed_enrolled.",
   },
+  {
+    email_type: "provider_presumed_warning",
+    display_name: "Provider presumed-warning (day-12)",
+    trigger_description: "Daily cron at 05:00 UTC. Provider-facing — fires 2 days before the 14-day auto-flip would mark a routed lead presumed_enrolled. Dormant until BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING env var is set.",
+  },
 ];
 
 const CRON_JOBS: CronRow[] = [
@@ -135,6 +140,22 @@ const CRON_JOBS: CronRow[] = [
     description: "Walks Brevo contacts, reconciles channel state vs DB marketing_opt_in. Auto-corrects unsub direction only. Alerts dead_letter on drift > 2%.",
     status: "active",
     function_path: "/brevo-consent-reconcile-daily",
+  },
+  {
+    name: "email-failure-alert-daily",
+    schedule_cron: "30 4 * * *",
+    schedule_human: "Daily at 04:30 UTC",
+    description: "Counts utility transactional sends with status=failed in last 24h. If ≥3, emails owner + writes dead_letter. Catches systemic Brevo issues (API outage, bad key, deleted template).",
+    status: "active",
+    function_path: "/email-failure-alert-daily",
+  },
+  {
+    name: "email-presumed-warning-cron-daily",
+    schedule_cron: "0 5 * * *",
+    schedule_human: "Daily at 05:00 UTC",
+    description: "Day-12 warning. Finds leads in the 12-14 day open window and emails the provider 2 days before the auto-flip-to-presumed_enrolled would fire. Prerequisite for re-enabling enrolment-auto-flip-daily (currently paused).",
+    status: "active",
+    function_path: "/email-presumed-warning-cron",
   },
   {
     name: "enrolment-auto-flip-daily",

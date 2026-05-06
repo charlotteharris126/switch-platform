@@ -120,6 +120,20 @@ Every lead lands with UTM context. Every enrolment lands with billable amount (S
 ### G. Revenue / billing module
 Track pilot enrolment counts per provider, when free pilot ends, generate invoices via GoCardless integration. Currently 100% manual. At 5+ providers this becomes a daily cost.
 
+**Scope expanded 2026-05-06 (Clara session):** building bespoke invoice generation plus GoCardless auto-pull on top of the existing Edge Functions stack. Forced into scope by FreeAgent's mandate-import limitation: mandates acquired via Charlotte's bespoke clause-amendment GoCardless page (used for EMS, CD, WYK pre-PPA-v2) cannot be linked to FreeAgent contacts, so FreeAgent's auto-pull doesn't fire for them. Manual workaround for now (~3 min/provider/month). Custom build resolves it permanently and seeds the Phase 4 marketplace billing module.
+
+Architecture sketch:
+- New `crm.invoices` schema (migration), versioned per `data-infrastructure.md`
+- HTML-to-PDF invoice generator in an Edge Function, branded SwitchLeads-by-Switchable
+- GoCardless API call to create a one-off payment against any existing mandate on due date (mandate-agnostic, works regardless of acquisition flow)
+- Webhook listener on `payments.confirmed` / `payments.failed` updates `crm.invoices` status
+- Provider notification via Brevo Transactional API with PDF attached (utility-tier, lawful basis: contract)
+- FreeAgent kept as the accounting layer (P&L, balance sheet, VAT, corporation tax). Custom layer either pushes invoices to FreeAgent via API or exports CSV monthly for import.
+
+Build estimate: ~12-15h focused. Schema (1h), PDF generator (3-4h), GoCardless API integration (1-2h), webhook listener (1-2h), Brevo email (1h), reconciliation logic (2-3h), testing (2h).
+
+Trigger to build: provider count crosses ~10 (automation ROI flips strongly positive), OR Phase 4 marketplace scoping starts and the billing module needs ordering. Until then, manual pulls for the existing 3 pre-PPA-v2 providers and FreeAgent-native auto-pull for new providers (Riverside onwards) is the operating model.
+
 ### H. Provider onboarding wizard
 Today: Charlotte signs them up via Notion → manual sheet creation → manual Apps Script paste → manual DB row insert. Replace with: in-dashboard "Add provider" wizard that creates the DB row, provisions the sheet (Apps Script via Google API), wires the webhook, sets `cc_emails`, generates the agreement page, fires the welcome email. End-to-end in 5 minutes instead of 90.
 

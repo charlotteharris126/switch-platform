@@ -41,6 +41,8 @@ export type LostReason =
   | "not_interested"
   | "wrong_course"
   | "funding_issue"
+  | "cancelled"
+  | "withdrew_after_enrolment"
   | "other";
 
 export interface MarkEnrolmentOutcomeInput {
