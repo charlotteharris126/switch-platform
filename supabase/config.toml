@@ -472,3 +472,6 @@ verify_jwt = false
 
 [functions.email-presumed-warning-cron]
 verify_jwt = false
+
+[functions.email-sunset-cron]
+verify_jwt = false

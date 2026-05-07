@@ -1,5 +1,107 @@
 # Platform Handoff, Session 33, 2026-05-06
 
+## ⚡ PUSH FROM switchable/site Session 57 (Mable), 2026-05-07: Fastrack form back-end ready to wire
+
+Front-end of the Fastrack form (lead-to-enrol uplift Phase 2) is built and waiting to ship. Owner needs to do three things on the platform side before the form does anything beyond Netlify dashboard storage. Estimated 2-3 hours plus deploy.
+
+**Already shipped on switchable/site (commit pending Charlotte's browser test + /ultrareview before push):**
+
+- Migration `platform/supabase/migrations/0087_fastrack_submissions.sql` written. Adds `leads.submissions.client_nonce` (UUID, indexed) + `leads.submissions.fastracked_at` (TIMESTAMPTZ) + new table `leads.fastrack_submissions` with the full payload shape, RLS policies for `functions_writer` (ALL) and `readonly_analytics` (SELECT). Reversible via the `-- DOWN` block at the bottom.
+- `switchable/site/docs/funded-funnel-architecture.md` updated. Lead payload doc gains an "optional `client_nonce` hidden field" note (additive, no schema bump). New Fastrack payload schema 1.0 section added with full field-by-field table and the Edge Function pipeline spec (steps 1-8).
+- `deploy/data/form-allowlist.json` carries a new `fastrack-funded-v1` entry with `webhook_url: null` (deferred). Audit will pass — null webhook is allowed for forms not requiring a routing destination yet.
+- `deploy/template/funded-course.html` adds a hidden `client_nonce` input + pre-submit JS that generates a UUIDv4 client-side, populates the field, and rewrites `form.action` to `/funded/thank-you/?ref=<uuid>&course=<slug>` so the post-redirect URL carries the lookup token.
+- `deploy/deploy/funded/thank-you/index.html` gains the full Fastrack section (form + dynamic-render JS reading matrix.json / courses.json / providers.json + post-submit confirmation state via `?fastracked=1`).
+- `deploy/scripts/build-funded-pages.js` extended: providers manifest now carries `trust_line` + `funding_types`; matrix.json routes carry `providerId`, `providerIds`, `qualification`, `level`, `fundingRoute`, `fundingCategory`, and the course `outcomes[]` array.
+
+**What's needed from platform (you, with Sasha-monitored verification):**
+
+### 1. Apply migration 0087
+
+```bash
+cd platform
+supabase db push
+```
+
+Migration is additive: two nullable columns + one new table. No downstream consumer breaks. After apply, expose schema (already exposed since `leads` is part of the existing setup; new table inherits) and verify via `\d leads.fastrack_submissions` in psql.
+
+### 2. Patch `netlify-lead-router` to persist `client_nonce`
+
+The funded form now sends `client_nonce` as a hidden field on every funded submission. The router needs to read it and write to `leads.submissions.client_nonce` on insert. Single-line change in the normalisation block. Optional: dead-letter the row if `client_nonce` is missing AND form-name is `switchable-funded` post 2026-05-07 (defensive — pre-fix submissions still in the queue would hit this; OK to skip if it complicates the rollout).
+
+### 3. Create `fastrack-receive` Edge Function
+
+Full spec at `switchable/site/docs/funded-funnel-architecture.md` → Fastrack payload schema → Edge Function pipeline. Eight steps:
+
+1. Verify Netlify auth header (use the same shared secret pattern as `netlify-lead-router`).
+2. Lookup parent: `SELECT id, prior_level_3_or_higher, course_id, primary_routed_to, region_scheme, funding_route FROM leads.submissions WHERE client_nonce = $1`. Not found → write to `leads.dead_letter` with `error_context = 'fastrack: parent client_nonce not found'`, return 200.
+3. Compute two flags:
+   - `l3_mismatch_flag = body.l3_reconfirmed === true` (any "my record might show a Level 3" answer is a DQ — FCFJ requires no L3).
+   - `cohort_decline_flag = body.cohort_confirmed === false` (learner can't commit to this cohort's start date — DQ for this round, funded cohorts run on fixed dates).
+4. Insert into `leads.fastrack_submissions` with all fields + `parent_submission_id = parent.id` + `l3_mismatch_flag` + `raw_payload`.
+5. `UPDATE leads.submissions SET fastracked_at = now() WHERE id = parent.id`.
+6. **DQ handling (Charlotte's directive 2026-05-07):** if either flag is true, auto-mark lost so the adviser doesn't waste a call. L3 takes precedence when both fire (more permanent disqualification).
+   - L3 mismatch:
+     - DB: `UPDATE crm.enrolments SET status = 'lost', lost_reason = 'l3_mismatch_self_reported', lost_at = now() WHERE submission_id = parent.id`.
+     - Sheet: pass `auto_lost` flag to the appender; writes `Status = "Lost"`, `Lost Reason = "L3 mismatch (self-reported on fastrack)"`.
+   - Cohort decline:
+     - DB: `UPDATE crm.enrolments SET status = 'lost', lost_reason = 'cohort_decline', lost_at = now() WHERE submission_id = parent.id`.
+     - Sheet: writes `Status = "Lost"`, `Lost Reason = "Cohort decline (couldn't commit to start date)"`.
+   - Lost_reason CHECK constraint extension: pre-flight `crm.enrolments.lost_reason` constraint. If `l3_mismatch_self_reported` and `cohort_decline` aren't already permitted values, ship a one-line migration adding them BEFORE deploying the Edge Function.
+7. Compose sheet projection (see below).
+8. Call the v2 Apps Script appender (header-driven `FIELD_MAP`) for `parent.primary_routed_to` provider's sheet. Pass `parent_submission_id` so the appender finds the existing row and UPDATES the projection columns in place (do NOT append a new row). New FIELD_MAP entries: `fastracked → "Fastracked"`, `fastrack_notes → "Fastrack Notes"`. When `auto_lost` is set, the same call also updates `Status` and `Lost Reason` columns. Sheet headers need adding by Charlotte before this fires (see step 4 of this push).
+9. Return 200.
+
+**Sheet projection format:**
+
+```
+fastracked = "yes"
+fastrack_notes =
+  "Start: <readable window>
+   Docs ready: ID <y/n> | Address <y/n> | Quals <y/n> | NI <y/n>
+   L3 reconfirmed: <yes/no>[ ⚠ MISMATCH]
+   Notes: <voice_of_learner_intro or '—'>"
+```
+
+Readable window map: `within_2_weeks → "Within 2 weeks"`, `within_4_weeks → "Within 4 weeks"`, `within_8_weeks → "Within 8 weeks"`, `still_deciding → "Still deciding"`.
+
+### 4. Add the two columns to each provider sheet (Charlotte, manual)
+
+Per memory `feedback_appender_version_preflight` — pre-flight against `infrastructure-manifest.md` first. v2 appender is header-driven so this is just adding two columns at the right edge of EMS, WYK, Courses Direct sheets:
+- `Fastracked` (yes/no flag)
+- `Fastrack Notes` (free text summary)
+
+### 5. Wire the Netlify webhook
+
+In Netlify dashboard: Forms → `fastrack-funded-v1` → Form notifications → Add outgoing webhook → URL `https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/fastrack-receive`. Then update `deploy/data/form-allowlist.json` to set `webhook_url` to that URL (currently null) and run the platform audit (`POST` to `netlify-forms-audit`) to confirm no discrepancies.
+
+### 6. Test end-to-end
+
+Submit a funded test form → land on thank-you with the Fastrack section → submit fastrack → verify:
+- New `leads.submissions` row has `client_nonce` populated and `fastracked_at` stamped
+- New `leads.fastrack_submissions` row exists with `parent_submission_id` matching, all fields populated, `l3_mismatch_flag` set correctly
+- Provider sheet's `Fastracked` + `Fastrack Notes` columns updated for that lead's row (not appended)
+
+Three confirmation paths to verify:
+
+- **Standard happy path:** cohort confirmed + record won't show L3 → standard "Application sent" card. DB row `status = 'open'`. Sheet `Fastracked = "yes"`, `Fastrack Notes` populated. No status flip.
+- **L3 mismatch path:** "Now I think about it, it might" on PLR question → "Funded route isn't open to you" card with self-funded CTA. DB `status = 'lost'`, `lost_reason = 'l3_mismatch_self_reported'`. Sheet `Status = "Lost"`, `Lost Reason = "L3 mismatch (self-reported on fastrack)"`, `Fastrack Notes` carries `⚠ MISMATCH` marker.
+- **Cohort decline path:** "I need different dates" on cohort question → "This cohort isn't right for you" card with two CTAs (other funded + self-funded). DB `status = 'lost'`, `lost_reason = 'cohort_decline'`. Sheet `Status = "Lost"`, `Lost Reason = "Cohort decline (couldn't commit to start date)"`.
+
+Both DQ paths also confirm the auto-lost prevents a wasted EMS call.
+
+### 7. Optional Brevo notification (defer until Andy asks)
+
+Spec deliberately stops at sheet update. If EMS adviser needs a faster signal, a `sendTransactional` to Andy with the fastrack summary can land later. Owner's call.
+
+**Sasha's monitoring (after step 6 verifies):**
+
+- Add `leads.fastrack_submissions` row count + `l3_mismatch_flag` rate to her Monday audit.
+- Add `fastrack-receive` failure rate (dead_letter rows with `error_context LIKE 'fastrack:%'`) to the daily failure check.
+
+**Cross-reference:** `strategy/docs/lead-to-enrol-uplift.md` Phase 2, `switchable/site/docs/funded-funnel-architecture.md` (lead payload + Fastrack payload schema 1.0), migration `0087_fastrack_submissions.sql`, allowlist entry `fastrack-funded-v1`.
+
+---
+
 ## Current state
 
 Phase 3b + 3c + 3d email rearch code complete and held for tomorrow's Thursday cutover. Sheet alignment + auto-flip safety fixes shipped today after a same-day incident: 5 leads auto-flipped to presumed_enrolled this morning, 1 wrongly confirmed lost via sheet paste-error (Lana/Lucy mix-up). All 5 reverted, cron paused, sheet-edit-mirror cross-check (Edge Function + Apps Script on all 3 provider sheets) shipped to prevent recurrence. Four small platform items also coded tonight: lost_reason taxonomy expansion, Phase 6c failure alert cron, day-12 provider warning cron (dormant pending template), and the sheet cross-check above. Cutover bundle now: 8 functions + 6 migrations + 1 backfill script. DKIM green, parity green, ready for tomorrow morning.
@@ -54,6 +156,12 @@ Phase 3b + 3c + 3d email rearch code complete and held for tomorrow's Thursday c
 5. **HubSpot integration unpause:** when Ranjit replies with the form URL. Migration 0049 + route-lead.ts edits + receiver Edge Function ready.
 6. **Apprenticeship pricing schema split (Riverside dual-route):** trigger is Kevin signing the activation page (sent 5 May, awaiting per Nell session 16). Adds lead_route + event_type to enrolments, per-route pricing on providers, 60-day presumed clock variant.
 7. **Failure-alert email Brevo template creation (optional):** Phase 6c uses `sendBrevoEmail` with raw HTML for now. If Charlotte wants a branded template instead, swap in a template send. Low priority.
+8. **Lead-to-enrol uplift Phase 2 — Brevo SMS integration + fastrack form back-end.** Two builds:
+   - **Brevo SMS** on the transactional rail. Add `sendTransactionalSms` helper in `_shared/brevo.ts` mirroring `sendTransactional`. Idempotency on `(submission_id, sms_type)` via either a new `crm.sms_log` table or extending `crm.email_log` (decide via design doc first). Switchable-branded sender. 4-touch sequence (T+0 / T+24h / T+5d / T+10d) fires from cron + state triggers similar to the email utility track. Sequenced after Thursday cutover stabilises.
+   - **Fastrack form back-end.** New Supabase table for fastrack-form responses (joined to `leads.submissions` via submission_id), `primed` flag exposed back to routing logic, qualification-name comparison logic that flags any mismatch between original q3 answer and the fastrack re-ask, surfaces the flag to EMS pre-call.
+   - Schema design + data-architecture doc update first, migration files, RLS, then Edge Function plumbing. Full scope: `strategy/docs/lead-to-enrol-uplift.md`.
+9. **Lead-to-enrol uplift Phase 3 — postcard trigger.** Edge Function fires print-job webhook at routing confirmation. A/B group assignment, 50/50 sample for the first 100 routed leads. Sequenced after Phase 2 lands.
+10. **Lead-to-enrol uplift Phase 3 contingent — enrolment-slot calendar webhook.** Only fires if Andy buys in at the catch-up. Cal.com (or similar) webhook into Supabase against the lead row, exposed to fastrack-form completers as the booking surface. Owner narrowed: no longer booking a qualifying call, instead booking the actual enrolment meeting Andy already runs internally — higher commitment signal, EMS skips the cold-dial chase entirely.
 
 ## Decisions and open questions
 
@@ -89,3 +197,5 @@ Phase 3b + 3c + 3d email rearch code complete and held for tomorrow's Thursday c
 - **Folder:** platform/
 - **First task:** run the Thursday cutover ritual (Next steps #1). Pre-flight on `/admin/leads` U1 column + DKIM still verified, then deploy 8 functions, apply migrations 0080-0085, disable old utility automations in Brevo, run data-ops/013 --apply, monitor.
 - **Cross-project:** Pushed today to switchleads/clients/ (Nell handoff session 16) — provider auto-marking educational email queued for next Nell session. Pushed today to switchable/site/ (via Mable session 55) — iOS POST-replay fix bundled and deployed in commit 7bc0a4a. No new outbound pushes from this session beyond those already in flight.
+
+  **Incoming pushes (added this session):** Lead-to-enrol uplift Phase 2-3 work pushed by Mira from `strategy/`. Phase 2: Brevo SMS integration on transactional rail + fastrack form back-end (Supabase table, primed flag, qualification comparison logic). Phase 3: postcard trigger + enrolment-slot calendar webhook (contingent on owner + Andy at the catch-up). Sequenced after Thursday cutover stabilises. Full scope: `strategy/docs/lead-to-enrol-uplift.md`.

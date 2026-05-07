@@ -12,10 +12,11 @@ export interface FireProviderChaserResult {
 }
 
 // Bulk-fire the SF2 "Provider tried no answer" Brevo chaser for the
-// selected submission ids. Stamps crm.enrolments.last_chaser_at for each
-// successfully-queued lead. Async on the Brevo side via pg_net inside the
-// SQL function; the user gets back the per-id resolution (ok / skipped)
-// immediately for UI feedback.
+// selected submission ids. The SQL function audits the chaser-fire intent
+// and async-invokes admin-brevo-chase via pg_net; the Edge Function calls
+// sendTransactional which writes the canonical crm.email_log row (single
+// source of truth post-migration 0086, Phase 4 closeout). The user gets
+// back the per-id resolution (ok / skipped) immediately for UI feedback.
 export async function fireProviderChaser(
   submissionIds: number[],
 ): Promise<FireProviderChaserResult> {

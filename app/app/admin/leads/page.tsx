@@ -254,7 +254,7 @@ export default async function LeadsPage({
       ? supabase
           .schema("crm")
           .from("enrolments")
-          .select("submission_id, status, lost_reason, disputed_at, last_chaser_at")
+          .select("submission_id, status, lost_reason, disputed_at")
           .in("submission_id", submissionIdsOnPage)
       : Promise.resolve({ data: [], error: null }),
     submissionIdsOnPage.length > 0
@@ -268,20 +268,32 @@ export default async function LeadsPage({
   ]);
 
   // Map submission_id → latest enrolment row for fast lookup in the table render.
-  const enrolmentBySubId = new Map<number, { status: string; lost_reason: string | null; disputed_at: string | null; last_chaser_at: string | null }>();
-  for (const e of (enrolmentsRes.data ?? []) as Array<{ submission_id: number; status: string; lost_reason: string | null; disputed_at: string | null; last_chaser_at: string | null }>) {
-    enrolmentBySubId.set(e.submission_id, { status: e.status, lost_reason: e.lost_reason, disputed_at: e.disputed_at, last_chaser_at: e.last_chaser_at });
+  const enrolmentBySubId = new Map<number, { status: string; lost_reason: string | null; disputed_at: string | null }>();
+  for (const e of (enrolmentsRes.data ?? []) as Array<{ submission_id: number; status: string; lost_reason: string | null; disputed_at: string | null }>) {
+    enrolmentBySubId.set(e.submission_id, { status: e.status, lost_reason: e.lost_reason, disputed_at: e.disputed_at });
   }
 
-  // Map submission_id → latest U1 transactional status (Phase 2 parity check).
-  // The query already orders triggered_at DESC, so the first row per (sub_id,
-  // email_type) wins. Only U1 is surfaced in the list view for now —
-  // stalled/chaser/U4 live on the detail page email log.
+  // Maps derived from the email_log query. The query orders triggered_at DESC,
+  // so the first row per (sub_id, email_type) is the latest send.
+  // - u1StatusBySubId: latest U1 transactional status, surfaced in the
+  //   "U1" column for at-a-glance Phase 2 parity.
+  // - lastChaserBySubId: latest chaser triggered_at over healthy delivery
+  //   statuses, replaces the dropped crm.enrolments.last_chaser_at column
+  //   (migration 0086, Phase 4 closeout). chaser_funded and chaser_self
+  //   are both folded into one timestamp here — the dashboard surface
+  //   doesn't distinguish funded vs self chaser at this view.
+  const HEALTHY_CHASER_STATUSES = new Set(["sent", "delivered", "opened", "clicked"]);
   const u1StatusBySubId = new Map<number, string>();
-  for (const e of (emailLogRes.data ?? []) as Array<{ submission_id: number; email_type: string; status: string }>) {
+  const lastChaserBySubId = new Map<number, string>();
+  for (const e of (emailLogRes.data ?? []) as Array<{ submission_id: number; email_type: string; status: string; triggered_at: string }>) {
     if (e.email_type === "u1_funded" || e.email_type === "u1_self") {
       if (!u1StatusBySubId.has(e.submission_id)) {
         u1StatusBySubId.set(e.submission_id, e.status);
+      }
+    }
+    if (e.email_type === "chaser_funded" || e.email_type === "chaser_self") {
+      if (HEALTHY_CHASER_STATUSES.has(e.status) && !lastChaserBySubId.has(e.submission_id)) {
+        lastChaserBySubId.set(e.submission_id, e.triggered_at);
       }
     }
   }
@@ -459,9 +471,9 @@ export default async function LeadsPage({
                   </TableCell>
                   <TableCell className="text-xs text-[#5a6a72] whitespace-nowrap">
                     {(() => {
-                      const enrol = enrolmentBySubId.get(r.id);
-                      if (!enrol?.last_chaser_at) return "—";
-                      const d = new Date(enrol.last_chaser_at);
+                      const lastChaserAt = lastChaserBySubId.get(r.id);
+                      if (!lastChaserAt) return "—";
+                      const d = new Date(lastChaserAt);
                       // Compare UK calendar days, not elapsed hours, so "today"
                       // means same calendar day rather than "within last 24h".
                       const ukKey = (date: Date) =>

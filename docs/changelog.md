@@ -4,6 +4,123 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-07: Email rearch cutover ritual completed
+
+**Type:** Production state change. 4 Edge Function deploys, 6 migrations applied, env-var flip, 8 Brevo automations disabled, one-off backfill executed. No new schema beyond what migrations 0080-0085 introduce.
+
+**Status:** Live end-to-end. Brevo channel state aligned with `marketing_opt_in` for 47 contacts mutated this run. Two-channel architecture (utility on Transactional API, marketing on Email campaigns channel) operating as designed — verified by Charlotte in Brevo dashboard: opted-out contacts show `emailBlacklisted=true` for marketing while transactional sends continue.
+
+**Why:** Tuesday's cutover bundle (per Session 33 handoff) deployed 5 Edge Functions but didn't complete the rest of the ritual — `BREVO_SHADOW_MODE` was never flipped to false, migrations 0080-0085 weren't applied, the 3 cron functions weren't deployed, legacy automations stayed active, and the Phase 3c backfill never ran. Effective state was "shadow log-only mode with legacy automations doing the real work" — looked green on the dashboard because nothing was breaking, but nothing had cut over either. This session ran the missing pieces.
+
+**Changes (in execution order):**
+1. **`BREVO_SHADOW_MODE=false`** — set in Supabase Vault. Edge Functions read this on cold start; within seconds, all callers (`routing-confirm`, `netlify-lead-router`, `email-stalled-cron`, `email-u4-cron`, `admin-brevo-chase`) switched from log-only to real Transactional API sends.
+2. **4 Edge Functions deployed** via `supabase functions deploy --no-verify-jwt`:
+   - `brevo-consent-reconcile-daily` (NEW) — daily 04:00 UTC drift check between Brevo channel state and `marketing_opt_in`.
+   - `email-failure-alert-daily` (NEW) — daily 04:30 UTC alert if ≥3 transactional sends failed in last 24h.
+   - `email-presumed-warning-cron` (NEW) — daily 05:00 UTC, dormant until `BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING` is set + auto-flip is re-enabled (both indefinitely deferred per owner).
+   - `sheet-edit-mirror` (REDEPLOY) — Tuesday's row_email cross-check now active end-to-end.
+3. **Migrations 0080-0085 applied** via `supabase db push --linked`:
+   - 0080: pause_enrolment_auto_flip — **patched to be idempotent (DO/IF EXISTS)** because the manual unschedule from Tuesday's incident response had already removed the job; first apply attempt threw XX000.
+   - 0081: brevo_consent_reconcile_cron schedule.
+   - 0082: lost_reason CHECK expansion (`cancelled`, `withdrew_after_enrolment`).
+   - 0083: email_failure_alert_cron schedule.
+   - 0084: email_log `provider_presumed_warning` email_type added.
+   - 0085: email_presumed_warning_cron schedule.
+4. **8 legacy Brevo automations disabled** in Brevo dashboard (status → Off, templates archived). 90-day rollback retention (until 2026-08-05). Dual-send window between step 1 and step 4 was ~10 minutes; any leads landing in that window may have received duplicate U1 emails (low risk at current volumes; not flagged a real-world incident yet).
+5. **`data-ops/013_backfill_email_campaigns_channel.ts --apply`** — second apply attempt succeeded after script patched to use `field_changed='email_campaigns_subscription'` (lowercase, matches existing CHECK constraint). Final summary: processed 225, mutated 47, skipped 178, errors 0.
+
+**Audit gap from the failed first apply:** the script blocks Brevo BEFORE writing the `crm.consent_history` audit row. ~30 contacts got `emailBlacklisted=true` in Brevo during the first apply attempt, but the consent_history INSERT failed (CHECK constraint violation on the `EMAIL_CAMPAIGNS_CHANNEL` value the script was using). Brevo state for those contacts is correct (matches their `marketing_opt_in=false`); audit trail row is missing. Repair task queued for next session — write a one-shot SQL INSERT to backfill the missing rows with `source='backfill'`, `metadata.reason='audit_repair_after_2026-05-07_partial_failure'`.
+
+**Other incidents handled this session:**
+- **Brevo API key exposure:** during the live-apply attempt, the owner pasted a Brevo API key into a `read -p` command (bash syntax that doesn't work in zsh) where the key ended up in shell history + chat log. Investigation showed the leaked key didn't match any active key in the Brevo dashboard — already deleted at some prior point. No rotation needed. Owner generated a new one-off "platform" key for the backfill itself; can be deleted post-session.
+- **DB password reset:** the owner's local `SUPABASE_DB_URL` connection failed DNS resolution (direct connection host `db.<ref>.supabase.co` not reachable from owner's network, and credentials weren't to hand anyway). Owner reset the database password via Supabase dashboard, switched to the Session pooler URL (`aws-0-...pooler.supabase.com:5432`). Edge Functions auto-updated to the new password (Supabase manages `SUPABASE_DB_URL` injection); no action required there.
+
+**Smoke test:** Brevo dashboard confirms two-channel state correct for sample of opted-out and opted-in contacts. `/admin/automations` page green throughout (was already deployed pre-cutover).
+
+**Signed off:** Owner (this session, 2026-05-07).
+
+---
+
+## 2026-05-07: Phase 5 prerequisite — email-sunset-cron + re_engagement email type (migration 0088)
+
+**Type:** New Edge Function, new daily cron, CHECK constraint extension on `crm.email_log.email_type`. No table or column added.
+
+**Status:** Function + migration written, awaiting `supabase functions deploy email-sunset-cron --no-verify-jwt` and `supabase db push --linked`. Phase 1 (re-engagement send) is dormant until `BREVO_TEMPLATE_RE_ENGAGEMENT` is set in Supabase Vault — owner's task once she creates the Brevo template. Phase 2 (suppression) runs regardless.
+
+**Why:** Spec deliverability section ("Sunset policy") flags this as a prerequisite for any marketing automation going live. Without engagement-based sunset, every contact who never opens a marketing email continues to receive sends indefinitely. At pilot volumes (low hundreds) the reputational cost is small; once N1-N3 + referrals + monthly newsletter are firing, dead-inbox accumulation tanks the inbox-placement rate for everyone else. The architecture handles it natively (Email campaigns channel state, marketing_opt_in flag, channel-level unsubscribe), so the cron just has to drive the state transitions.
+
+**Algorithm:**
+- **Phase 1 (re-engagement):** candidates are `marketing_opt_in=true` Switchable contacts where (a) the earliest `crm.email_log` send is ≥180 days ago — they've genuinely had time to engage, brand-new contacts are exempt — AND (b) no `opened` or `clicked` rows in `email_log` in the last 180 days, AND (c) no prior `re_engagement` row at all (one-shot per contact). Function picks the most recent submission per email as the recipient and fires `sendTransactional` with `email_type='re_engagement'`. `metadata.shadow_log_only` falls out naturally from `BREVO_SHADOW_MODE` (currently `false` post-cutover, so real sends go).
+- **Phase 2 (suppress):** candidates are contacts whose earliest `re_engagement` send was ≥14 days ago AND who have no `opened`/`clicked` rows after that re-engagement triggered_at AND still carry `marketing_opt_in=true` in our DB (idempotent on previously-suppressed contacts). For each, the function (1) writes a `crm.consent_history` row (`source='sunset_suppression'`), (2) flips `marketing_opt_in=false` on every matching `leads.submissions` row via `functions_writer` (column-level grant from migration 0079), (3) calls `upsertBrevoContact` with `marketingOptIn=false` to push `SW_CONSENT_MARKETING=false` and channel=unsubscribed. Mirrors the Phase 3a `brevo-event-webhook` suppression pattern.
+
+**Asymmetry:** only the marketing (Email campaigns) channel is suppressed. Transactional (utility) sends — U1, stalled, chaser, U4 — keep working because their basis is contract not consent. Same family of asymmetric rule as the Phase 3c backfill (only-block-never-unblock).
+
+**Changes:**
+- Migration 0088: ALTER `crm.email_log.email_type` CHECK to add `re_engagement`. ALTER `crm.consent_history.source` CHECK to add `sunset_suppression` (Phase 2 audit rows need this label distinct from `unsubscribe_link` / `spam_complaint` / `reconcile_cron`). Schedule pg_cron `email-sunset-cron-daily` at `0 3 * * *` (03:00 UTC, 1h before `brevo-consent-reconcile-daily` so suppression flips settle before reconcile reads).
+- New Edge Function `supabase/functions/email-sunset-cron/index.ts`: 250ms throttle, 500-candidate cap per run per phase, `x-audit-key` auth via vault.
+- `supabase/functions/_shared/brevo.ts`: extended `EmailLogType` union with `"re_engagement"`.
+- `supabase/config.toml`: `[functions.email-sunset-cron]` `verify_jwt = false`.
+- `platform/docs/infrastructure-manifest.md`: function + cron + env-var rows + manifest changelog entry.
+
+**Impact assessment (per `.claude/rules/data-infrastructure.md` §8):**
+1. Change: see Changes above.
+2. Readers: function reads `leads.submissions`, `crm.email_log`. No new readers introduced beyond the function itself.
+3. Writers: function writes `crm.email_log` (via `sendTransactional`), `crm.consent_history`, and `leads.submissions.marketing_opt_in` (Phase 2 only).
+4. Schema version: not affected.
+5. Data migration: none.
+6. Role/policy: Phase 2 path uses `SET LOCAL ROLE functions_writer` (existing grant from migration 0079).
+7. Rollback: `cron.unschedule` + DOWN reverts CHECK constraint (guarded — won't drop the value if `re_engagement` rows exist).
+8. Sign-off: owner (this session, 2026-05-07).
+
+**Smoke test plan (after deploy):**
+- POST function URL with `x-audit-key` → expect 200 and `{ reengagement: { candidates: 0, sent: 0, ... }, suppression: { candidates: 0, ... } }` for first run (no qualifying contacts at pilot volumes).
+- After Charlotte sets `BREVO_TEMPLATE_RE_ENGAGEMENT` and the cron has run a day, manual force-trigger (`SELECT cron.alter_job(jobid, schedule := '0 3 * * *')` to re-run) won't re-fire to anyone already sent (idempotent at email_log via the NOT EXISTS guard on `re_engagement`).
+- First real qualifying contact won't appear until ~2026-11-04 (180 days after the earliest 2026-05-05 email_log row), so the cron is effectively a no-op for the next ~6 months. Expected.
+
+**Signed off:** Owner (session 2026-05-07).
+
+---
+
+## 2026-05-07: Phase 4 closeout — drop crm.enrolments.last_chaser_at, derive from email_log (migration 0086)
+
+**Type:** Schema change (drop column), new read-time view, function body rewrite, data backfill.
+
+**Status:** Migration written, awaiting `supabase db push --linked`. Three dashboard files updated to consume the new view / derive from email_log directly. No production impact until the migration applies.
+
+**Why:** End the dual-write between `crm.fire_provider_chaser` (which stamped `crm.enrolments.last_chaser_at` synchronously) and `admin-brevo-chase` via `sendTransactional` (which writes the canonical `crm.email_log` row asynchronously through pg_net). The two writers could disagree — a pg_net invocation failure left `last_chaser_at` stamped while no `email_log` row existed, so the dashboard would say "chased" when nothing went out. Spec line 159 deferred the choice to Phase 4 between (a) drop the column and derive at read time, or (b) replace it with a `GENERATED ALWAYS AS` expression. Postgres generated columns can only reference other columns in the same row (cross-table aggregates are not supported), so option (b) was unimplementable. Option (a) is the only real choice — and the cleaner end state, since email_log already has full per-send fidelity.
+
+**Changes:**
+- Migration 0086: backfill INSERT into `crm.email_log` for any `crm.enrolments.last_chaser_at IS NOT NULL` without a matching chaser row (NOT EXISTS guard against the dual-write window). Synthetic rows tagged with `metadata = {"backfill": true, "source": "0086_drop_last_chaser_at", "note": "..."}`, `template_id = '__backfill__'` since historical sends went through Brevo automations not the Transactional API. Type chosen by the submission's `funding_category` (defaults to `chaser_funded` for null/missing).
+- Migration 0086: new view `crm.vw_enrolments_chaser_state` exposing `e.*` plus a derived `latest_chaser_at` from `MAX(triggered_at)` over `chaser_funded` / `chaser_self` rows in healthy delivery states (`sent`, `delivered`, `opened`, `clicked`). Inherits RLS from underlying tables. SELECT granted to `authenticated` and `readonly_analytics`.
+- Migration 0086: `crm.fire_provider_chaser(BIGINT[])` rewritten to drop the `UPDATE crm.enrolments SET last_chaser_at = now()` step. Function still does eligibility filtering, audit log (`p_after = {chaser_fired_at: now()}`), and pg_net call into `admin-brevo-chase`. The Edge Function's existing `sendTransactional` call writes the canonical `email_log` row.
+- Migration 0086: `ALTER TABLE crm.enrolments DROP COLUMN last_chaser_at`.
+- `app/admin/layout.tsx`: two badge-count queries (`needsChasingCount`, `cannotReachNoChaserCount`) now query `crm.vw_enrolments_chaser_state` against `latest_chaser_at`.
+- `app/admin/leads/page.tsx`: dropped `last_chaser_at` from the enrolments selection. New `lastChaserBySubId` Map derived from the existing `email_log` query (filter `email_type IN (chaser_funded, chaser_self)`, healthy status set, MAX `triggered_at` per submission). Render lookup updated.
+- `app/admin/actions/page.tsx`: "Needs another chase" and "Cannot reach but no chaser" queues now read `crm.vw_enrolments_chaser_state.latest_chaser_at`. Type definition + render lookup renamed.
+- `app/admin/leads/bulk-actions.ts`: doc comment on `fireProviderChaser` updated to reflect the single-source model.
+
+**Impact assessment (per `.claude/rules/data-infrastructure.md` §8):**
+1. Change: see Changes above.
+2. Readers affected: `app/admin/layout.tsx`, `app/admin/leads/page.tsx`, `app/admin/actions/page.tsx`. All updated in this session.
+3. Writers affected: `crm.fire_provider_chaser` only; rewritten in this migration. `admin-brevo-chase` already writes `email_log` via `sendTransactional` and needs no change.
+4. Schema version: not affected (internal column, no external contract).
+5. Data migration: backfill of historical chaser sends. Idempotent via NOT EXISTS guard.
+6. Role/policy: SELECT grant on the new view to `authenticated` + `readonly_analytics`. No new role.
+7. Rollback plan: DOWN re-adds the column, repopulates from `email_log` MAX, drops the view, restores the original `fire_provider_chaser` body. Lossy in one direction only — synthetic backfill rows are tagged with `metadata.backfill=true` and can be filtered out of "real send" analytics.
+8. Sign-off: owner (this session, 2026-05-07).
+
+**Smoke test plan (post-`supabase db push`):**
+- `SELECT COUNT(*) FROM crm.email_log WHERE metadata->>'backfill' = 'true' AND metadata->>'source' = '0086_drop_last_chaser_at'` returns expected row count (matches `SELECT COUNT(*) FROM crm.enrolments WHERE last_chaser_at IS NOT NULL` from a pre-drop snapshot).
+- `SELECT COUNT(*) FROM crm.vw_enrolments_chaser_state WHERE latest_chaser_at IS NOT NULL` matches the same number.
+- `\d crm.enrolments` shows no `last_chaser_at` column.
+- Dashboard `/admin/leads` "Last chaser" column renders the same dates as before for routed leads.
+- Dashboard `/admin/actions` "Needs another chase" and "Cannot reach but no chaser" queues populate the same way.
+- `/admin/layout` action badge count matches pre-cutover number for known-active rows.
+
+**Signed off:** Owner (session 2026-05-07).
+
+---
+
 ## 2026-05-05: Phase 3a — brevo-event-webhook now flips marketing_opt_in on unsub/spam events (migration 0079)
 
 **Type:** Behaviour change in `brevo-event-webhook` Edge Function. New RLS UPDATE policy + column-level grant on `leads.submissions` for the `functions_writer` role. No table or column added.

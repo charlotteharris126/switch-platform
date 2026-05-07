@@ -19,7 +19,17 @@
 --          (today's revert of the 4 affected rows).
 
 -- UP
-SELECT cron.unschedule('enrolment-auto-flip-daily');
+-- Idempotent guard: the unschedule was run manually on 2026-05-05 in the
+-- SQL editor as the immediate incident response. By the time this
+-- migration applies, the job is already gone — bare cron.unschedule()
+-- raises XX000 in that case. The DO/IF EXISTS pattern makes this safe
+-- to re-run against any state.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'enrolment-auto-flip-daily') THEN
+    PERFORM cron.unschedule('enrolment-auto-flip-daily');
+  END IF;
+END $$;
 
 -- DOWN
 -- Re-enable the cron exactly as migration 0023 originally scheduled it:

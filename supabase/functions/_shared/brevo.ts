@@ -210,7 +210,8 @@ export type EmailLogType =
   | "n1" | "n2" | "n3"
   | "referral_cold" | "referral_lost"
   | "newsletter"
-  | "provider_presumed_warning";
+  | "provider_presumed_warning"
+  | "re_engagement";
 
 export interface SendTransactionalArgs {
   sql: Sql;

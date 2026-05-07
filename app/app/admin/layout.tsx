@@ -53,15 +53,15 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     supabase.schema("crm").from("pending_updates")
       .select("id", { count: "exact", head: true })
       .eq("status", "pending"),
-    supabase.schema("crm").from("enrolments")
+    supabase.schema("crm").from("vw_enrolments_chaser_state")
       .select("id", { count: "exact", head: true })
       .eq("status", "open")
-      .not("last_chaser_at", "is", null)
-      .lt("last_chaser_at", fiveDaysAgoISO),
-    supabase.schema("crm").from("enrolments")
+      .not("latest_chaser_at", "is", null)
+      .lt("latest_chaser_at", fiveDaysAgoISO),
+    supabase.schema("crm").from("vw_enrolments_chaser_state")
       .select("id", { count: "exact", head: true })
       .eq("status", "cannot_reach")
-      .is("last_chaser_at", null),
+      .is("latest_chaser_at", null),
   ]);
 
   const actionsCount =

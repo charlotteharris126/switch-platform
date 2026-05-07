@@ -84,26 +84,27 @@ export default async function ActionsPage() {
     // Needs another chase: status still 'open' but the last provider chaser
     // fired 5+ days ago with no resolution since. Either the provider has
     // gone quiet or the learner has — owner decides whether to re-chase or
-    // mark cannot_reach.
+    // mark cannot_reach. latest_chaser_at is derived from email_log via
+    // crm.vw_enrolments_chaser_state (migration 0086, Phase 4 closeout).
     supabase
       .schema("crm")
-      .from("enrolments")
-      .select("id, submission_id, provider_id, status, last_chaser_at, status_updated_at")
+      .from("vw_enrolments_chaser_state")
+      .select("id, submission_id, provider_id, status, latest_chaser_at, status_updated_at")
       .eq("status", "open")
-      .not("last_chaser_at", "is", null)
-      .lt("last_chaser_at", fiveDaysAgoISO)
-      .order("last_chaser_at", { ascending: true }),
+      .not("latest_chaser_at", "is", null)
+      .lt("latest_chaser_at", fiveDaysAgoISO)
+      .order("latest_chaser_at", { ascending: true }),
 
     // Cannot reach but no chaser ever fired. The SF2 Brevo chaser escalates
     // to the learner directly — should fire whenever a provider hits the
-    // tried-no-answer wall. If status is cannot_reach with last_chaser_at
+    // tried-no-answer wall. If status is cannot_reach with latest_chaser_at
     // null, that escalation hasn't happened yet.
     supabase
       .schema("crm")
-      .from("enrolments")
+      .from("vw_enrolments_chaser_state")
       .select("id, submission_id, provider_id, status, status_updated_at")
       .eq("status", "cannot_reach")
-      .is("last_chaser_at", null)
+      .is("latest_chaser_at", null)
       .order("status_updated_at", { ascending: true }),
   ]);
 
@@ -153,7 +154,7 @@ export default async function ActionsPage() {
     submission_id: number;
     provider_id: string;
     status: string;
-    last_chaser_at: string;
+    latest_chaser_at: string;
     status_updated_at: string;
   }>;
 
@@ -545,8 +546,8 @@ export default async function ActionsPage() {
                         {sub ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || "—" : "—"}
                       </TableCell>
                       <TableCell className="text-xs">{r.provider_id}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap" title={formatDateTime(r.last_chaser_at)}>
-                        {formatAgo(r.last_chaser_at)}
+                      <TableCell className="text-xs whitespace-nowrap" title={formatDateTime(r.latest_chaser_at)}>
+                        {formatAgo(r.latest_chaser_at)}
                       </TableCell>
                       <TableCell>
                         <InlineChaserButton submissionId={r.submission_id} label="Re-chase" />

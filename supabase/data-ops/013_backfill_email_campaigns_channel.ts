@@ -201,7 +201,7 @@ async function logConsentHistory(
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
     [
       email,
-      "EMAIL_CAMPAIGNS_CHANNEL",
+      "email_campaigns_subscription",
       oldBlacklisted ? "blocked" : "subscribed",
       newBlacklisted ? "blocked" : "subscribed",
       "system",
