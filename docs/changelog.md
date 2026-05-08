@@ -4,6 +4,36 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-08: Added SW_COURSE_SCHEDULE Brevo contact attribute
+
+**Type:** Additive Brevo contact attribute. No DB migration. Single shared file change in `_shared/route-lead.ts`. Three Edge Functions redeploy (every function that imports `_shared/route-lead.ts`).
+
+**Status:** Code change applied. Pending Brevo dashboard attribute creation by owner + Edge Function redeploy + admin-brevo-resync sweep across already-routed contacts.
+
+**Why:** Wren (Switchable Email Lead) flagged ahead of N1/N2/N3 nurture activation. N2 needs to answer "will I have the time?" with the actual course schedule string ("one day per week, 9:30am to 4:30pm" / "Monday to Friday, 10am to 4pm"), not a defer-to-provider line. The string already shows on the live funded page, just needed a contact attribute pipe. Fast-lane ahead of the broader per-course merge fields ticket (duration, outcomes, job titles, employers, next-qual progression) which lands later as one batch.
+
+**Changes:**
+
+- `_shared/route-lead.ts`: extended `MatrixRoute` interface with `schedule?: string`. Extended `MatrixContext` interface + `EMPTY_MATRIX_CONTEXT` + `readRoute` mapper with `courseSchedule`. Extended `composeBrevoCourseContext` return type + both branches (self-funded → empty string, funded → `matrix.courseSchedule ?? ""`). Added `SW_COURSE_SCHEDULE: ctx.courseSchedule` to all three Brevo attribute composition sites: `upsertLearnerInBrevo` (matched leads), `sendU1Transactional` template params (U1 send), `upsertLearnerInBrevoNoMatch` (no_match + pending leads, kept consistent so the contact record doesn't shift shape across lifecycle transitions).
+- `switchable/email/CLAUDE.md`: attribute list updated, count bumped from 17 to 18 incl. FIRSTNAME/LASTNAME, footnote on source + self-funded behaviour.
+
+**Source:** matrix.json already carries the `schedule` field per route (emitted by `switchable/site/deploy/scripts/build-funded-pages.js` line 513 from each page YAML's top-level `schedule:` field). No build script change needed. Live data verified for `counselling-skills-tees-valley`, `smm-for-ecommerce-tees-valley`, `lift-digital-marketing-futures-lift-boroughs` ahead of code change.
+
+**Self-funded behaviour:** `composeBrevoCourseContext` already short-circuits matrix.json lookup for self-funded leads (their `course_id` is a YAML id, not a page slug). `SW_COURSE_SCHEDULE` lands as empty string for self-funded contacts, same shape as `SW_COURSE_NAME`, `SW_REGION_NAME`, etc. N2 only fires on `SW_FUNDING_CATEGORY in (gov, loan)` per the Brevo automation entry filter, so empty-on-self is irrelevant for the use this attribute exists for.
+
+**Schema versioning:** additive-only on the Brevo contact contract. No schema_version bump required per `.claude/rules/schema-versioning.md`.
+
+**Owner steps required:**
+
+1. Add `SW_COURSE_SCHEDULE` as a **Text** contact attribute in Brevo dashboard (Contacts → Settings → Contact attributes).
+2. Once attribute exists in Brevo, redeploy: `netlify-lead-router`, `routing-confirm`, `admin-brevo-resync`, `fastrack-receive` (all import `_shared/route-lead.ts`). Each with `--no-verify-jwt` per existing deploy posture.
+3. Run `admin-brevo-resync` against the existing routed-contacts cohort (POST with submission ids of contacts who should have schedule populated; the function re-runs the upsert, picks up the new attribute from the redeployed code path). Verify a sample contact in Brevo carries the new attribute populated.
+4. Once verified, Wren / Charlotte can use `{{ contact.SW_COURSE_SCHEDULE }}` in N2 template. N1/N2/N3 marketing automations are still being built and have not fired yet, so no in-flight sends affected.
+
+**Sign-off:** owner approval ahead of build (this session).
+
+---
+
 ## 2026-05-07 (later, evening): Fastrack back-end deployed end-to-end (lead-to-enrol uplift Phase 2)
 
 **Type:** New Edge Function + 2 migrations + 2 Edge Function patches + Apps Script update mode + manual sheet redeploys + Netlify webhook wiring. Schema additive only.

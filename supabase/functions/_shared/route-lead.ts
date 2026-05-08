@@ -342,6 +342,7 @@ interface MatrixRoute {
   nextIntake?: string;
   nextIntakeFormatted?: string;
   intakes?: MatrixIntake[];
+  schedule?: string;
 }
 
 interface MatrixCache {
@@ -357,6 +358,7 @@ interface MatrixContext {
   intakeDate: string | null;     // ISO YYYY-MM-DD — Brevo Date attribute requires this format
   cfInterest: string | null;
   ffInterest: string | null;
+  courseSchedule: string | null;
 }
 
 const EMPTY_MATRIX_CONTEXT: MatrixContext = {
@@ -367,6 +369,7 @@ const EMPTY_MATRIX_CONTEXT: MatrixContext = {
   intakeDate: null,
   cfInterest: null,
   ffInterest: null,
+  courseSchedule: null,
 };
 
 let matrixCache: MatrixCache | null = null;
@@ -468,6 +471,7 @@ function readRoute(
     intakeDate,
     cfInterest: route.cfInterest ?? null,
     ffInterest: route.ffInterest ?? null,
+    courseSchedule: route.schedule ?? null,
   };
 }
 
@@ -514,6 +518,7 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
   intakeDate: string;
   regionName: string;
   sector: string;
+  courseSchedule: string;
 }> {
   if (submission.funding_category === "self") {
     return {
@@ -523,6 +528,7 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
       intakeDate: "",
       regionName: "",
       sector: submission.interest ?? "",
+      courseSchedule: "",
     };
   }
 
@@ -543,6 +549,7 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
     intakeDate: matrix.intakeDate ?? "",
     regionName: matrix.regionName ?? "",
     sector: sector ?? "",
+    courseSchedule: matrix.courseSchedule ?? "",
   };
 }
 
@@ -611,6 +618,7 @@ export async function upsertLearnerInBrevo(
     LASTNAME: submission.last_name ?? "",
     SW_COURSE_NAME: ctx.courseTitle,
     SW_COURSE_SLUG: ctx.courseSlug,
+    SW_COURSE_SCHEDULE: ctx.courseSchedule,
     SW_COURSE_INTAKE_ID: ctx.intakeId,
     SW_COURSE_INTAKE_DATE: ctx.intakeDate,
     SW_REGION_NAME: ctx.regionName,
@@ -699,6 +707,7 @@ async function sendU1Transactional(
     LASTNAME: submission.last_name ?? "",
     SW_COURSE_NAME: ctx.courseTitle,
     SW_COURSE_SLUG: ctx.courseSlug,
+    SW_COURSE_SCHEDULE: ctx.courseSchedule,
     SW_COURSE_INTAKE_ID: ctx.intakeId,
     SW_COURSE_INTAKE_DATE: ctx.intakeDate,
     SW_REGION_NAME: ctx.regionName,
@@ -789,6 +798,7 @@ export async function upsertLearnerInBrevoNoMatch(
     LASTNAME: submission.last_name ?? "",
     SW_COURSE_NAME: ctx.courseTitle,
     SW_COURSE_SLUG: ctx.courseSlug,
+    SW_COURSE_SCHEDULE: ctx.courseSchedule,
     SW_COURSE_INTAKE_ID: ctx.intakeId,
     SW_COURSE_INTAKE_DATE: ctx.intakeDate,
     SW_REGION_NAME: ctx.regionName,

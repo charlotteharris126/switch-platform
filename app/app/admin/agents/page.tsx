@@ -154,6 +154,15 @@ const AGENTS: AgentRow[] = [
     status: "planned",
     automations: [],
   },
+  {
+    name: "Wren",
+    pronouns: "she/her",
+    role: "Switchable Email Lead",
+    project: "switchable/email/",
+    cadence: "Monday + on-demand",
+    status: "planned",
+    automations: [],
+  },
 ];
 
 export default async function AgentsPage() {
