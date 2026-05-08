@@ -112,16 +112,18 @@ CREATE TABLE leads.fastrack_submissions (
   -- this flag surfaces the request to the adviser.
   transport_help_requested    BOOLEAN,
 
-  -- Doc checklist self-rating. Each boolean = "I have this ready".
-  -- Composed into the sheet's fastrack_notes line by the Edge Function.
-  has_photo_id                BOOLEAN,
-  has_proof_of_address        BOOLEAN,
-  has_proof_of_qualifications BOOLEAN,
-  has_ni_number               BOOLEAN,
+  -- Documents readiness. true = "Yes, I have those documents";
+  -- false = "No, I don't have those documents". Soft flag, NOT a DQ —
+  -- "no" answers are usually recoverable (adviser clarifies what
+  -- counts, learner gathers what's missing). Lead stays open on a
+  -- "no" so the adviser can help; sheet's Fastrack Notes carries a
+  -- `⚠ Docs gathering needed` marker.
+  docs_ready                  BOOLEAN,
 
-  -- L3 reconfirmation. Compared against parent.prior_level_3_or_higher
-  -- by the Edge Function; mismatch sets l3_mismatch_flag = true and
-  -- raises a sheet annotation for the EMS adviser to handle.
+  -- L3 reconfirmation. Set on the fastrack form's eligibility-check
+  -- question. l3_mismatch_flag = (l3_reconfirmed === true), set by
+  -- the Edge Function — any "yes I have a Level 3" answer triggers
+  -- the mismatch flow regardless of what the funded form said.
   l3_reconfirmed              BOOLEAN,
   l3_mismatch_flag            BOOLEAN NOT NULL DEFAULT false,
 
@@ -129,8 +131,13 @@ CREATE TABLE leads.fastrack_submissions (
   -- intro. Optional. Trimmed and length-capped at the Edge Function.
   voice_of_learner_intro      TEXT,
 
-  -- Consent. Re-collected on the fastrack form per .claude/rules PII rule
-  -- (every form capturing user-filled PII carries both checkboxes).
+  -- Consent. Terms (required) + marketing (presence required) per
+  -- the project's hard PII consent rule. Asymmetric handling in the
+  -- Edge Function: an explicit `marketing_opt_in = true` writes a
+  -- fresh crm.consent_history row confirming/maintaining opt-in; a
+  -- false (or NULL) does NOT downgrade prior consent. Source of truth
+  -- for marketing remains the parent funded-form submission;
+  -- withdrawal flows through email unsubscribe links.
   terms_accepted              BOOLEAN NOT NULL DEFAULT false,
   marketing_opt_in            BOOLEAN NOT NULL DEFAULT false,
 

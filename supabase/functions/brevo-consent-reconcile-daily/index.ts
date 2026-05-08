@@ -186,9 +186,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 (contact_email, field_changed, old_value, new_value,
                  changed_by, source, metadata)
               VALUES (${emailLower}, 'SW_CONSENT_MARKETING', 'true', 'false',
-                      'system:cron:brevo-consent-reconcile-daily',
-                      'reconcile_brevo_to_db',
-                      ${sql.json({ brevo_emailBlacklisted: true })})
+                      'system',
+                      'reconcile_cron',
+                      ${sql.json({
+                        brevo_emailBlacklisted: true,
+                        cron: "brevo-consent-reconcile-daily",
+                        direction: "brevo_to_db",
+                      })})
             `;
           });
           corrected++;

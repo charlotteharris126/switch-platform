@@ -157,6 +157,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // here so reconcile doesn't back-fill contact enquiries into leads.submissions.
     if (formName === "contact") continue;
 
+    // `fastrack-funded-v1` lands in `leads.fastrack_submissions` via the
+    // dedicated fastrack-receive Edge Function (per-form Netlify webhook).
+    // netlify-lead-router filters this form name out of its insert path
+    // (the site-wide webhook fires for every form including fastrack),
+    // and reconcile must mirror that filter — otherwise it sees fastrack
+    // submissions in Netlify's archive, fails to find them in
+    // leads.submissions, and back-fills them as unknown-form DQ rows
+    // (which is exactly what happened the night of 2026-05-07; 7 spurious
+    // rows archived in the cleanup). Caught by Sasha's daily data-health
+    // dashboard. Lead-to-enrol uplift Phase 2 (2026-05-07).
+    if (formName === "fastrack-funded-v1") continue;
+
     try {
       const row = normaliseAndOverride(formName, sub as Record<string, JsonValue>, sub as JsonValue);
       const result = await insertSubmission(sql, row);

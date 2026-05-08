@@ -475,3 +475,6 @@ verify_jwt = false
 
 [functions.email-sunset-cron]
 verify_jwt = false
+
+[functions.fastrack-receive]
+verify_jwt = false

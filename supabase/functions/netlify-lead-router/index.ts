@@ -82,6 +82,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ status: "ignored", form_name: formName, reason: "contact form not persisted" });
   }
 
+  // `fastrack-funded-v1` is the Fastrack form on /funded/thank-you/ (lead-to-
+  // enrol uplift Phase 2, 2026-05-07). It's a child contract of the parent
+  // funded submission, not a fresh lead — it lands in leads.fastrack_submissions
+  // via the dedicated fastrack-receive Edge Function. The site-wide Netlify
+  // webhook fires for this form too, so filter it here to avoid a spurious
+  // leads.submissions insert. The per-form webhook for fastrack-funded-v1 is
+  // wired to fastrack-receive separately.
+  if (formName === "fastrack-funded-v1") {
+    return json({ status: "ignored", form_name: formName, reason: "fastrack form routed via fastrack-receive" });
+  }
+
   const row = normaliseAndOverride(formName, body, rawBody);
 
   let result;

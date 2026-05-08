@@ -90,6 +90,14 @@ export interface CanonicalSubmission {
   experiment_id: string | null;
   experiment_variant: string | null;
 
+  // Client-generated UUIDv4 set by the funded form's pre-submit JS so
+  // the post-redirect /funded/thank-you/?ref=<uuid> link and the
+  // subsequent fastrack form can look up the parent submission without
+  // PII in the URL. Validated against UUID_RE; invalid values land as
+  // NULL. Same security pattern as the waitlist ref_token. Added
+  // migration 0087.
+  client_nonce: string | null;
+
   raw_payload: JsonValue;
   archived_at: string | null;
 }
@@ -249,6 +257,7 @@ export async function insertSubmission(
         terms_accepted, marketing_opt_in,
         is_dq, dq_reason, session_id,
         experiment_id, experiment_variant,
+        client_nonce,
         raw_payload, archived_at,
         parent_submission_id
       ) VALUES (
@@ -265,6 +274,7 @@ export async function insertSubmission(
         ${row.terms_accepted}, ${row.marketing_opt_in},
         ${row.is_dq}, ${row.dq_reason}, ${row.session_id},
         ${row.experiment_id}, ${row.experiment_variant},
+        ${row.client_nonce},
         ${trx.json(row.raw_payload)}, ${row.archived_at},
         ${parentSubmissionId}
       )
@@ -442,6 +452,8 @@ function normalise(
     experiment_id: firstString(data["experiment_id"]),
     experiment_variant: firstString(data["experiment_variant"]),
 
+    client_nonce: parseClientNonce(data["client_nonce"]),
+
     raw_payload: rawPayload,
     archived_at: null,
   };
@@ -529,6 +541,13 @@ function classifyTestEmail(
 }
 
 function parseSessionId(value: JsonValue): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!UUID_RE.test(trimmed)) return null;
+  return trimmed.toLowerCase();
+}
+
+function parseClientNonce(value: JsonValue): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!UUID_RE.test(trimmed)) return null;

@@ -67,8 +67,8 @@ export default async function LeadDetailPage({
   const parent = (parentRes.data ?? null) as { id: number; submitted_at: string; primary_routed_to: string | null } | null;
   const children = (childrenRes.data ?? []) as Array<{ id: number; submitted_at: string; primary_routed_to: string | null }>;
 
-  // Parallel fetch: routing history, dead letter, partial captures on the same session_id, current enrolment outcome, email log.
-  const [routingRes, deadLetterRes, partialsRes, enrolmentRes, emailLogRes] = await Promise.all([
+  // Parallel fetch: routing history, dead letter, partial captures on the same session_id, current enrolment outcome, email log, fastrack child.
+  const [routingRes, deadLetterRes, partialsRes, enrolmentRes, emailLogRes, fastrackRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("routing_log")
@@ -103,6 +103,17 @@ export default async function LeadDetailPage({
       .select("id, email_type, channel, template_id, status, brevo_message_id, error_text, metadata, triggered_at, sent_at")
       .eq("submission_id", leadId)
       .order("triggered_at", { ascending: false }),
+    // Fastrack child row (lead-to-enrol uplift Phase 2). One per parent in the
+    // common case — multiple shouldn't happen but limit(1) on the most recent
+    // is defensive. Hidden when null AND lead.fastracked_at is null.
+    supabase
+      .schema("leads")
+      .from("fastrack_submissions")
+      .select("id, parent_submission_id, schema_version, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in, created_at")
+      .eq("parent_submission_id", leadId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   const enrolment = (enrolmentRes.data ?? null) as
@@ -160,6 +171,24 @@ export default async function LeadDetailPage({
     sent_at: string | null;
   }>;
 
+  const fastrack = (fastrackRes.data ?? null) as
+    | {
+        id: number;
+        parent_submission_id: number;
+        schema_version: string;
+        submitted_at: string;
+        cohort_confirmed: boolean | null;
+        transport_help_requested: boolean | null;
+        docs_ready: boolean | null;
+        l3_reconfirmed: boolean | null;
+        l3_mismatch_flag: boolean;
+        voice_of_learner_intro: string | null;
+        terms_accepted: boolean;
+        marketing_opt_in: boolean;
+        created_at: string;
+      }
+    | null;
+
   const fullName = [lead.first_name, lead.last_name].filter(Boolean).join(" ") || "—";
 
   return (
@@ -179,7 +208,7 @@ export default async function LeadDetailPage({
         <h1 className="text-[28px] font-extrabold text-[#11242e] mt-2 tracking-tight">
           Lead #{lead.id} — {fullName}
         </h1>
-        <div className="flex gap-2 mt-2 items-center">
+        <div className="flex gap-2 mt-2 items-center flex-wrap">
           {lead.is_dq ? (
             <Badge variant="destructive">DQ{lead.dq_reason ? `: ${lead.dq_reason}` : ""}</Badge>
           ) : lead.primary_routed_to ? (
@@ -188,6 +217,11 @@ export default async function LeadDetailPage({
             </Badge>
           ) : (
             <Badge variant="secondary">Unrouted</Badge>
+          )}
+          {lead.fastracked_at && (
+            <Badge className="bg-violet-100 text-violet-800 hover:bg-violet-100">
+              Fastracked
+            </Badge>
           )}
           <span className="text-xs text-[#5a6a72]">
             Submitted {formatDateTime(lead.submitted_at)}
@@ -279,6 +313,74 @@ export default async function LeadDetailPage({
                   </span>
                 ))}
               </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Fastrack submission — appears when the learner completed the
+          /funded/thank-you/ Fastrack form. Surfaces cohort/docs/voice-of-
+          learner data for the adviser before any outcome decision. */}
+      {(fastrack || lead.fastracked_at) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Fastrack submission</CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs space-y-2">
+            {!fastrack ? (
+              <p className="text-[#5a6a72]">
+                fastracked_at stamped at {formatDateTime(lead.fastracked_at)} but no child row found — investigate (data inconsistency).
+              </p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2 mb-1">
+                  {fastrack.l3_mismatch_flag && (
+                    <Badge variant="destructive">L3 mismatch (self-reported)</Badge>
+                  )}
+                  {fastrack.cohort_confirmed === false && (
+                    <Badge variant="destructive">Cohort declined</Badge>
+                  )}
+                  {fastrack.docs_ready === false && (
+                    <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+                      Docs gathering needed
+                    </Badge>
+                  )}
+                  {fastrack.transport_help_requested === true && (
+                    <Badge className="bg-sky-100 text-sky-800 hover:bg-sky-100">
+                      Transport help requested
+                    </Badge>
+                  )}
+                </div>
+                <FieldRow label="Submitted" value={formatDateTime(fastrack.submitted_at)} />
+                <FieldRow
+                  label="Cohort confirmed"
+                  value={fastrack.cohort_confirmed == null ? null : fastrack.cohort_confirmed ? "Yes" : "No"}
+                />
+                <FieldRow
+                  label="Transport help"
+                  value={fastrack.transport_help_requested == null ? null : fastrack.transport_help_requested ? "Yes" : "No"}
+                />
+                <FieldRow
+                  label="Docs ready"
+                  value={fastrack.docs_ready == null ? null : fastrack.docs_ready ? "Yes" : "No"}
+                />
+                <FieldRow
+                  label="L3 reconfirmed"
+                  value={fastrack.l3_reconfirmed == null ? null : fastrack.l3_reconfirmed ? "Yes" : "No"}
+                />
+                <FieldRow label="Marketing opt-in (this submission)" value={String(fastrack.marketing_opt_in)} />
+                <FieldRow label="Terms accepted" value={String(fastrack.terms_accepted)} />
+                {fastrack.voice_of_learner_intro && (
+                  <div className="pt-3 mt-2 border-t border-[#e6e0d8]">
+                    <span className="text-[#5a6a72] text-[10px] uppercase tracking-wide font-bold">
+                      Voice of learner
+                    </span>
+                    <p className="text-[#11242e] mt-1 italic break-words">
+                      &ldquo;{fastrack.voice_of_learner_intro}&rdquo;
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

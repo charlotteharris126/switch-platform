@@ -1,5 +1,54 @@
 # Platform Handoff, Session 34, 2026-05-07
 
+## ✓ RESOLVED 2026-05-07 ~21:00: Fastrack cohort_decline POST drop (was: PUSH FROM platform Session 34 to switchable/site Session 58)
+
+Sasha's PUSH at the top of switchable/site Session 58 ("Fastrack cohort_decline path drops the form POST before it reaches Netlify") is fixed and verified live. Both sides agree.
+
+**Root cause (confirmed):** frontend bug. The fastrack submit handler rewrote `form.action` to a query-param URL (e.g. `/funded/thank-you/?fastracked=1&cohort=no`) before submitting, and Netlify Forms was silently dropping that URL shape on cohort=no specifically while accepting cohort=yes. Tests 1+2 worked because their query params didn't include `cohort=no`.
+
+**Mable shipped (commit `864727c`):**
+- Submit handler now POSTs to clean static `/funded/thank-you/` and navigates to the DQ-encoded URL via the `SwitchableFormSubmit` wrapper's new optional `redirectTo` second arg.
+- Wrapper extended backward-compatibly. All 6 existing call sites unchanged.
+- Mirrored on `/preview/fastrack-thank-you/` for the EMS demo URL.
+- Owner verified end-to-end: charliemarieharris@icloud.com cohort=No test landed in `leads.fastrack_submissions` (id 3), EMS sheet wrote, DQ card rendered.
+
+**Permanent rule for any Switchable Netlify form** (added to switchable/site session decisions): always POST to the form's static action URL and navigate to encoded outcome URLs separately. Never bake outcome state into `form.action` before submitting.
+
+## ⚡ NEW PUSH FROM switchable/site Session 59, 2026-05-07: Receiver for `fastrack-cohort-decline-v1` enrichment form (PRIORITY: medium, scheduled with Mable's next session)
+
+Owner's call this session: the cohort_decline DQ outcome card should become a proper waitlist enrichment form mirroring the `/waitlist/` pattern, not a passive confirmation. Mable will build the frontend next session and needs the platform receiver wired in lockstep.
+
+**What Mable will build (frontend):**
+- New Netlify form on the fastrack thank-you page when `cohort=no` fires: warm hero + enrichment form below.
+- Suggested fields (owner final say next session): `phone` (optional tel), `start_timing` (chips: next month / 2-3 months / 6 months / just exploring), `dates_blocker_notes` (optional textarea), plus the standard hidden `parent_ref` token, `terms_accepted`, `marketing_opt_in`, `bot-field-cohort-decline`, `schema_version=1.0`, `form-name=fastrack-cohort-decline-v1`.
+- "Save my details" submit + "Skip for now, thanks" escape link.
+
+**What Sasha needs to build (platform):**
+- New Edge Function `fastrack-cohort-decline-receive` (or extension to existing `fastrack-receive` keyed off `form-name`).
+- Updates the existing `leads.fastrack_submissions` row located via `parent_ref` token. No new row inserted — this is enrichment of the cohort_decline submission already there.
+- Schema-additive only on `leads.fastrack_submissions`: new columns `phone TEXT`, `start_timing TEXT` (CHECK constraint over the four chip values), `dates_blocker_notes TEXT`. No bump to fastrack payload `schema_version` (additive per `.claude/rules/schema-versioning.md`).
+- New Postgres role / RLS check: not needed, same access shape as fastrack-receive.
+- Migration file with `-- DOWN`, changelog entry, infrastructure-manifest entry per `data-infrastructure.md`.
+
+**Sequencing:**
+- Mable will NOT add the form name to deployed HTML until Sasha confirms the webhook URL, per the form-name rule in `switchable/site/CLAUDE.md`.
+- Sasha to flag in next-session handoff once receiver is deployed and webhook URL is in `deploy/data/form-allowlist.json`-ready shape.
+
+**Why this matters:** cohort_decline learners currently dead-end on a "doesn't fit" card. Owner's data: provider has the cohort_decline answer in the EMS sheet but no way to know WHEN the learner could start or WHAT got in the way. Enrichment captures both, lets EMS slot them into the next cohort intelligently.
+
+## ✓ RESOLVED 2026-05-07 ~19:30: Fastrack back-end build complete (was: PUSH FROM switchable/site Session 57)
+
+The original push asked Sasha to ship the platform side of the Fastrack form. Now done end-to-end. Both sides agree.
+
+**Sasha shipped (this session, see "What was done this session" below):** migration `0087` applied, `netlify-lead-router` patched for `client_nonce`, `fastrack-receive` Edge Function deployed, EMS sheet columns added, `lost_reason` CHECK constraint pre-flighted.
+
+**Mable closed the loop (switchable-site main):**
+- Commit `53648a7`: `deploy/data/form-allowlist.json` flipped `fastrack-funded-v1` webhook URL from `null` to `https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/fastrack-receive` (Sasha's source-of-truth update, deployed via site rebuild).
+- Daily `netlify-forms-audit` should clear on its next run now that allowlist + Netlify dashboard agree.
+- Earlier site commits the same evening: `2d56a29` (Fastrack front-end), `6d4919b` (email migration to switchable.org.uk + WYK/CD provider skeletons), `634da79` (iOS POST-replay fix extended to find-your-course + contact).
+
+**Outstanding for owner:** end-to-end smoke test next session. Submit a funded form, fill the Fastrack form, verify `leads.fastrack_submissions` row + `fastracked_at` stamp + EMS sheet column writes + correct UI per outcome path (qualify, L3 mismatch DQ, cohort decline DQ). If clean, retire the Netlify Forms dashboard queue (replay any pre-deploy submissions).
+
 ## Current state
 
 Email rearch cutover completed today after the Tuesday ritual was discovered un-shipped at session start (BREVO_SHADOW_MODE was still default-true, 6 migrations un-applied, 3 cron functions un-deployed, 8 legacy Brevo automations still active). Phase 4 closeout (drop last_chaser_at + add view + sunset cron) also shipped same session after sub-agent code review caught two BLOCKERs. Two-channel architecture verified live in Brevo by owner. Mable's Fastrack back-end push (front-end already built, awaiting platform plumbing) is the highest-priority next-session task. Marketing automations cleared to launch once owner sets BREVO_TEMPLATE_RE_ENGAGEMENT.
@@ -63,9 +112,25 @@ Incidents handled:
    1. **Apply migration 0087_fastrack_submissions.sql.** Already in repo as un-applied (renumbered around in this session — file is the original Mable one, my Phase 5 sunset cron took 0088). Adds `leads.submissions.client_nonce` (UUID, indexed) + `leads.submissions.fastracked_at` (TIMESTAMPTZ) + new table `leads.fastrack_submissions` with payload columns + RLS for functions_writer (ALL) and readonly_analytics (SELECT). Additive, no consumer breaks.
    2. **Patch netlify-lead-router** to read `client_nonce` from the funded form payload and write it to `leads.submissions.client_nonce` on insert. Single-line addition in the normalisation block.
    3. **Build new Edge Function `fastrack-receive`.** Eight-step pipeline (full spec in funded-funnel-architecture.md): verify Netlify auth, lookup parent by client_nonce, compute l3_mismatch_flag + cohort_decline_flag, insert fastrack_submissions row, stamp parent.fastracked_at, DQ handling (auto-mark lost on either flag with the appropriate lost_reason — pre-flight that crm.enrolments.lost_reason CHECK includes `l3_mismatch_self_reported` and `cohort_decline`; ship a one-line migration if not), compose sheet projection, call v2 Apps Script appender to UPDATE existing row (not append), return 200.
-   4. **Add two columns to each provider sheet** (owner manual): `Fastracked` (yes/no), `Fastrack Notes` (free text). EMS, WYK, Courses Direct. v2 appender is header-driven so no script change needed once sheet headers exist.
+   4. **Add two columns to each provider sheet** (owner manual): `Fastrack Application Filled` (yes/no) and `Fastrack Details` (full free text — composed summary of all fastrack answers including the voice-of-learner intro). EMS, WYK, Courses Direct. v2 appender is header-driven so no script change needed once sheet headers exist.
+
+      Plus, on a DQ outcome (l3_mismatch or cohort_decline), the appender ALSO writes to existing `Status` and `Lost Reason` columns (already on the sheets) so the lead's row reflects the DQ in addition to recording fastrack details. So a DQ writes 4 columns; a happy-path fastrack writes 2.
    5. **Wire Netlify webhook:** Forms → fastrack-funded-v1 → outgoing webhook → fastrack-receive function URL. Then update deploy/data/form-allowlist.json to set webhook_url (currently null) and run netlify-forms-audit to confirm clean.
    6. **End-to-end test:** submit funded test form → Fastrack form on thank-you page → verify happy path (no flips, sheet updated), L3 mismatch path (auto-lost with l3_mismatch_self_reported), cohort decline path (auto-lost with cohort_decline).
+
+   **Spec freeze 2026-05-07 evening — latest details from final Mable iteration:**
+
+   - **Form payload schema (1.0)** captured on `leads.fastrack_submissions`: `cohort_confirmed` (bool), `transport_help_requested` (bool, optional), `preferred_intake_id` (text, set in multi-intake mode where learner picks a specific date — single-intake just gets the only intake's id), `docs_ready` (bool — soft flag, NOT a DQ trigger), `l3_reconfirmed` (bool — `l3_mismatch_flag = (l3_reconfirmed === true)`), `voice_of_learner_intro` (text, optional, capped 1000 chars), `terms_accepted` (bool), `marketing_opt_in` (bool — asymmetric handling: only `true` writes a fresh `crm.consent_history` row, `false`/blank does NOT downgrade existing parent consent).
+
+   - **Outcome paths consolidated to two**: qualify (any happy path) and DQ (any L3 mismatch OR cohort decline). The thank-you page reads `?l3=yes` or `?cohort=no` for analytics, but the user sees the same DQ confirmation either way. Auto-lost reasons: `l3_mismatch_self_reported` or `cohort_decline`. `docs_ready=false` is a soft flag, never auto-lost.
+
+   - **Sheet projection on a happy-path fastrack** writes 2 columns: `Fastrack Application Filled = "yes"`, `Fastrack Details = <composed summary>`. Composed summary includes `Cohort confirmed: yes/no | Cohort: <date>/<id> | Transport help: yes/no | Docs ready: yes/no | L3 reconfirmed: yes/no | Notes: <voice of learner or '—'>`.
+
+   - **Sheet projection on a DQ fastrack** writes 4 columns: `Fastrack Application Filled = "yes"`, `Fastrack Details = <composed summary with ⚠ marker>`, `Status = "Lost"`, `Lost Reason = "L3 mismatch (self-reported on fastrack)"` or `"Cohort decline (couldn't commit to start date)"`.
+
+   - **Marketing consent URL hint:** the funded form's submit JS appends `&m=1|0` to the post-submit redirect URL based on whether the parent ticked marketing. The thank-you page uses this only to render the right consent UI (info line for opted-in vs fresh checkbox for not). The Edge Function should NOT use the URL `m` param; it should rely on the form's own `marketing_opt_in` body field with asymmetric handling.
+
+   - **Front-end ships standalone**: form HTML, dynamic copy, JS routing, and outcome cards are all live without the Edge Function. Until the webhook lands, fastrack submissions sit in Netlify's Forms dashboard for owner replay. No data is lost.
 
 3. First scheduled reconcile cron run 2026-05-08 04:00 UTC. Should report zero drift since today's 3c backfill aligned everything.
 

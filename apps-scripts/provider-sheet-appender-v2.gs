@@ -1,6 +1,17 @@
 // SwitchLeads provider sheet appender - v2 (canonical, single deployment per sheet).
 // Introduced in Session 5, 2026-04-21.
 //
+// 2026-05-07 update: added "update_by_submission_id" mode for the Fastrack
+// form (lead-to-enrol uplift Phase 2). The existing append behaviour is the
+// default (no payload change required for routing-confirm or auto-route);
+// fastrack-receive sets `mode: "update_by_submission_id"` to find the
+// parent lead's row by its `Submission ID` column and update specific
+// columns in place (Fastrack Application Filled, Fastrack Details, plus
+// Status + Lost Reason on a DQ outcome) instead of appending a new row.
+// FIELD_MAP additions: `fastrackapplicationfilled`, `fastrackdetails`,
+// `lostreason`. Sheets must be redeployed with this script (and add the
+// two new column headers) for fastrack writes to land.
+//
 // What v2 does differently from v1:
 //   v1: hardcoded column order (Lead ID | Submitted at | ... | Notes) matching
 //   the EMS sheet's layout. Every new provider that wanted a different header
@@ -139,6 +150,17 @@ const FIELD_MAP = {
   'note':              'notes',
   'comment':           'notes',
   'comments':          'notes',
+
+  // Fastrack columns (lead-to-enrol uplift Phase 2, 2026-05-07).
+  // Updated in place by fastrack-receive via "update_by_submission_id"
+  // mode. Happy path writes `fastracked` ("yes") + `fastrack_notes`
+  // (composed summary). DQ paths additionally write `lost_reason` and
+  // flip `status` to "Lost".
+  'fastrackapplicationfilled': 'fastracked',
+  'fastracked':                'fastracked',
+  'fastrackdetails':           'fastrack_notes',
+  'fastracknotes':             'fastrack_notes',
+  'lostreason':                'lost_reason',
 };
 
 function doPost(e) {
@@ -157,28 +179,105 @@ function doPost(e) {
     const headerRange = sheet.getRange(1, 1, 1, lastColumn);
     const headers = headerRange.getValues()[0];
 
-    // Build the row by looking up each header in FIELD_MAP and reading the
-    // matching payload key. A header not in FIELD_MAP yields an empty cell
-    // (NOT an error - that's a manual column the provider fills in later,
-    // e.g. Notes, Enrolment date, Charge).
-    const rowValues = headers.map(function(header) {
-      const key = FIELD_MAP[normaliseHeader_(header)];
-      if (!key) return ''; // unknown header - leave blank for manual fill
+    const mode = body.mode || 'append';
 
-      const raw = body[key];
-      if (raw === null || raw === undefined) return '';
-
-      // Default to 'open' if the header is 'status' and the payload omitted it.
-      if (key === 'status' && raw === '') return 'open';
-
-      return raw;
-    });
-
-    sheet.appendRow(rowValues);
-    return json_({ok: true, row: sheet.getLastRow()});
+    if (mode === 'append') {
+      return handleAppend_(sheet, headers, body);
+    }
+    if (mode === 'update_by_submission_id') {
+      return handleUpdateBySubmissionId_(sheet, headers, lastColumn, body);
+    }
+    return json_({ok: false, error: 'unknown mode: ' + mode});
   } catch (err) {
     return json_({ok: false, error: String(err)});
   }
+}
+
+// Append mode: build a fresh row from each header by reading the matching
+// payload key, leave unknown headers blank. Used by routing-confirm + the
+// auto-route hook for new leads.
+function handleAppend_(sheet, headers, body) {
+  const rowValues = headers.map(function(header) {
+    const key = FIELD_MAP[normaliseHeader_(header)];
+    if (!key) return ''; // unknown header - leave blank for manual fill
+
+    const raw = body[key];
+    if (raw === null || raw === undefined) return '';
+
+    // Default to 'open' if the header is 'status' and the payload omitted it.
+    if (key === 'status' && raw === '') return 'open';
+
+    return raw;
+  });
+
+  sheet.appendRow(rowValues);
+  return json_({ok: true, mode: 'append', row: sheet.getLastRow()});
+}
+
+// Update-by-submission-id mode: find the row whose `Submission ID` column
+// matches body.submission_id, then write only the cells whose payload values
+// are non-empty. Errors with no write if zero or multiple rows match.
+//
+// Used by fastrack-receive to set the fastrack columns (and on a DQ flip,
+// status + lost_reason) on the parent lead's existing row, rather than
+// appending a duplicate row.
+function handleUpdateBySubmissionId_(sheet, headers, lastColumn, body) {
+  const sid = body.submission_id;
+  if (sid === null || sid === undefined || sid === '') {
+    return json_({ok: false, error: 'submission_id required for update_by_submission_id mode'});
+  }
+
+  // Find the Submission ID column.
+  let submissionIdCol = -1;
+  for (let c = 0; c < headers.length; c++) {
+    if (FIELD_MAP[normaliseHeader_(headers[c])] === 'submission_id') {
+      submissionIdCol = c;
+      break;
+    }
+  }
+  if (submissionIdCol === -1) {
+    return json_({ok: false, error: 'sheet has no Submission ID column for update mode'});
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return json_({ok: false, error: 'sheet has no data rows to update'});
+  }
+
+  // Read all data rows (row 2..lastRow) and locate the target by string
+  // equality on the Submission ID cell. String comparison handles both
+  // numeric (Sheets stores submission_id as Number) and string-typed cells.
+  const data = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues();
+  const needle = String(sid);
+  let target = -1;
+  let matches = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][submissionIdCol]) === needle) {
+      target = i;
+      matches++;
+    }
+  }
+  if (matches === 0) {
+    return json_({ok: false, error: 'no row found with submission_id ' + needle});
+  }
+  if (matches > 1) {
+    return json_({ok: false, error: matches + ' rows match submission_id ' + needle + '; expected exactly one'});
+  }
+
+  const sheetRow = target + 2; // +1 header, +1 to convert 0-indexed to 1-indexed
+
+  let updates = 0;
+  for (let col = 0; col < headers.length; col++) {
+    const key = FIELD_MAP[normaliseHeader_(headers[col])];
+    if (!key) continue;
+    if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+    const v = body[key];
+    if (v === null || v === undefined || v === '') continue;
+    sheet.getRange(sheetRow, col + 1).setValue(v);
+    updates++;
+  }
+
+  return json_({ok: true, mode: 'update_by_submission_id', row: sheetRow, updates: updates});
 }
 
 // Normalise a header cell for FIELD_MAP lookup: lowercase, strip all

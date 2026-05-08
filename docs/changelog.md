@@ -4,6 +4,86 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-07 (later, evening): Fastrack back-end deployed end-to-end (lead-to-enrol uplift Phase 2)
+
+**Type:** New Edge Function + 2 migrations + 2 Edge Function patches + Apps Script update mode + manual sheet redeploys + Netlify webhook wiring. Schema additive only.
+
+**Status:** Live and exercised end-to-end on all three paths. Tests 1 + 2 verified before Mable's fix; Test 3 (cohort decline) initially blocked on a frontend issue (Netlify Forms silently drops POSTs to URLs carrying query params, so the cohort=no rewritten action never registered as a form submission); Mable diagnosed + shipped a fix in switchable/site Session 58 evening — form now POSTs to the clean `/funded/thank-you/` URL and JS navigates to the DQ-encoded URL after success. Test 3 re-verified live (fastrack child id 4, owner-test, `cohort_confirmed=false` correctly recorded, no dead_letter). First real fastrack from a non-owner-test learner (Mr Whitehead, parent 316) landed mid-evening — DB writes all correct (parent + child + asymmetric consent + fastracked_at), but the sheet update failed with `sheet has no Submission ID column for update mode` because EMS sheet had never had a Submission ID header (route-lead.ts has been silently dropping that field on append for months — append mode tolerates missing headers, update mode doesn't). Owner added Submission ID column to EMS + WYK sheets and manually filled Mr Whitehead's row (Submission ID, Fastrack Application Filled, Fastrack Details). Side-effect dead_letter 158 bulk-resolved via dashboard. Future fastracks ride the automatic path end-to-end now that the column exists for new appends.
+
+**Why:** Mable shipped the Fastrack form front-end this evening as switchable/site Session 57 (commit `2d56a29`). Funded thank-you page now has a Fastrack form that captures cohort confirmation, doc readiness, voice-of-learner intro for the EMS adviser, and an L3 reconfirmation cross-check (catches the L3 leakage Daniel Manning flagged from EMS for counselling-skills-tees-valley). Front-end was sitting hot waiting for platform plumbing. Owner pushed for tonight cutover so first real funded learner tomorrow morning lands in the new pipeline.
+
+**Changes (in execution order):**
+
+1. **Migration 0089** — extended `crm.enrolments.lost_reason` CHECK constraint with `l3_mismatch_self_reported` and `cohort_decline`. Pre-flight requirement called out in the platform Session 34 PUSH FROM block — fastrack-receive's DQ flip would have tripped the existing constraint without this. DROP + re-ADD pattern matching migration 0082; DOWN block carries an explicit precondition that the new values must be at zero rows before reverting.
+
+2. **Migration 0087** — `leads.fastrack_submissions` table + two new columns on `leads.submissions`:
+   - `client_nonce` UUID (nullable, partial index on NOT NULL) — set by the funded form's pre-submit JS, identifies the parent submission via the post-submit redirect's `?ref=<uuid>` URL param without exposing PII.
+   - `fastracked_at` TIMESTAMPTZ (nullable, partial index on NOT NULL) — fast filter for "fastracked vs not" without joining the child table.
+   - `leads.fastrack_submissions` — discrete typed columns per captured fastrack field, FK to parent submission, RLS + role grants matching the leads-schema convention from 0001.
+   
+   Migration was un-applied as of session start (Mable created the file between sessions); my Phase 5 sunset cron took 0088 to avoid collision. Applied via `supabase db push --linked --include-all`.
+
+3. **`netlify-lead-router` patched** with two changes, redeployed:
+   - `client_nonce` write-through in `_shared/ingest.ts` (single field added to the `CanonicalSubmission` interface, the normaliser base, the INSERT column list, and the values list, plus a new `parseClientNonce` helper mirroring `parseSessionId`'s UUID validation pattern).
+   - `formName === "fastrack-funded-v1"` early-return filter (mirrors the existing `contact` filter pattern). Netlify's site-wide outgoing webhook fires `netlify-lead-router` for every form submission including fastrack; without this filter, fastrack form submissions would land as spurious rows in `leads.submissions`. The dedicated `fastrack-funded-v1` → `fastrack-receive` webhook handles the real fastrack processing.
+   
+   `netlify-leads-reconcile` redeployed in lockstep (same `_shared/ingest.ts` import) — both functions emit identical canonical rows for the same Netlify payload, per the architecture invariant in the file's header comment.
+
+4. **`fastrack-receive` Edge Function** (NEW) — 8-step pipeline:
+   1. Verify Netlify auth (URL-secrecy + TLS, no shared secret — same pattern as `netlify-lead-router`).
+   2. Parse fastrack payload (schema 1.0).
+   3. Look up parent submission via `client_nonce`. Missing parent → `leads.dead_letter` source=`fastrack_form`, return 200 (data not lost).
+   4. Compute `l3_mismatch_flag` (`body.l3_reconfirmed === true`) and `cohort_decline_flag` (`body.cohort_confirmed === false`).
+   5. Insert child row in `leads.fastrack_submissions`.
+   6. Stamp `leads.submissions.fastracked_at` on parent (best-effort).
+   7. Asymmetric marketing: only an explicit `body.marketing_opt_in === true` writes a fresh `crm.consent_history` row. False/blank does NOT downgrade prior consent (parent stays source of truth; withdrawal flows through Brevo unsubscribe links).
+   8. DQ flip: l3 mismatch precedence, then cohort decline. `UPDATE crm.enrolments SET status='lost', lost_reason=…, status_updated_at=now()`. Best-effort failures land in `leads.dead_letter` source=`fastrack_side_effect` so they're visible without poisoning the success path.
+   9. Sheet update via `provider-sheet-appender-v2` in `update_by_submission_id` mode (see #5). Best-effort, side-effect dead_letter on failure.
+   10. Return 200 with `fastrack_submission_id`, `parent_submission_id`, computed flags, and `lost_reason` (or null).
+
+5. **`provider-sheet-appender-v2.gs` extended with `update_by_submission_id` mode** (in-place file revision, additive — default mode stays `append` so existing `routing-confirm` + `auto-route` callers are unaffected). Update mode:
+   - Finds the row whose `Submission ID` column equals `body.submission_id` (exact-match string compare to handle Sheets' numeric storage).
+   - Errors with no write if zero or multiple rows match.
+   - Updates only cells whose payload values are non-empty (won't overwrite Status with empty string just because the payload didn't include it).
+   
+   Owner manually pasted the new script + redeployed on the EMS + WYK provider sheets via `Manage deployments → New version` (kept existing webhook URLs stable). Courses Direct sheet skipped — they're self-funded only and fastrack only fires on funded leads. EMS + WYK sheets each gained two new column headers: `Fastrack Application Filled` (yes/no) and `Fastrack Details` (free text). Owner inserted these by replacing the unused `Enrolment date` and `Charge` columns rather than appending — header-driven appender handles position-agnostically.
+   
+   FIELD_MAP additions: `fastrackapplicationfilled` → `fastracked`, `fastrackdetails` → `fastrack_notes`, plus a `lostreason` → `lost_reason` entry for the DQ flip writes (and aliases `fastracked` + `fastracknotes` for header naming flexibility).
+
+6. **Mid-test bugfix** — first deploy of `fastrack-receive` referenced a non-existent `lost_at` column on `crm.enrolments` in the DQ status flip. Test 1 (happy path) didn't trigger it. Test 2 (L3 mismatch) would have, except the bug was caught at DB query time before Test 2 fired (running a verification query failed on the same column). The existing pattern in `crm-webhook-receiver` and `sheet-edit-mirror` uses `status_updated_at` as the lost-timestamp; corrected fastrack-receive to match, redeployed before Test 2. No data corruption — Test 1 didn't write to `crm.enrolments` (owner-test rows have no enrolment row), and Test 2 hit the corrected version.
+
+7. **Netlify webhook wiring** — owner added a per-form outgoing webhook on `fastrack-funded-v1` → `https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/fastrack-receive`. Existing site-wide "any form" → `netlify-lead-router` webhook stays; the filter in #3 makes it no-op cleanly for fastrack submissions.
+
+8. **`form-allowlist.json`** — set `webhook_url` for `fastrack-funded-v1` (was `null`). Picked up by Mable's switchable/site Session 58 deploy.
+
+**Test results (owner-test using `charliemarieharris@icloud.com`):**
+
+- **Test 1, happy path** — parent 313, fastrack child id 1, `l3_mismatch_flag=false`, no DQ flip, `fastracked_at` stamped. Asymmetric marketing handler correctly skipped writing a fresh consent row (parent already had `marketing_opt_in=true`; fastrack form's JS hid the checkbox per `?m=1` URL param and posted `marketing_opt_in=false`, asymmetric handler preserved prior consent). No dead_letter rows. Sheet write skipped (owner-test parent has `primary_routed_to=null`).
+- **Test 2, L3 mismatch DQ** — parent 314, fastrack child id 2, `l3_reconfirmed=true` → `l3_mismatch_flag=true`. lost_at column bug had been fixed before this fired; no dead_letter rows. Asymmetric marketing handler correctly wrote a fresh `crm.consent_history` row (parent had `marketing_opt_in=false`, fastrack form's checkbox was visible and ticked, came in as true). Enrolment UPDATE WHERE submission_id=314 affected 0 rows (owner-test has no enrolment) — UPDATE syntax verified clean against the live schema.
+- **Test 3, cohort decline DQ** — parent 315 created. Fastrack form's submit handler fired client-side (URL rewrote to `?fastracked=1&cohort=no`, DQ confirmation card rendered correctly), but the form POST never reached Netlify Forms — dashboard for `fastrack-funded-v1` showed only Test 1 + Test 2. Diagnosed as a Netlify edge behaviour: when the form action carries query params, Netlify silently drops the POST without form-handler processing (returns 200 with the static page HTML, the wrapper's fetch sees 200 and navigates without Netlify ever creating a submission). Pushed to Mable's switchable/site Session 58 with diagnostic context. **Mable shipped a fix the same evening** — form now POSTs to the clean `/funded/thank-you/` URL (no query params), JS navigates to the DQ-encoded URL via `window.location.href` after the POST succeeds. Test 3 re-verified end-to-end on the fix: fastrack child id 4 landed for owner-test parent 317 with `cohort_confirmed=false`, no dead_letter, no enrolment update fired (owner-test has none).
+- **First real fastrack** (after Tests 1 + 2, before the cohort-decline fix landed): Craig Whitehead, `mrwhitehead@hotmail.co.uk`, parent 316, fastrack child 3. Happy path (cohort=yes, l3=no, docs=no soft flag, voice="A career change"). All DB writes correct (parent + child + fastracked_at, asymmetric consent skipped because parent already had `marketing_opt_in=true` from funded form). **Sheet write failed** with `sheet has no Submission ID column for update mode` — EMS sheet had never had a Submission ID header (route-lead.ts has been silently dropping the field on append for months because no header matched; append mode tolerates this, update mode does not). Owner added Submission ID column to EMS + WYK sheets and manually filled Mr Whitehead's row (Submission ID = 316, Fastrack Application Filled = "yes", Fastrack Details = composed summary with the docs-gathering flag). Dead_letter 158 (`fastrack_side_effect`) bulk-resolved via the data-health dashboard. **All future fastracks now ride the automatic path end-to-end** — route-lead.ts will populate Submission ID on every new lead append, fastrack-receive's update mode finds the row by that key. Mr Whitehead is the one casualty of the missing-column oversight, recovered manually. Lesson saved to memory: pre-flight ALL columns the new code path references, not just the new ones being added.
+
+**Open watch items (next 24h):**
+
+- ~~First real fastrack submission from a non-owner-test learner~~ — landed and resolved tonight (Mr Whitehead, parent 316). Manual sheet fill applied; DB clean; future fastracks will ride the automatic path now that the Submission ID column exists.
+- ~~Mable's cohort_decline fix landing~~ — shipped same evening, end-to-end verified.
+- Form-allowlist audit (`netlify-forms-audit` daily run) — should pass on tomorrow's run after Mable's switchable/site Session 58 deploy landed `webhook_url` for `fastrack-funded-v1`.
+- Sheet write reliability for the next several real fastracks — first one had to be manually fixed; subsequent ones should be automatic. Watch `leads.dead_letter` source=`fastrack_side_effect` for any new entries.
+
+**Follow-up addition (same session):** Migration 0090 + admin dashboard fastrack surfacing.
+
+- **Migration 0090** — `admin_read_fastrack_submissions` SELECT policy on `authenticated` role + table-level GRANT, mirroring the pattern in 0014 for the other admin-readable tables. Without this the admin dashboard's authenticated session couldn't see fastrack rows even though 0087 had created the table with RLS — only `functions_writer` and `readonly_analytics` had policies. Caught when querying `pg_policies` while wiring up the new fastrack card.
+- **Admin lead detail page** (`platform/app/app/admin/leads/[id]/page.tsx`) — added a Fastrack submission card after the re-application banner and before the enrolment outcome form. Surfaces cohort confirmed, transport help, docs ready, L3 reconfirmed, marketing opt-in, terms accepted, voice-of-learner intro. Top-of-card badges fire on `l3_mismatch_flag`, `cohort_confirmed=false`, `docs_ready=false`, `transport_help_requested=true`. Header gains a violet "Fastracked" badge whenever `lead.fastracked_at` is set, alongside the Routed/DQ badge. Hidden entirely when the lead has no fastrack data. Falls back to a "fastracked_at stamped but no child row found" warning if the parent's timestamp is set but no child row exists (data inconsistency canary). TypeScript check clean. List-view fastracked indicator deferred (not asked for, future enhancement).
+
+**Two issues surfaced overnight via Sasha's data-health dashboard, fixed in the same session (2026-05-08 morning):**
+
+- **`netlify-leads-reconcile` was back-filling fastrack-funded-v1 submissions as spurious unknown-form DQ leads.** The site-wide Netlify webhook fires for every form including fastrack-funded-v1; netlify-lead-router correctly filters fastrack out of its insert path. Reconcile then sees those Netlify submissions, fails to find them in `leads.submissions`, and back-fills them. **Fix:** mirror the same `if (formName === "fastrack-funded-v1") continue;` filter in `netlify-leads-reconcile/index.ts` (immediately after the existing `contact` skip). Redeployed. 7 spurious rows generated by the unfiltered reconcile (ids 318/319/320/321/324/326/327, all `dq_reason='unknown_form:fastrack-funded-v1'`) will be archived in a one-shot data fix. The fastrack child rows for the corresponding parents are all correctly landed in `leads.fastrack_submissions` (ids 1-7) — none of the user-facing fastrack data was lost.
+- **`brevo-consent-reconcile-daily` cron tripped a CHECK constraint** on `crm.consent_history` for 4 of 6 drifted contacts. Drift was 6/227 = 2.64%, exceeding the 2% threshold. The cron writes audit rows with `changed_by='system:cron:brevo-consent-reconcile-daily'` and `source='reconcile_brevo_to_db'`, neither of which is in the CHECK constraint allowed set from migration 0074 (`changed_by IN ('contact','system','admin','backfill')`, `source IN ('form','unsubscribe_link','spam_complaint','admin_dashboard','api','reconcile_cron','backfill')`). The transaction wrapping (UPDATE submissions + INSERT consent_history) rolled back atomically, so DB state stayed at the drifted value. **Fix:** changed the cron to `changed_by='system'` + `source='reconcile_cron'` (both in the existing CHECK), with the descriptive cron name + direction moved into the metadata JSON. Redeployed. Tomorrow's 04:00 UTC run will retry the 4 failed corrections; they should succeed cleanly. The 2 contacts in the other direction (`brevo_unblocked_db_no_consent`) are intentionally not auto-corrected per the cron's design.
+
+**Signed off:** Owner (this session, 2026-05-07 evening).
+
+---
+
 ## 2026-05-07: Email rearch cutover ritual completed
 
 **Type:** Production state change. 4 Edge Function deploys, 6 migrations applied, env-var flip, 8 Brevo automations disabled, one-off backfill executed. No new schema beyond what migrations 0080-0085 introduce.
