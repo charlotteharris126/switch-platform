@@ -81,12 +81,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return jsonError("method_not_allowed", "POST only", 405);
   }
 
-  // Admin auth
+  // Admin auth — read AUDIT_SHARED_SECRET from Vault via the allowlisted
+  // get_shared_secret helper (same pattern as netlify-leads-reconcile et al.,
+  // per migration 0019 + secrets-rotation.md). Vault is single source of
+  // truth for this secret; Edge Function env was deliberately unset.
   const audit = req.headers.get("x-audit-key");
-  const expected = Deno.env.get("AUDIT_SHARED_SECRET");
+  let expected: string | null = null;
+  try {
+    const [row] = await sql<{ secret: string | null }[]>`
+      SELECT public.get_shared_secret('AUDIT_SHARED_SECRET') AS secret
+    `;
+    expected = row?.secret ?? null;
+  } catch (err) {
+    console.error("get_shared_secret(AUDIT_SHARED_SECRET) failed:", err);
+    return jsonError("server_misconfigured", "shared secret read failed", 500);
+  }
   if (!expected) {
-    console.error("AUDIT_SHARED_SECRET not set");
-    return jsonError("server_misconfigured", "shared secret missing", 500);
+    return jsonError("server_misconfigured", "shared secret missing in vault", 500);
   }
   if (!audit || audit !== expected) {
     return jsonError("unauthorized", "x-audit-key required", 401);
