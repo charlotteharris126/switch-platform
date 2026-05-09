@@ -6,11 +6,17 @@
 // authenticated role (cookie-based session) so those policies fire.
 // Service-role (admin) bypasses RLS and would leak cross-provider data —
 // never use it on this page.
+//
+// Filtering and search happen client-side on already-loaded rows; the
+// LeadsTable client component handles UI state. The status query param
+// (e.g. /provider/leads?status=open) seeds the initial filter so home
+// page tiles deep-link into the right view.
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ProviderShell } from "../provider-shell";
+import { LeadsTable, type LeadRow } from "./leads-table";
+import type { LeadStatus } from "@/lib/lead-status";
 
 interface SubmissionRow {
   id: number;
@@ -30,47 +36,18 @@ interface EnrolmentRow {
   status_updated_at: string;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  open: "Open",
-  attempt_1_no_answer: "1st no answer",
-  attempt_2_no_answer: "2nd no answer",
-  attempt_3_no_answer: "3rd no answer",
-  enrolment_meeting_booked: "Meeting booked",
-  enrolled: "Enrolled",
-  presumed_enrolled: "Presumed enrolled",
-  lost: "Lost",
-  cannot_reach: "Cannot reach",
-};
-
-const STATUS_TONE: Record<string, string> = {
-  open: "bg-slate-100 text-slate-700 border-slate-200",
-  attempt_1_no_answer: "bg-amber-50 text-amber-700 border-amber-200",
-  attempt_2_no_answer: "bg-amber-100 text-amber-800 border-amber-300",
-  attempt_3_no_answer: "bg-orange-100 text-orange-800 border-orange-300",
-  enrolment_meeting_booked: "bg-blue-50 text-blue-700 border-blue-200",
-  enrolled: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  presumed_enrolled: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  lost: "bg-rose-50 text-rose-700 border-rose-200",
-  cannot_reach: "bg-rose-50 text-rose-700 border-rose-200",
-};
-
-function daysAgo(iso: string | null): number | null {
-  if (!iso) return null;
-  const ms = Date.now() - new Date(iso).getTime();
-  return Math.floor(ms / (24 * 60 * 60 * 1000));
+interface Props {
+  searchParams: Promise<{ status?: string }>;
 }
 
-function fullName(s: SubmissionRow): string {
-  const parts = [s.first_name, s.last_name].filter(Boolean);
-  return parts.length ? parts.join(" ") : (s.email ?? "—");
-}
+export default async function ProviderLeadsPage({ searchParams }: Props) {
+  const { status: statusParam } = await searchParams;
+  const initialFilter = parseFilter(statusParam);
 
-export default async function ProviderLeadsPage() {
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) redirect("/passkey-login");
 
-  // Submissions — RLS scopes by primary_routed_to = caller's provider_id.
   const { data: submissions, error: submissionsErr } = await supabase
     .schema("leads")
     .from("submissions")
@@ -84,7 +61,6 @@ export default async function ProviderLeadsPage() {
   const subs = (submissions ?? []) as SubmissionRow[];
   const ids = subs.map((s) => s.id);
 
-  // Enrolments — RLS scopes the same way.
   const { data: enrolments } = ids.length
     ? await supabase
         .schema("crm")
@@ -98,6 +74,19 @@ export default async function ProviderLeadsPage() {
     enrolBySub.set(e.submission_id, e);
   }
 
+  const rows: LeadRow[] = subs.map((s) => {
+    const enrol = enrolBySub.get(s.id);
+    return {
+      id: s.id,
+      name: fullName(s),
+      email: s.email,
+      course_id: s.course_id,
+      funding_category: s.funding_category,
+      routed_at: s.routed_at,
+      status: (enrol?.status ?? "open") as LeadStatus,
+    };
+  });
+
   return (
     <ProviderShell active="leads">
       <div className="max-w-5xl mx-auto p-6">
@@ -107,65 +96,53 @@ export default async function ProviderLeadsPage() {
             {submissionsErr ? (
               <span className="text-rose-600">Error: {submissionsErr.message}</span>
             ) : (
-              `${subs.length} routed lead${subs.length === 1 ? "" : "s"}, most recent first.`
+              `${rows.length} routed lead${rows.length === 1 ? "" : "s"}, most recent first.`
             )}
           </p>
         </div>
 
-        {subs.length === 0 ? (
-          <div className="text-center py-16 text-slate-500 text-sm">
+        {rows.length === 0 ? (
+          <div className="text-center py-16 text-slate-500 text-sm bg-white border border-slate-200 rounded-xl">
             No leads routed to you yet. New leads will appear here as they come in.
           </div>
         ) : (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-                <tr>
-                  <th className="text-left px-4 py-3 font-semibold">Name</th>
-                  <th className="text-left px-4 py-3 font-semibold">Course</th>
-                  <th className="text-left px-4 py-3 font-semibold">Routed</th>
-                  <th className="text-left px-4 py-3 font-semibold">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {subs.map((s) => {
-                  const enrol = enrolBySub.get(s.id);
-                  const status = enrol?.status ?? "open";
-                  const days = daysAgo(s.routed_at);
-                  return (
-                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-4 py-3">
-                        <Link href={`/provider/leads/${s.id}`} className="text-slate-900 font-medium hover:underline">
-                          {fullName(s)}
-                        </Link>
-                        {s.email && (
-                          <div className="text-xs text-slate-500">{s.email}</div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {s.course_id ?? "—"}
-                        {s.funding_category && (
-                          <div className="text-xs text-slate-500">
-                            {s.funding_category === "gov" ? "Funded" : s.funding_category === "self" ? "Self-funded" : s.funding_category}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {days === null ? "—" : days === 0 ? "Today" : `${days} day${days === 1 ? "" : "s"} ago`}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${STATUS_TONE[status] ?? "bg-slate-100 text-slate-700 border-slate-200"}`}>
-                          {STATUS_LABEL[status] ?? status}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <LeadsTable rows={rows} initialFilter={initialFilter} />
         )}
       </div>
     </ProviderShell>
   );
+}
+
+function parseFilter(param: string | undefined): "all" | "open" | "in_progress" | "settled" | LeadStatus {
+  if (!param) return "all";
+  const normalised = param.toLowerCase();
+  if (
+    normalised === "all" ||
+    normalised === "open" ||
+    normalised === "in_progress" ||
+    normalised === "settled"
+  ) {
+    return normalised;
+  }
+  // Direct status filter (e.g. ?status=enrolled)
+  if (
+    [
+      "attempt_1_no_answer",
+      "attempt_2_no_answer",
+      "attempt_3_no_answer",
+      "enrolment_meeting_booked",
+      "enrolled",
+      "presumed_enrolled",
+      "lost",
+      "cannot_reach",
+    ].includes(normalised)
+  ) {
+    return normalised as LeadStatus;
+  }
+  return "all";
+}
+
+function fullName(s: SubmissionRow): string {
+  const parts = [s.first_name, s.last_name].filter(Boolean);
+  return parts.length ? parts.join(" ") : (s.email ?? "—");
 }

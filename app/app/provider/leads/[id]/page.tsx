@@ -10,8 +10,10 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { ProviderShell } from "../../provider-shell";
+import { DurationTimer } from "../../duration-timer";
 import { OutcomeButtons } from "./outcome-buttons";
 import { markOutcomeAction } from "./actions";
+import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
 
 interface SubmissionRow {
   id: number;
@@ -46,18 +48,6 @@ interface EnrolmentRow {
   notes: string | null;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  open: "Open",
-  attempt_1_no_answer: "1st no answer",
-  attempt_2_no_answer: "2nd no answer",
-  attempt_3_no_answer: "3rd no answer",
-  enrolment_meeting_booked: "Meeting booked",
-  enrolled: "Enrolled",
-  presumed_enrolled: "Presumed enrolled",
-  lost: "Lost",
-  cannot_reach: "Cannot reach",
-};
-
 interface Props {
   params: Promise<{ id: string }>;
 }
@@ -90,7 +80,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     .eq("submission_id", submissionId)
     .maybeSingle<EnrolmentRow>();
 
-  const status = enrol?.status ?? "open";
+  const status = (enrol?.status ?? "open") as LeadStatus;
 
   return (
     <ProviderShell active="leads">
@@ -104,14 +94,43 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
             {[submission.first_name, submission.last_name].filter(Boolean).join(" ") || submission.email || `Lead ${submission.id}`}
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Routed {submission.routed_at ? new Date(submission.routed_at).toLocaleDateString("en-GB") : "—"} · Current status: <strong>{STATUS_LABEL[status] ?? status}</strong>
+            Current status: <strong className="text-slate-900">{STATUS_LABEL[status] ?? status}</strong>
           </p>
+        </div>
+
+        {/* Duration tiles */}
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="bg-white border border-slate-200 rounded-xl p-4">
+            <p className="text-xs uppercase tracking-wide font-semibold text-slate-500">In your queue</p>
+            <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
+              <DurationTimer since={submission.routed_at} variant="full" />
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              Routed {submission.routed_at ? new Date(submission.routed_at).toLocaleDateString("en-GB") : "—"}
+            </p>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-xl p-4">
+            <p className="text-xs uppercase tracking-wide font-semibold text-slate-500">At current status</p>
+            <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
+              <DurationTimer since={enrol?.status_updated_at ?? submission.routed_at} variant="full" />
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              {STATUS_LABEL[status] ?? status} since{" "}
+              {enrol?.status_updated_at
+                ? new Date(enrol.status_updated_at).toLocaleDateString("en-GB")
+                : submission.routed_at
+                  ? new Date(submission.routed_at).toLocaleDateString("en-GB")
+                  : "—"}
+            </p>
+          </div>
         </div>
 
         {/* Outcome marking */}
         <div className="mt-6 bg-white border border-slate-200 rounded-xl p-6">
           <h2 className="text-sm font-semibold text-slate-900">Mark outcome</h2>
-          <p className="text-xs text-slate-500 mt-1">Click whichever applies. You can change your mind later — every change is logged.</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Click whichever applies. Forward only — once you&apos;ve moved past a step you can&apos;t go back. Every change is logged.
+          </p>
           <OutcomeButtons
             submissionId={submission.id}
             currentStatus={status}

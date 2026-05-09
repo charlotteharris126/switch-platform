@@ -27,6 +27,7 @@ export async function ProviderShell({ active, children }: Props) {
           <div className="flex items-center gap-1 text-sm">
             <NavLink href="/provider" label="Home" active={active === "home"} />
             <NavLink href="/provider/leads" label="Leads" active={active === "leads"} />
+            <NavLink href="/provider/account" label="Account" active={active === "account"} />
             <form action={signOutAction} className="ml-2">
               <SignOutButton />
             </form>

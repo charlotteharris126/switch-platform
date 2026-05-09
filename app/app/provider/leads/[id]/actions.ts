@@ -4,8 +4,14 @@
 //
 // Auth: the authenticated client (cookie session) is used. RLS policies
 // from migration 0096 limit which crm.enrolments rows the provider can
-// UPDATE; we don't repeat those checks here. Server-side validation is
-// limited to status enum (CHECK constraint enforces too) + lost_reason.
+// UPDATE; we don't repeat those checks here.
+//
+// Validation:
+//   - Status must be a known LeadStatus
+//   - The transition (from -> to) must be allowed by the state machine in
+//     lib/lead-status.ts. Defence-in-depth: the UI only shows valid
+//     options, but a malicious / stale tab could still POST anything.
+//   - Lost reasons are validated against the lostReasonsFor(from) set.
 //
 // Audit: every change writes through public.log_provider_action_v1 (the
 // public-schema wrapper over audit.log_provider_action — the audit schema
@@ -15,28 +21,15 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-
-const VALID_STATUSES = new Set([
-  "open",
-  "attempt_1_no_answer",
-  "attempt_2_no_answer",
-  "attempt_3_no_answer",
-  "enrolment_meeting_booked",
-  "enrolled",
-  "lost",
-  "cannot_reach",
-]);
-
-const VALID_LOST_REASONS = new Set([
-  "not_interested",
-  "wrong_course",
-  "funding_issue",
-  "cancelled",
-  "withdrew_after_enrolment",
-  "l3_mismatch_self_reported",
-  "cohort_decline",
-  "other",
-]);
+import {
+  isAllowedTransition,
+  isLeadStatus,
+  isLostReason,
+  lostReasonsFor,
+  STATUS_LABEL,
+  type LeadStatus,
+  type LostReason,
+} from "@/lib/lead-status";
 
 interface Args {
   submissionId: number;
@@ -47,25 +40,21 @@ interface Args {
 type Result = { ok: true } | { ok: false; error: string };
 
 export async function markOutcomeAction(args: Args): Promise<Result> {
-  if (!VALID_STATUSES.has(args.status)) {
+  if (!isLeadStatus(args.status)) {
     return { ok: false, error: `Invalid status: ${args.status}` };
   }
-  if (args.status === "lost") {
-    if (!args.lostReason || !VALID_LOST_REASONS.has(args.lostReason)) {
-      return { ok: false, error: "A lost reason is required" };
-    }
+  const targetStatus = args.status as LeadStatus;
+
+  // System statuses can't be set manually
+  if (targetStatus === "presumed_enrolled" || targetStatus === "open") {
+    return { ok: false, error: "That status can't be set manually." };
   }
 
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return { ok: false, error: "Not signed in" };
 
-  const newLostReason = args.status === "lost" ? args.lostReason ?? null : null;
-
-  // Capture before-state for audit. RLS scopes by provider_id, so this only
-  // returns the row if the caller's provider owns it. Race window between
-  // this SELECT and the UPDATE is tolerable: same RLS gate on both, no other
-  // writer competes for outcome columns.
+  // Capture before-state for transition check + audit.
   const { data: existingRow, error: readError } = await supabase
     .schema("crm")
     .from("enrolments")
@@ -78,8 +67,30 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     return { ok: false, error: "No enrolment row found, or you don't have access" };
   }
 
+  const fromStatus = existingRow.status as LeadStatus;
+  if (!isAllowedTransition(fromStatus, targetStatus)) {
+    return {
+      ok: false,
+      error: `Can't move from "${STATUS_LABEL[fromStatus]}" to "${STATUS_LABEL[targetStatus]}".`,
+    };
+  }
+
+  let newLostReason: LostReason | null = null;
+  if (targetStatus === "lost") {
+    if (!args.lostReason || !isLostReason(args.lostReason)) {
+      return { ok: false, error: "A lost reason is required." };
+    }
+    if (!lostReasonsFor(fromStatus).includes(args.lostReason)) {
+      return {
+        ok: false,
+        error: `That lost reason isn't valid from "${STATUS_LABEL[fromStatus]}".`,
+      };
+    }
+    newLostReason = args.lostReason;
+  }
+
   const before = { status: existingRow.status, lost_reason: existingRow.lost_reason };
-  const after = { status: args.status, lost_reason: newLostReason };
+  const after = { status: targetStatus, lost_reason: newLostReason };
 
   if (before.status === after.status && before.lost_reason === after.lost_reason) {
     return { ok: true };
@@ -90,7 +101,7 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     .schema("crm")
     .from("enrolments")
     .update({
-      status: args.status,
+      status: targetStatus,
       lost_reason: newLostReason,
       status_updated_at: nowIso,
       updated_at: nowIso,

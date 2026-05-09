@@ -1,40 +1,45 @@
 "use client";
 
 import { useTransition, useState } from "react";
+import {
+  allowedNextStatuses,
+  lostReasonsFor,
+  STATUS_LABEL,
+  type LeadStatus,
+  type LostReason,
+} from "@/lib/lead-status";
 
-const OUTCOMES: Array<{ value: string; label: string; tone: string }> = [
-  { value: "open", label: "Reset to open", tone: "slate" },
-  { value: "attempt_1_no_answer", label: "1st no answer", tone: "amber" },
-  { value: "attempt_2_no_answer", label: "2nd no answer", tone: "amber" },
-  { value: "attempt_3_no_answer", label: "3rd no answer", tone: "orange" },
-  { value: "enrolment_meeting_booked", label: "Meeting booked", tone: "blue" },
-  { value: "enrolled", label: "Enrolled", tone: "emerald" },
-  { value: "lost", label: "Lost", tone: "rose" },
-  { value: "cannot_reach", label: "Cannot reach", tone: "rose" },
-];
-
-const TONE_STYLES: Record<string, string> = {
-  slate: "border-slate-200 text-slate-700 hover:bg-slate-50",
-  amber: "border-amber-200 text-amber-700 hover:bg-amber-50",
-  orange: "border-orange-300 text-orange-700 hover:bg-orange-50",
-  blue: "border-blue-200 text-blue-700 hover:bg-blue-50",
-  emerald: "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
-  rose: "border-rose-200 text-rose-700 hover:bg-rose-50",
+const TONE: Record<LeadStatus, string> = {
+  open: "border-slate-200 text-slate-700 hover:bg-slate-50",
+  attempt_1_no_answer: "border-amber-200 text-amber-800 hover:bg-amber-50",
+  attempt_2_no_answer: "border-amber-300 text-amber-800 hover:bg-amber-100",
+  attempt_3_no_answer: "border-orange-300 text-orange-800 hover:bg-orange-50",
+  enrolment_meeting_booked: "border-blue-200 text-blue-700 hover:bg-blue-50",
+  enrolled: "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
+  lost: "border-rose-200 text-rose-700 hover:bg-rose-50",
+  cannot_reach: "border-rose-200 text-rose-700 hover:bg-rose-50",
+  presumed_enrolled: "border-emerald-200 text-emerald-700",
 };
 
-const ACTIVE_TONE: Record<string, string> = {
-  slate: "bg-slate-100 border-slate-400 text-slate-900",
-  amber: "bg-amber-100 border-amber-500 text-amber-900",
-  orange: "bg-orange-100 border-orange-500 text-orange-900",
-  blue: "bg-blue-100 border-blue-500 text-blue-900",
-  emerald: "bg-emerald-100 border-emerald-500 text-emerald-900",
-  rose: "bg-rose-100 border-rose-500 text-rose-900",
+const LOST_REASON_LABEL: Record<LostReason, string> = {
+  not_interested: "Not interested",
+  wrong_course: "Wrong course",
+  funding_issue: "Funding issue",
+  cancelled: "Cancelled",
+  withdrew_after_enrolment: "Withdrew after enrolment",
+  l3_mismatch_self_reported: "L3 mismatch (self-reported)",
+  cohort_decline: "Couldn't make the cohort dates",
+  other: "Other",
 };
 
 interface Props {
   submissionId: number;
-  currentStatus: string;
-  onMark: (args: { submissionId: number; status: string; lostReason?: string | null }) => Promise<{ ok: boolean; error?: string }>;
+  currentStatus: LeadStatus;
+  onMark: (args: {
+    submissionId: number;
+    status: string;
+    lostReason?: string | null;
+  }) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
@@ -42,16 +47,21 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
   const [pendingValue, setPendingValue] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showLost, setShowLost] = useState(false);
-  const [lostReason, setLostReason] = useState<string>("not_interested");
+  const [lostReason, setLostReason] = useState<LostReason>(
+    lostReasonsFor(currentStatus)[0] ?? "other",
+  );
 
-  function fire(value: string) {
+  const nextStatuses = allowedNextStatuses(currentStatus);
+  const lostReasons = lostReasonsFor(currentStatus);
+
+  function fire(value: LeadStatus, reason?: LostReason) {
     setError(null);
     setPendingValue(value);
     startTransition(async () => {
       const result = await onMark({
         submissionId,
         status: value,
-        lostReason: value === "lost" ? lostReason : null,
+        lostReason: value === "lost" ? reason ?? null : null,
       });
       if (!result.ok) setError(result.error ?? "Failed to update");
       setPendingValue(null);
@@ -59,52 +69,102 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
     });
   }
 
-  return (
-    <div className="mt-4">
-      <div className="flex flex-wrap gap-2">
-        {OUTCOMES.map((o) => {
-          const isActive = currentStatus === o.value;
-          const isPending = pending && pendingValue === o.value;
-          const cls = isActive ? ACTIVE_TONE[o.tone] : TONE_STYLES[o.tone];
-          return (
-            <button
-              key={o.value}
-              type="button"
-              disabled={pending || (isActive && o.value !== "open")}
-              onClick={() => {
-                if (o.value === "lost") {
-                  setShowLost((v) => !v);
-                  return;
-                }
-                fire(o.value);
-              }}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium border ${cls} disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
-            >
-              {isPending ? "…" : o.label}
-              {isActive && o.value !== "open" && <span className="ml-1 text-xs">(current)</span>}
-            </button>
-          );
-        })}
+  if (nextStatuses.length === 0) {
+    return (
+      <div className="mt-4 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-md p-3">
+        This lead is settled at <strong>{STATUS_LABEL[currentStatus]}</strong>. No
+        further outcomes can be set from the portal. If something needs unwinding,
+        message Charlotte.
       </div>
+    );
+  }
+
+  // Group: progression statuses (attempts + meeting + enrolled) vs terminal-ish (lost / cannot_reach)
+  const progressKeys: LeadStatus[] = [
+    "attempt_1_no_answer",
+    "attempt_2_no_answer",
+    "attempt_3_no_answer",
+    "enrolment_meeting_booked",
+    "enrolled",
+  ];
+  const progressNext = nextStatuses.filter((s) => progressKeys.includes(s));
+  const closeoutNext = nextStatuses.filter((s) => s === "lost" || s === "cannot_reach");
+
+  return (
+    <div className="mt-4 space-y-4">
+      {progressNext.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+            Move forward
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {progressNext.map((s) => {
+              const isPending = pending && pendingValue === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => fire(s)}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium border bg-white ${TONE[s]} disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
+                >
+                  {isPending ? "…" : STATUS_LABEL[s]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {closeoutNext.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+            Close out
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {closeoutNext.map((s) => {
+              const isPending = pending && pendingValue === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    if (s === "lost") {
+                      setShowLost((v) => !v);
+                      return;
+                    }
+                    fire(s);
+                  }}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium border bg-white ${TONE[s]} disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
+                >
+                  {isPending ? "…" : STATUS_LABEL[s]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {showLost && (
-        <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-md">
-          <label className="block text-xs font-semibold text-rose-900 uppercase tracking-wide">Why was this lost?</label>
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-md">
+          <label className="block text-xs font-semibold text-rose-900 uppercase tracking-wide">
+            Why was this lost?
+          </label>
           <select
             value={lostReason}
-            onChange={(e) => setLostReason(e.target.value)}
+            onChange={(e) => setLostReason(e.target.value as LostReason)}
             className="mt-1 w-full border border-rose-300 rounded-md px-2 py-1.5 text-sm bg-white"
           >
-            <option value="not_interested">Not interested</option>
-            <option value="wrong_course">Wrong course</option>
-            <option value="funding_issue">Funding issue</option>
-            <option value="cancelled">Cancelled</option>
-            <option value="withdrew_after_enrolment">Withdrew after enrolment</option>
-            <option value="other">Other</option>
+            {lostReasons.map((r) => (
+              <option key={r} value={r}>
+                {LOST_REASON_LABEL[r]}
+              </option>
+            ))}
           </select>
           <button
             type="button"
-            onClick={() => fire("lost")}
+            onClick={() => fire("lost", lostReason)}
             disabled={pending}
             className="mt-2 px-3 py-1.5 bg-rose-600 text-white rounded-md text-sm font-semibold hover:bg-rose-700 disabled:opacity-60"
           >
@@ -114,7 +174,7 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
       )}
 
       {error && (
-        <div className="mt-3 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2">
+        <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2">
           {error}
         </div>
       )}
