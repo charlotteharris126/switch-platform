@@ -7,6 +7,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { SignOutButton } from "./sign-out-button";
 
 interface ProviderUserRow {
   id: number;
@@ -69,12 +70,7 @@ export default async function ProviderHomePage() {
           </ul>
         </div>
         <form action={signOutAction} className="mt-6">
-          <button
-            type="submit"
-            className="text-sm text-slate-600 hover:text-slate-900 underline"
-          >
-            Sign out
-          </button>
+          <SignOutButton />
         </form>
       </div>
     </div>
