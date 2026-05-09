@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { getDemoProviderIds, demoProviderInClause } from "@/lib/demo";
 import {
   Table,
   TableBody,
@@ -151,6 +152,11 @@ export default async function LeadsPage({
         .filter((e) => e.length > 0)
     : [];
 
+  // Demo-data fence: exclude submissions routed to demo providers from the
+  // real lead list. See lib/demo.ts.
+  const demoIds = await getDemoProviderIds(supabase);
+  const demoInClause = demoProviderInClause(demoIds);
+
   let q = supabase
     .schema("leads")
     .from("submissions")
@@ -160,6 +166,10 @@ export default async function LeadsPage({
     )
     .order("submitted_at", { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1);
+
+  if (demoInClause) {
+    q = q.or(`primary_routed_to.is.null,primary_routed_to.not.in.${demoInClause}`);
+  }
 
   // Default: show one row per unique person. Re-application children and
   // waitlist-enrichment children are hidden so the list isn't cluttered with
@@ -249,7 +259,7 @@ export default async function LeadsPage({
     supabase.schema("leads").from("submissions").select("funding_category").not("funding_category", "is", null),
     supabase.schema("leads").from("submissions").select("funding_route").not("funding_route", "is", null),
     supabase.schema("leads").from("submissions").select("course_id").not("course_id", "is", null),
-    supabase.schema("crm").from("providers").select("provider_id,company_name").order("company_name"),
+    supabase.schema("crm").from("providers").select("provider_id,company_name").eq("is_demo", false).order("company_name"),
     submissionIdsOnPage.length > 0
       ? supabase
           .schema("crm")

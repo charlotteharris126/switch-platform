@@ -4,6 +4,20 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-09 (later): Demo provider seeded + Brevo sync filters demo data
+
+**Type:** 1 migration (0101) + 1 data-ops script (019). Provider portal MVP P2-P4 fixture in place.
+
+- Migration 0101: `crm.sync_leads_to_brevo` filters out submissions whose routed-to provider has `is_demo=true`. Single source of truth for "demo data does not reach Brevo" — covers the three triggers from 0098, the daily reconcile cron from 0100, and any direct Server Action / data-ops call.
+- data-ops/019: seeded `demo-provider-ltd` (Demo Provider Ltd, hello+demo@switchable.org.uk, `is_demo=true`, `portal_enabled=true`) + 12 fake leads (`@demo.example.com`) + 12 routing_log + 12 enrolments spanning every status in the new taxonomy: open ×3 (varying ages), attempt_1/2/3, enrolment_meeting_booked, enrolled ×2, lost (`not_interested`), cannot_reach, presumed_enrolled. Days-since-routed spread 2-17 days for realistic UI age variety.
+- Verification: 12 enrolment INSERTs each fired the auto-sync trigger from 0098, the 0101 filter caught all of them, zero pg_net dispatches to admin-brevo-resync from demo IDs.
+- Mid-apply fix: first apply attempt failed on `enrolments_lost_reason_chk` (used `changed_mind`, not in CHECK list). Switched to `not_interested` per the live constraint values, transaction committed clean.
+- Why: portal P2-P4 build over the weekend dogfoods auth + invite + outcome marking against demo data instead of touching real provider data.
+
+**Sign-off:** owner approved both 0101 (Brevo filter) and 019 (37-row production seed) explicitly.
+
+---
+
 ## 2026-05-09: Provider portal foundation + DB ↔ Brevo single-source-of-truth architecture
 
 **Type:** 10 migrations (0091-0100), 4 Edge Function code paths updated + redeployed twice, 3 data-ops scripts applied, 1 Brevo full-cohort resync (twice — for SW_COURSE_SCHEDULE backfill and for the 8 new attributes). Major architecture milestone.

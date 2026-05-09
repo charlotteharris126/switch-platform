@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
+import { getDemoProviderIds, demoProviderInClause } from "@/lib/demo";
 import {
   Table,
   TableBody,
@@ -182,6 +183,23 @@ export default async function ProfitPage({
 
   const supabase = await createClient();
 
+  // Demo-data fence: revenue calcs must exclude demo-routed submissions.
+  const demoIds = await getDemoProviderIds(supabase);
+  const demoInClause = demoProviderInClause(demoIds);
+
+  let leadsQuery = supabase
+    .schema("leads")
+    .from("submissions")
+    .select("id, email, submitted_at, primary_routed_to")
+    .eq("is_dq", false)
+    .is("archived_at", null)
+    .is("parent_submission_id", null)
+    .gte("submitted_at", window.fromISO)
+    .lte("submitted_at", window.toISO);
+  if (demoInClause) {
+    leadsQuery = leadsQuery.or(`primary_routed_to.is.null,primary_routed_to.not.in.${demoInClause}`);
+  }
+
   const [spendRes, leadsRes] = await Promise.all([
     supabase
       .schema("ads_switchable")
@@ -189,15 +207,7 @@ export default async function ProfitPage({
       .select("date, spend")
       .gte("date", window.fromDate)
       .lte("date", window.toDate),
-    supabase
-      .schema("leads")
-      .from("submissions")
-      .select("id, email, submitted_at, primary_routed_to")
-      .eq("is_dq", false)
-      .is("archived_at", null)
-      .is("parent_submission_id", null)
-      .gte("submitted_at", window.fromISO)
-      .lte("submitted_at", window.toISO),
+    leadsQuery,
   ]);
 
   const submissions = (leadsRes.data ?? []) as Array<{

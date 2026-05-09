@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { AdSignalsSection } from "./analytics/signals/_components/section";
+import { getDemoProviderIds, demoProviderInClause } from "@/lib/demo";
 
 interface ProviderBillingRow {
   provider_id: string;
@@ -112,6 +113,16 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
 
   const supabase = await createClient();
 
+  // Demo-data fence — exclude rows belonging to demo providers from every
+  // count and tile on this dashboard. Pre-fetched once (cached 30s in
+  // lib/demo.ts) so the Promise.all fan-out below uses a stable filter.
+  const demoIds = await getDemoProviderIds(supabase);
+  const demoInClause = demoProviderInClause(demoIds);
+  const filterDemoSubmissions = <T extends { not: (col: string, op: string, val: string) => T; or: (clause: string) => T }>(q: T): T =>
+    demoInClause ? q.or(`primary_routed_to.is.null,primary_routed_to.not.in.${demoInClause}`) : q;
+  const filterDemoEnrolments = <T extends { not: (col: string, op: string, val: string) => T }>(q: T): T =>
+    demoInClause ? q.not("provider_id", "in", demoInClause) : q;
+
   // Window: this period + prior period for delta calc.
   // Lifetime → no upper window for "this period" and no prior period.
   const thisStart = days === null ? null : DAYS_AGO_ISO(days);
@@ -149,25 +160,25 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
   ] = await withTimeout(20_000, "admin overview", Promise.all([
     // Leads in: distinct emails of non-DQ submissions
     applyThis(
-      supabase.schema("leads").from("submissions").select("email").eq("is_dq", false).is("archived_at", null),
+      filterDemoSubmissions(supabase.schema("leads").from("submissions").select("email").eq("is_dq", false).is("archived_at", null)),
       "submitted_at",
     ),
     applyLast(
-      supabase.schema("leads").from("submissions").select("email").eq("is_dq", false).is("archived_at", null),
+      filterDemoSubmissions(supabase.schema("leads").from("submissions").select("email").eq("is_dq", false).is("archived_at", null)),
       "submitted_at",
     ),
     // Routed this period (denominator for period-aware conversion)
     applyThis(
-      supabase.schema("leads").from("submissions").select("email").not("primary_routed_to", "is", null).is("archived_at", null),
+      filterDemoSubmissions(supabase.schema("leads").from("submissions").select("email").not("primary_routed_to", "is", null).is("archived_at", null)),
       "routed_at",
     ),
     // Enrolments confirmed
     applyThis(
-      supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "enrolled"),
+      filterDemoEnrolments(supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "enrolled")),
       "status_updated_at",
     ),
     applyLast(
-      supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "enrolled"),
+      filterDemoEnrolments(supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "enrolled")),
       "status_updated_at",
     ),
     // Meta ad spend (and Meta-reported leads, used for the secondary CPL line).
@@ -184,17 +195,24 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
           .lt("date", thisStart!.slice(0, 10)),
     // Presumed enrolled this period (for period-aware potential conversion)
     applyThis(
-      supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled"),
+      filterDemoEnrolments(supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled")),
       "status_updated_at",
     ),
-    // Provider state
-    supabase
-      .schema("crm")
-      .from("vw_provider_billing_state")
-      .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, billable_count, conversion_rate_pct")
-      .order("total_routed", { ascending: false }),
-    supabase.schema("crm").from("providers").select("provider_id, company_name, per_enrolment_fee, pricing_model"),
-    // Attention
+    // Provider state — vw_provider_billing_state filtered by NOT IN demo
+    demoInClause
+      ? supabase
+          .schema("crm")
+          .from("vw_provider_billing_state")
+          .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, billable_count, conversion_rate_pct")
+          .not("provider_id", "in", demoInClause)
+          .order("total_routed", { ascending: false })
+      : supabase
+          .schema("crm")
+          .from("vw_provider_billing_state")
+          .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, billable_count, conversion_rate_pct")
+          .order("total_routed", { ascending: false }),
+    supabase.schema("crm").from("providers").select("provider_id, company_name, per_enrolment_fee, pricing_model").eq("is_demo", false),
+    // Attention — unrouted has primary_routed_to IS NULL by definition (no demo possible)
     supabase
       .schema("leads")
       .from("submissions")
@@ -202,8 +220,8 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
       .eq("is_dq", false)
       .is("primary_routed_to", null)
       .is("archived_at", null),
-    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled"),
-    supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).not("disputed_at", "is", null),
+    filterDemoEnrolments(supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).eq("status", "presumed_enrolled")),
+    filterDemoEnrolments(supabase.schema("crm").from("enrolments").select("id", { count: "exact", head: true }).not("disputed_at", "is", null)),
     supabase.schema("leads").from("dead_letter").select("id", { count: "exact", head: true }).is("replayed_at", null),
     supabase.schema("crm").from("pending_updates").select("id", { count: "exact", head: true }).eq("status", "pending"),
   ]));

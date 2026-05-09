@@ -48,6 +48,7 @@ export default async function ProvidersPage() {
       .schema("crm")
       .from("providers")
       .select("provider_id,company_name,contact_name,contact_email,pilot_status,pricing_model,per_enrolment_fee,active,onboarded_at,agreement_signed_at,archived_at")
+      .eq("is_demo", false)
       .order("company_name"),
     supabase
       .schema("crm")

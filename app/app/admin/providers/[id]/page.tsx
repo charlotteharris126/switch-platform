@@ -14,6 +14,7 @@ import {
 import { formatDate, formatDateTime } from "@/lib/format";
 import { EditProviderForm } from "./edit-provider-form";
 import { ProviderTabs } from "./tabs";
+import { SendPortalInvite } from "./send-portal-invite";
 
 export default async function ProviderDetailPage({
   params,
@@ -90,6 +91,21 @@ export default async function ProviderDetailPage({
       </div>
 
       <ProviderTabs providerId={provider.provider_id} active="overview" />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Portal access</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SendPortalInvite
+            providerId={provider.provider_id}
+            defaultEmail={provider.contact_email ?? undefined}
+            defaultName={provider.contact_name ?? undefined}
+            isDemo={provider.is_demo === true}
+            portalEnabled={provider.portal_enabled === true}
+          />
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card>

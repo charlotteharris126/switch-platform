@@ -6,7 +6,7 @@ type: scoping
 
 # Provider Portal MVP — Scoping
 
-**Status:** Draft for owner sign-off.
+**Status:** Draft for owner sign-off. Auth model relocked 2026-05-09 to passkey-only (was magic-link); see "Auth model decisions" below.
 **Created:** 2026-05-08.
 **Author:** Claude (platform session).
 **Replaces:** the sheet → DB mirror scoping (`sheet-mirror-scoping.md`). Mirror was the bridge to this; if we go portal-first, the bridge is throwaway code.
@@ -27,14 +27,14 @@ Secondary unlocks: Apps Script + per-sheet setup retires (one less moving part p
 
 ## Design (one paragraph)
 
-A new `/provider/*` route tree at `app.switchleads.co.uk` (host already wired Session A, currently a placeholder page). Magic-link auth via Supabase Auth — provider clicks a button on a Brevo email, lands logged-in. New `crm.provider_users` table maps Supabase auth users to providers (multi-user per provider from day one — EMS could have multiple advisers). RLS overlays on existing `leads.submissions` × `crm.enrolments` × `leads.routing_log` filter every read to `provider_id IN (SELECT provider_id FROM crm.provider_users WHERE auth_user_id = auth.uid())`. Three v1 surfaces: `/provider/leads` (list, filterable by status), `/provider/leads/[id]` (detail, all routed payload fields, redacted as appropriate), and the same detail page hosts the outcome-marking form (same vocabulary as the existing admin enrolment form: contacted / enrolled / not enrolled / disputed / cannot reach). Every state change writes through a new `audit.log_provider_action` helper to `audit.actions` — same append-only pattern as admin, separate actor type. Brevo emails switch from "check your sheet" to "view in portal", deep-linking to the lead detail page (token-authed magic-link if not already signed in). Sheets stay live for a 14-day parallel period, then become read-only audit copies and the appender deploys are removed.
+A new `/provider/*` route tree at `app.switchleads.co.uk` (host already wired Session A, currently a placeholder page). **Passkey auth via Supabase Auth + WebAuthn** — provider authenticates with a passkey on their device (Touch ID / Face ID / Windows Hello / hardware key); credentials never leave the device. Setup happens via a one-time admin-issued **enrolment-only invite link** that dies the moment a passkey is registered (cannot mint a session, cannot be replayed). Recovery on lost device: admin re-issues an invite over a phone-confirmed channel. **No auth token ever sits at rest in an email inbox** — the GDPR-driven reason magic-link was rejected. New `crm.provider_users` table maps Supabase auth users to providers (multi-user per provider from day one — EMS could have multiple advisers). RLS overlays on existing `leads.submissions` × `crm.enrolments` × `leads.routing_log` filter every read to `provider_id IN (SELECT provider_id FROM crm.provider_users WHERE auth_user_id = auth.uid())`. Three v1 surfaces: `/provider/leads` (list, filterable by status), `/provider/leads/[id]` (detail, all routed payload fields, redacted as appropriate), and the same detail page hosts the outcome-marking form (same vocabulary as the existing admin enrolment form: contacted / enrolled / not enrolled / disputed / cannot reach). Every state change writes through a new `audit.log_provider_action` helper to `audit.actions` — same append-only pattern as admin, separate actor type. Brevo emails switch from "check your sheet" to "view in portal", deep-linking to the lead detail page (browser session takes them straight in if valid; one biometric tap to re-auth if expired). Sheets stay live for a 14-day parallel period, then become read-only audit copies and the appender deploys are removed.
 
 ---
 
 ## What's in the v1 MVP
 
 ### Provider-facing
-- **Magic-link login** at `app.switchleads.co.uk/login`. Email → Supabase Auth one-time link → portal home. No passwords, no MFA in v1. Session length 30 days.
+- **Passkey login** at `app.switchleads.co.uk/login`. Browser presents enrolled passkey → biometric tap → portal home. No passwords. No emailed login links (rejected on GDPR grounds — auth tokens at rest in email inboxes). Session length 30 days; expired session prompts a single biometric tap, never a fresh email.
 - **Provider home (`/provider`)**: counts (open / contacted / enrolled this month / awaiting outcome > 7 days), list of "needs attention" leads (open and routed > 5 days ago), most recent 10 routed leads.
 - **Leads list (`/provider/leads`)**: every lead RLS-scoped to this provider, sortable by routed-at, filterable by status. Columns: name, course, routed-at, current status, days-since-routed.
 - **Lead detail (`/provider/leads/[id]`)**: full routed payload (name, contact details, course, funding category, eligibility flags, intent answers, fastrack answers if present), routing-log timestamps, current `crm.enrolments.status`. Above-the-fold action: outcome buttons (Contacted / Enrolled / Not enrolled / Cannot reach / Disputed). Each click writes through a Server Action.
@@ -50,9 +50,9 @@ A new `/provider/*` route tree at `app.switchleads.co.uk` (host already wired Se
 ### Behind the scenes
 - **Migration 0091**: `crm.provider_users` table (provider_id, auth_user_id UNIQUE, role TEXT default 'provider_admin', invited_at, last_login_at, status). RLS policies overlaying `leads.submissions`, `crm.enrolments`, `leads.routing_log`, `crm.disputes`. `audit.log_provider_action` helper.
 - **Migration 0092**: `crm.providers.portal_enabled` BOOLEAN default false (per-provider feature flag during cutover so we don't ship to all three at once).
-- **New Edge Function `provider-magic-link`**: takes a provider_id + email + return_path, looks up the matching `crm.provider_users` row, calls Supabase Auth to send a magic link with the deep-link as the redirect. Used by Brevo email templates and admin "send portal invite" button.
-- **Brevo template updates**: provider notification template "new lead routed" gets a "View in portal" button (one-click magic link). Existing "check your sheet" template retired at end of cutover.
-- **Owner invite flow**: Admin clicks "invite user" on `/admin/providers/[id]` → enters provider contact email → Edge Function creates `crm.provider_users` row + sends magic link. Provider lands logged in.
+- **New Edge Function `provider-invite-link`**: takes a provider_id + email + role, creates the `crm.provider_users` row in `status='invited'`, generates a single-use enrolment-only token (HMAC-signed, 15-minute expiry, scoped to passkey-registration only — cannot mint a session), emails the invite link via Brevo. Token is consumed irrecoverably the moment a passkey is enrolled. Token only authorises the passkey-registration endpoint, nothing else. Used by the admin "send portal invite" button.
+- **Brevo template updates**: provider notification template "new lead routed" gets a "View in portal" button that deep-links to `/provider/leads/[id]`. If the provider's session is valid they land straight in; if expired they get a passkey prompt then redirect. No magic-link mechanism. Existing "check your sheet" template retired at end of cutover.
+- **Owner invite flow**: Admin clicks "Send portal invite" on `/admin/providers/[id]` → confirms recipient email → Edge Function creates `crm.provider_users` row (`status='invited'`) + emails the enrolment link. Provider clicks link, browser walks them through WebAuthn passkey registration, row flips to `status='active'`, link dies.
 
 ---
 
@@ -87,8 +87,11 @@ EMS goes first — they're the ones with the active update-failure problem and t
 
 ## Auth model decisions
 
-- **Supabase Auth, magic-link only.** No passwords. Email enters a one-time-use token, expires in 60 minutes, single-use. Session refresh handled by Supabase client.
-- **Session length 30 days.** Re-auth required after 30 days of inactivity. On suspicious-activity heuristic (different IP + new browser), force re-auth.
+- **Supabase Auth + WebAuthn passkeys only.** No passwords, no emailed login links. Passkey credentials are generated and stored on the user's device (biometric-gated for the rare unlock); the public key is registered against the Supabase auth user. Session refresh handled by Supabase client.
+- **Pivot from magic-link, 2026-05-09:** Charlotte raised UK GDPR Article 32 ("appropriate technical measures") concerns about magic-link authentication — emailed links are bearer tokens at rest in inboxes, IMAP servers, backups, and forwarded copies. For a portal that gates learner PII this is a weaker technical measure than passkey-only. Passkey credentials never leave the device. Replaces the prior "magic-link only" decision in this doc. Pending Clara's written sign-off in `accounts-legal/changelog.md` before any non-Charlotte provider goes live.
+- **Setup is via an enrolment-only invite link.** Admin issues, provider clicks, browser walks them through WebAuthn passkey registration, link dies forever. The link's token is scoped to the passkey-registration endpoint only — it cannot mint a session, cannot be replayed. 15-minute expiry on the token; if it expires before use, admin re-issues.
+- **Recovery on lost device:** admin re-issues an enrolment-only link over a phone-confirmed channel. Provider registers a passkey on the new device. Old passkey disabled in `crm.provider_users` (soft-deleted, audit-logged). No "click email to log in" path ever exists.
+- **Session length 30 days.** Re-auth required after 30 days of inactivity, OR on suspicious-activity heuristic (different IP + new browser). Re-auth is one biometric tap, not an email cycle.
 - **`crm.provider_users` is the join table.** Not a column on `crm.providers`, because EMS will likely want multiple users (Andy + an adviser) and Riverside likely too. One auth user can map to one provider (multi-tenant comes much later if ever).
 - **`role` column** on `crm.provider_users` defaults to `provider_admin`. Reserved values for v2: `provider_user` (read + outcome marking, no settings access), `provider_billing` (sees invoices, cannot mark outcomes). v1 only uses `provider_admin`.
 - **No SSO in v1.** Google Workspace SSO is a v2 nice-to-have if a provider asks. None have.
@@ -141,14 +144,14 @@ Six sessions, ~10–14 hours focused total. Each session ships a deployable stat
 - Deploy to production. No user-visible change yet (no portal routes wired).
 - **Done when**: a hand-inserted `crm.provider_users` row + manual magic-link test from Supabase dashboard returns a session that, when used in the supabase JS client, can SELECT only that provider's submissions.
 
-### Session P2 — Provider routes scaffold + magic-link Edge Function (~2 hours)
-- `provider-magic-link` Edge Function: takes provider_id + email + return_path, calls Supabase Auth, returns sent status. Token-authed (admin-only caller).
-- `/provider/login` page (email input → magic link sent confirmation).
-- `/provider/auth/callback` route (Supabase standard flow).
+### Session P2 — Provider routes scaffold + passkey enrolment + invite link Edge Function (~3 hours)
+- `provider-invite-link` Edge Function: takes provider_id + email + role, creates `crm.provider_users` row (`status='invited'`), generates HMAC-signed enrolment-only token (15-min expiry, scoped to passkey-registration only), sends invite email via Brevo. Admin-authed.
+- `/provider/enrol/[token]` page: verifies token, walks the user through WebAuthn passkey registration (`navigator.credentials.create`), registers the public key against the Supabase auth user, flips `crm.provider_users.status` to `'active'`, expires the token, redirects to `/provider`.
+- `/provider/login` page: presents "Sign in with passkey" → triggers WebAuthn ceremony (`navigator.credentials.get`) → Supabase session minted on success.
 - `/provider` placeholder page replaced with a "you are logged in as [provider]" gated page.
 - Layout shell with provider-facing nav (Leads / Account / Logout).
-- Auth middleware redirects unauthed `/provider/*` to login.
-- **Done when**: admin-side test invite from a hand-rolled curl call sends a magic link, click lands the user in the portal home.
+- Auth middleware redirects unauthed `/provider/*` to `/provider/login`.
+- **Done when**: admin-side test invite for `demo-provider-ltd` (`hello+demo@switchable.org.uk`) sends an enrolment link, click walks through passkey registration, subsequent visits to `/provider/*` pass the auth gate via passkey on Charlotte's device.
 
 ### Session P3 — Leads list + detail + outcome marking (~3 hours)
 - `/provider/leads` server-rendered list, RLS-scoped, filterable by status.
@@ -160,10 +163,10 @@ Six sessions, ~10–14 hours focused total. Each session ships a deployable stat
 
 ### Session P4 — Brevo template switch + admin invite UI (~2 hours)
 - New Brevo template: "new lead routed" with portal deep link. Old "check your sheet" template kept but stops being used post-cutover.
-- Admin "Send portal invite" button on `/admin/providers/[id]` calling the Edge Function.
+- Admin "Send portal invite" button on `/admin/providers/[id]` calling the `provider-invite-link` Edge Function.
 - Admin "providers without recent login" tile on `/admin`.
 - Last-login-at column on `/admin/providers` list.
-- **Done when**: admin clicks invite on EMS provider page, EMS contact gets a magic-link email, click lands them in the portal.
+- **Done when**: admin clicks invite on EMS provider page, EMS contact gets an enrolment-link email, click walks through passkey registration, subsequent portal access works.
 
 ### Session P5 — EMS cutover (~1 hour active + 14 days passive)
 - Flip `portal_enabled=true` for EMS, send invite, deep-link new lead emails.
@@ -198,8 +201,9 @@ Pen-test on the live portal per ticket [869d0hwxz](https://app.clickup.com/t/869
 | Provider doesn't log in | Same nudge cadence as today (Tuesday call). Plus admin tile "providers without recent login" surfaces it before Tuesday. Worst case: revert to sheet primary via `portal_enabled=false`. |
 | Provider marks wrong outcome by misclick | Outcomes are reversible — click a different button. Audit chain captures the history. Same risk model as the existing admin form. |
 | RLS policy bug leaks one provider's leads to another | Migration includes RLS test queries that assert "user A sees only provider A's rows" at apply time. `/ultrareview` mandatory before deploying 0091. |
-| Magic link forwarded externally | Single-use, 60-minute expiry. Session bound to the click — forwarded link after first click is dead. |
-| Provider session hijack | 30-day session, refresh on each request. Suspicious-activity heuristic forces re-auth. MFA at pen-test gate. Pilot acceptable risk for three providers we know personally. |
+| Enrolment link forwarded externally | Token is scoped to passkey-registration only — even if forwarded, recipient cannot mint a session. Worst case: recipient registers a passkey instead of the intended provider. Mitigation: 15-minute expiry, one-shot consumption, admin re-issues if mis-routed. |
+| Passkey credential compromised | Passkey credentials never leave the device; biometric-gated. Compromise requires physical device + biometric. Mitigation: admin can disable a passkey in `crm.provider_users` (soft-delete, audit-logged) and re-issue an enrolment link to a new device. |
+| Provider session hijack | 30-day session, refresh on each request. Suspicious-activity heuristic forces re-auth. Re-auth is one biometric tap, not an email. Pilot acceptable risk for three providers we know personally. |
 | Sheet → portal data drift during 14-day parallel | Portal reads DB; DB is the same source the sheets sync from. Drift impossible by construction. The risk is provider marks outcome in BOTH sheet and portal — sheet append doesn't write back to DB (sheet is downstream), so portal always wins, sheet shows stale on conflict (acceptable during cutover). |
 | Cutover lands during a hot lead week | EMS first, slow rollout, per-provider flag, instant revert. Pause the rollout for any week with > expected lead volume. |
 | Edge Function provider-magic-link compromised | Token-authed, admin-only. Same secret-handling discipline as `route-lead.ts`. Rotation cadence in `secrets-rotation.md`. |
