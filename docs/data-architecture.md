@@ -634,20 +634,36 @@ CREATE TABLE crm.enrolments (
   provider_id           TEXT NOT NULL REFERENCES crm.providers(provider_id),
 
   status                TEXT NOT NULL DEFAULT 'open',
-  -- Status values:
-  -- 'open'              - sent to provider, awaiting update
-  -- 'contacted'         - provider reached learner
-  -- 'enrolled'          - provider confirms enrolment
-  -- 'presumed_enrolled' - auto-set after 14 days if no update; also settable
-  --                        manually by provider via sheet (sheet-edit-mirror, 2026-04-30)
-  -- 'cannot_reach'      - provider tried, no response yet (sheet vocab; 2026-04-30)
-  -- 'lost'              - lead won't convert (sheet vocab; 2026-04-30). Distinct
-  --                        from 'not_enrolled': 'lost' is provider's "closed lost"
-  --                        terminology, 'not_enrolled' is owner-side outcome.
-  -- 'not_enrolled'      - confirmed no enrolment (used by owner / system)
-  -- 'disputed'          - provider or learner dispute raised
-  -- 'billed'            - invoice issued via GoCardless
-  -- 'paid'              - payment collected
+  -- Status values (CHECK constraint enforced; updated migration 0091):
+  -- Initial state on routing:
+  --   'open'                     - sent to provider, no provider action yet
+  -- Provider-driven (each fires a chaser email to the learner via the
+  -- BREVO_TEMPLATE_CHASER_FUNDED / _SELF templates on click):
+  --   'attempt_1_no_answer'      - provider tried, no answer
+  --   'attempt_2_no_answer'      - provider tried again, no answer
+  --   'attempt_3_no_answer'      - provider tried 3rd time, no answer
+  -- Provider-driven, intermediate-but-engaged:
+  --   'enrolment_meeting_booked' - learner has an enrolment meeting scheduled
+  -- Terminal (provider-set):
+  --   'enrolled'                 - provider confirms enrolment
+  --   'lost'                     - lead won't convert (provider's "closed lost")
+  --   'cannot_reach'             - provider tried, written off after attempts
+  -- Terminal (system-set ONLY):
+  --   'presumed_enrolled'        - auto-set by 14-day flip cron, but ONLY for
+  --                                  rows where status='open' (ghosted leads).
+  --                                  Engaged statuses (attempt_*, meeting_booked)
+  --                                  are left alone — the flip is a ghost-detector,
+  --                                  not the default billing path.
+  --                                  7-day dispute window via dispute_deadline_at.
+  --
+  -- Single source of truth: the CHECK constraint on this table. TypeScript
+  -- types in the portal app derive from this constraint, never define their
+  -- own list. If a value isn't in the CHECK, it doesn't exist.
+  --
+  -- Migration 0028 dropped the legacy 'not_enrolled' / 'disputed' / 'billed'
+  -- / 'paid' values; disputes are now a flag (disputed_at) on presumed-
+  -- enrolled rows. Migration 0091 dropped the unused 'contacted' value and
+  -- added the attempt_* + enrolment_meeting_booked granularity.
 
   sent_to_provider_at   TIMESTAMPTZ NOT NULL,
   status_updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -674,7 +690,7 @@ CREATE TABLE crm.enrolments (
 );
 
 CREATE INDEX ON crm.enrolments (provider_id, status);
-CREATE INDEX ON crm.enrolments (status) WHERE status IN ('open', 'contacted', 'presumed_enrolled');
+CREATE INDEX ON crm.enrolments (status) WHERE status IN ('open', 'attempt_1_no_answer', 'attempt_2_no_answer', 'attempt_3_no_answer', 'enrolment_meeting_booked', 'presumed_enrolled');
 CREATE INDEX ON crm.enrolments (presumed_deadline_at) WHERE status = 'open';
 CREATE INDEX ON crm.enrolments (submission_id);
 ```

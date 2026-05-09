@@ -1,112 +1,90 @@
-# Platform Handoff, Session 35, 2026-05-08
+# Platform Handoff, Session 36, 2026-05-09
 
 ## Current state
 
-Fastrack back-end (lead-to-enrol uplift Phase 2) is live end-to-end across all three outcome paths (happy / L3 mismatch DQ / cohort decline DQ). 4 real fastrack submissions landed overnight from 3 unique learners (1 passed, 1 L3-DQ, 1 double-submission ambiguous case unflipped manually by owner). Two reconcile gaps surfaced via Sasha's data-health dashboard and were fixed in the same session: `netlify-leads-reconcile` was back-filling fastrack-funded-v1 submissions as spurious unknown-form rows, and `brevo-consent-reconcile-daily` was tripping a CHECK constraint on `crm.consent_history`. Admin dashboard now surfaces fastrack data on the lead detail page. Repo + origin in sync, working tree clean.
+Provider portal MVP foundation built end-to-end (10 migrations applied, 0091 through 0100). Status taxonomy expanded for the new outcome buttons, `crm.provider_users` table + RLS policies + audit helper in place, demo-flag and portal-cutover-flag columns added, auto-flip cron held disarmed pending prerequisites. DB ↔ Brevo single-source-of-truth architecture shipped: triggers fire near-real-time push on every relevant write to crm.enrolments / leads.submissions / crm.providers, plus a daily 04:45 UTC reconcile cron as belt-and-braces. Brevo attribute set extended by 9 attributes today (SW_COURSE_SCHEDULE, SW_PHONE, SW_LOST_REASON, SW_FASTRACK_COMPLETED, SW_FASTRACK_URL, SW_START_TIMING, SW_INTEREST_BREADTH, SW_INVESTMENT_WILLINGNESS, SW_CURRENT_QUALIFICATION) to support Wren's nurture v2 and Mable's fastrack cohort_decline + l3_mismatch UX. All four pilot providers reconciled against their sheets (WYK, EMS via data-ops 016 + 017; CD no DB-side corrections needed; Riverside no leads yet). Brevo aligned across 174 routed-active contacts with 8 spot-checks confirmed clean. Cron error from Session 35 (brevo-consent-reconcile-daily CHECK constraint) verified fixed via fresh deploy + manual trigger. Repo + origin: ahead by today's commits, clean tree.
 
 ## What was done this session
 
-Fastrack back-end deploy:
+Migrations applied (in order):
 
-- Migration 0087 (Mable's, applied via `db push --include-all`): `leads.fastrack_submissions` table + `client_nonce` and `fastracked_at` columns on `leads.submissions`.
-- Migration 0089: extended `crm.enrolments.lost_reason` CHECK with `l3_mismatch_self_reported` and `cohort_decline`. Pre-flight requirement called out in the Session 34 PUSH FROM block.
-- Migration 0090: `admin_read_fastrack_submissions` RLS SELECT policy + table-level GRANT for the `authenticated` role. Mirrors migration 0014 pattern. Filled the gap left by 0087, which only granted to `functions_writer` and `readonly_analytics`.
-- New `fastrack-receive` Edge Function (8-step pipeline): parse payload schema 1.0, lookup parent via client_nonce, compute l3_mismatch + cohort_decline flags, insert child row in fastrack_submissions, stamp parent.fastracked_at, asymmetric marketing handling (only explicit `true` writes a fresh `crm.consent_history` row), DQ status flip, sheet update via v2 appender's new `update_by_submission_id` mode, dead_letter on side-effect failure, return 200. Deployed `--no-verify-jwt`.
-- `netlify-lead-router` patched twice and redeployed: client_nonce write-through in `_shared/ingest.ts` (single field added to CanonicalSubmission interface, normaliser, INSERT column list, INSERT values; new `parseClientNonce` helper); fastrack-funded-v1 ignore filter mirroring the contact filter pattern.
-- `netlify-leads-reconcile` patched and redeployed with the same fastrack-funded-v1 filter. Caught when Sasha's daily dashboard surfaced 7 spurious unknown-form rows.
-- `provider-sheet-appender-v2.gs` extended in place with `update_by_submission_id` mode (default mode stays append). New FIELD_MAP entries: `fastrackapplicationfilled`, `fastrackdetails`, `lostreason`, plus aliases.
-- Owner re-deployed appender on EMS + WYK sheets via Manage Deployments → New version (URLs preserved). Added Fastrack Application Filled + Fastrack Details columns (replaced unused Enrolment date + Charge), and Submission ID column (added late evening after the first real fastrack failed sheet write).
-- Per-form Netlify webhook for `fastrack-funded-v1` → `fastrack-receive` wired by owner.
-- `form-allowlist.json` source updated; Mable shipped the build + push as part of switchable/site Session 58.
-- Mid-test bugfix: removed non-existent `lost_at` column reference from the DQ status flip. Existing pattern uses `status_updated_at`. Caught at DB-query time before Test 2 fired.
+- **0091** status taxonomy expansion: open / attempt_1_no_answer / attempt_2_no_answer / attempt_3_no_answer / enrolment_meeting_booked / enrolled / lost / cannot_reach / presumed_enrolled. Dropped legacy 'contacted' value (zero rows).
+- **0092** dropped legacy `enrolments_status_chk` constraint (0091's DROP IF EXISTS targeted the wrong name; constraint-name mismatch logged in updated memory `feedback_query_live_pg_proc_before_patching`).
+- **0093** `crm.providers.is_demo` + `crm.providers.portal_enabled` boolean flags.
+- **0094** `crm.provider_users` table (multi-user mapping, role + status CHECKs, FK to auth.users, RLS, admin/functions/analytics policies).
+- **0095** `audit.log_provider_action` SECURITY DEFINER helper, gated on caller having an active provider_users row.
+- **0096** `crm.provider_user_provider_id()` helper + 9 RLS policies across leads.submissions / leads.routing_log / leads.fastrack_submissions / crm.enrolments / crm.providers / crm.provider_users / crm.disputes. portal_enabled flag baked into the helper for per-provider cutover gating.
+- **0097** auto-flip cron + day-12 warning cron rescheduled — applied alongside 0098 by accident, then disarmed via `cron.unschedule` SQL (db push pulled both pending migrations together; lesson noted, both crons now unscheduled pending prerequisites).
+- **0098** Postgres triggers on crm.enrolments + leads.submissions + crm.providers — auto-fires `crm.sync_leads_to_brevo` on every relevant change. Removes the "did the developer remember to call sync?" risk entirely.
+- **0099** waitlist enrichment columns (start_timing, interest_breadth, investment_willingness, current_qualification, source_form, enriched_at) + extended trigger function to cover the new fields + phone + fastracked_at.
+- **0100** daily Brevo attribute reconcile cron at 04:45 UTC, chunked 50 ids per pg_net dispatch.
 
-Admin dashboard:
+Code changes:
 
-- `app/app/admin/leads/[id]/page.tsx` gained a Fastrack submission card after the re-application banner and before the enrolment outcome form. Surfaces cohort confirmed, transport help, docs ready, L3 reconfirmed, marketing opt-in, terms accepted, voice-of-learner intro. Top-of-card badges fire on `l3_mismatch_flag`, `cohort_confirmed=false`, `docs_ready=false`, `transport_help_requested=true`. Header gains a violet "Fastracked" badge whenever `lead.fastracked_at` is set. TypeScript check clean. List-view fastracked indicator deferred.
+- `_shared/route-lead.ts`: 9 new SW_* attributes pushed at all 3 composition sites (matched / U1 transactional / no-match-pending) plus extended SubmissionRow interface, extended SELECT statements, extended enrolment-status query to also pull lost_reason. Added `buildFastrackUrl(client_nonce)` helper. Decoupled BREVO_LIST_ID_SWITCHABLE_UTILITY (now optional, mirrors marketing list pattern — Wren's ask, ready for ~6 Aug list deletion).
+- `_shared/ingest.ts`: parent_ref-first parent lookup (UUID match against client_nonce) with email fallback, 6 new fields captured from switchable-waitlist-enrichment payloads, parent UPDATE step that mirrors enrichment fields onto the parent row when parent_ref + parent resolved.
+- `admin-brevo-resync/index.ts`: SELECT extended for new columns.
+- `brevo-consent-reconcile-daily/index.ts`: redeployed (Session 35's redeploy hadn't taken; verified by manual trigger returning 200 with one drift correction landing cleanly).
+- 4 Edge Functions redeployed twice today as new attributes landed: netlify-lead-router, routing-confirm, admin-brevo-resync, plus brevo-consent-reconcile-daily.
 
-Drift cron fix:
+Reconciles + data fixes:
 
-- `brevo-consent-reconcile-daily` was using `changed_by='system:cron:brevo-consent-reconcile-daily'` and `source='reconcile_brevo_to_db'`, neither in the `crm.consent_history` CHECK constraint allowed sets from migration 0074. The transaction wrapping UPDATE submissions + INSERT consent_history rolled back atomically, so DB stayed at the drifted value for 4 contacts. Patched to use `changed_by='system'` + `source='reconcile_cron'` (both already in the CHECK), with the descriptive cron name and direction moved into the metadata JSON. Redeployed.
+- **data-ops/016** WYK sheet → DB: 9 status corrections + 1 INSERT (Naomi @petsapp dedup child). Zero in flip-cohort post-reconcile.
+- **data-ops/017** EMS sheet → DB: 6 status corrections + 2 INSERTs (Glennis Adamson dedup children). Zero in flip-cohort post-reconcile.
+- **data-ops/018** DQ reason consolidation: 5 rows level/qual → overqualified, 3 rows location → region_mismatch. Form-side cleanup pushed to Mable's handoff.
+- Brevo full-cohort resync over 174 routed-active contacts (twice — once for SW_COURSE_SCHEDULE backfill, once for the 8 new attributes). Zero new dead_letter rows both times. Single-source-of-truth verified with 164=164 alignment between sheets and DB unique-routed-active emails, 239 Brevo contacts explained by dedup math (12 owner-test contacts intentionally absent from Brevo).
 
-Tests:
+Cross-project pushes filed (durable record updates):
 
-- All 3 fastrack paths verified end-to-end. Tests 1 + 2 verified pre-Mable-fix. Test 3 (cohort decline) initially blocked on a Netlify-edge frontend issue where POSTs to URLs carrying query params silently dropped; Mable shipped the switchable/site Session 58 fix (POST to clean URL, JS-navigate to DQ-encoded URL after success) and Test 3 re-verified.
-- 4 real fastracks: Whitehead (parent 316, passed with docs soft flag), Ryan (parent 322, L3 DQ), Baker (parent 325, double submission within 17 seconds with conflicting L3 answers — first DQ'd her, second clean; owner unflipped enrolment manually).
+- Nell `switchleads/clients/docs/current-handoff.md`: CD warm conversation prep when new sales rep arrives, Marty's two-product-provider angle (CD + separate funded provider) as relationship-keeping rationale; phantom Jade Millward note retracted (she applied for both EMS + CD courses separately).
+- Mira `strategy/docs/current-handoff.md`: provider activity-gate framework + two-product-provider rule needed for next Monday cycle.
+- Clara `accounts-legal/docs/current-handoff.md`: PPA portal-access review needed before EMS cutover mid-next-week.
+- Mable `switchable/site/docs/current-handoff.md`: funded form DQ taxonomy fix (level/qual/location → canonical) on 3 funded course pages + matrix.json schema doc + form-matrix simulator.
+- Wren `switchable/email/docs/current-handoff.md`: SW_COURSE_SCHEDULE delivery, utility-list decoupling, sunset-cron gating correction, plus a new `brevo-attribute-architecture.md` reference doc explaining the three-layer DB ↔ Brevo architecture for designing future automations.
 
-Cleanup:
+Memory updates:
 
-- 7 spurious unknown-form rows from the unfiltered reconcile (ids 318/319/320/321/324/326/327) archived via SQL editor. Reversible.
-- Mr Whitehead's row in EMS sheet manually filled (Submission ID, Fastrack Application Filled, Fastrack Details). Sheet write failed automatically because the Submission ID column was added after his routing append; future fastracks ride the automatic path.
-- Sharnney Baker (parent 325) enrolment unflipped: `status='open'`, `lost_reason=NULL`, `status_updated_at` re-stamped. Owner manually edited her sheet row in lockstep.
-- Dead_letter 158 (`fastrack_side_effect`) bulk-resolved by owner via dashboard.
-
-Memory:
-
-- Two new feedback memories: `feedback_preflight_all_columns_referenced` (pre-flight ALL columns the new code path references on provider sheets, not just the new ones being added — append-mode tolerates missing headers, update-mode fails loudly), and `feedback_netlify_form_post_clean_url` (Netlify Forms silently drops POSTs to URLs carrying query params; POST to the clean form action URL and JS-navigate to any encoded redirect URL separately).
-
-Docs:
-
-- `platform/docs/changelog.md`: full session entry covering fastrack deploy + Mable Session 58 cohort_decline fix + Mr Whitehead recovery + the spurious-row archive + drift cron fix.
-- `platform/docs/infrastructure-manifest.md`: Last verified date updated, new fastrack-receive row, updated netlify-lead-router row noting client_nonce + fastrack filter, new per-form Netlify webhook row, Apps Script section noting v2 update mode + EMS + WYK redeploys with Submission ID column.
-
-Cross-project:
-
-- Pushed at start of session to `switchable/site/docs/current-handoff.md` (Session 58): cohort_decline diagnostic flow + suspect list. Mable resolved within hours and updated her handoff to Session 59 reflecting the fix shipped.
-
-Commit: `bb93b87` ("Session 34 evening + morning: Fastrack back-end deploy + reconcile drift fix"), 14 files, +1078/-42. Pushed to origin/main.
+- New `project_marty_dual_provider_angle` (CD relationship + funded-provider angle).
+- Updated `project_auto_flip_and_day12_deferred` (now "held until prerequisites land", not "indefinitely deferred").
+- Updated `feedback_query_live_pg_proc_before_patching` (broadened to cover constraints + indexes alongside functions).
 
 ## Next steps
 
-1. **Verify overnight cron health.** Sasha's data-health dashboard should be clean by morning. Specifically: (a) `brevo_consent_drift_alert` dead_letter row 166 should self-clear after the 04:00 UTC auto-run successfully writes the 4 corrections — if it fires again with the same CHECK-constraint error message, the redeploy didn't take. (b) No new `fastrack_side_effect` dead_letters from any overnight real fastracks (sheet write path now reliable post-Submission-ID-column-fix). (c) The 7 `reconcile_backfill` dead_letter rows for the archived spurious leads can be bulk-resolved by owner via dashboard.
-
-2. **Build receiver Edge Function for `fastrack-cohort-decline-v1` enrichment form.** Cross-project ask from Mable (switchable/site Session 59 next-steps item 1). When a learner declines the cohort on the fastrack form, Mable's planning a waitlist-style enrichment form on the thank-you page (separate Netlify form, not a passive confirmation card). Captures phone (optional), "When could you start?" chips, "What got in the way?" free-text. Needs a new Edge Function analogous to fastrack-receive but writing to a new table (e.g. `leads.fastrack_cohort_declines` or extend `leads.fastrack_submissions` with cohort-decline-specific columns — design call). Coordinate with Mable on payload schema before she ships the form HTML; per the form-name rule the Edge Function + webhook URL must exist before the form name lands in deployed switchable/site HTML.
-
-3. **Function-logic enhancement (low priority): later fastrack submissions for the same parent should override earlier DQ decisions.** Sharnney Baker case (parent 325) showed the gap: first submission L3=yes DQ'd her, second submission 17 seconds later L3=no would have passed; current code doesn't unflip on the second. Owner unflipped manually. If misclick pattern repeats, ship a small UPDATE in fastrack-receive that recomputes status from the latest fastrack child whenever a new one lands for an existing parent. Otherwise leave.
-
-4. **Admin dashboard: list-view fastracked indicator (deferred follow-up).** `/admin/leads/` list page doesn't yet show whether a lead has fastracked. Detail page does. Adding a column or filter on the list is a small follow-up if it'd help owner workflow. Owner's call on whether to ship.
-
-5. **Sheet-write reliability watch (next several real fastracks).** Sheet update via update_by_submission_id mode now exercised live for 2 funded-shape real leads (Aaron + Sharnney landed cleanly automatically; Mr Whitehead recovered manually). Watch `leads.dead_letter` source=`fastrack_side_effect` for any new entries over the next few days.
-
-6. **`platform/docs/data-architecture.md` Fastrack section.** Migrations 0087 + 0089 + 0090 + appender update mode introduce new platform shape. data-architecture.md should gain a Fastrack section describing the parent + child relationship, the asymmetric marketing consent rule, and the sheet-update mode. Doc-vs-prod drift will compound otherwise.
-
-7. **Carry-over: marketing automations launch (owner's call).** Cleared on platform side per Session 34. Awaiting owner to flip on in Brevo dashboard.
-
-8. **Carry-over: `BREVO_TEMPLATE_RE_ENGAGEMENT` template.** Owner-side build in Brevo, set its id in Supabase Vault. Spec in `switchable/email/docs/current-handoff.md` item 9. No deadline (no qualifying contacts for ~6 months).
-
-9. **Carry-over: Lead-to-enrol uplift Phase 2 follow-on (SMS).** SMS helper in `_shared/brevo.ts` mirroring `sendTransactional`. Idempotency design via a new `crm.sms_log` table or extending `crm.email_log` (decide via design doc first). 4-touch sequence T+0 / T+24h / T+5d / T+10d.
-
-10. **Carry-over: HubSpot integration unpause.** When Ranjit replies with the form URL.
-
-11. **Carry-over: Apprenticeship pricing schema split (Riverside dual-route).** Trigger is Kevin signing the activation page sent 5 May.
+1. **Provider portal P2 — auth + invite flow** (~2h focused). Build over the weekend per Charlotte's plan. `provider-magic-link` Edge Function, `/provider/login` + `/provider/auth/callback` routes, auth middleware, passkey enrolment, admin "Send portal invite" button on `/admin/providers/[id]`. Done when admin invite to demo provider sends magic link, lands authenticated, sets up passkey.
+2. **Provider portal P3 — portal pages** (~3-4h). `/provider`, `/provider/leads` (filters + search + bulk select + day-count badges), `/provider/leads/[id]` (outcome buttons + notes + dispute + fraud-flag + audit history), `/provider/account`. Server Action for outcome marking — writes DB, fires `audit.log_provider_action`, fires CHASER template synchronously on attempt clicks.
+3. **Provider portal P4 — admin polish + cutover prep** (~1-2h). Last-login column on /admin/providers, "providers without recent login" tile, provider-side audit panel on /admin/leads/[id], Brevo "new lead routed" template updated for portal deep link, Day-14 + Day-19 cron infrastructure wiring (templates dormant until written).
+4. **Demo provider seed** — fixture script in `data-ops/` creating "Demo Provider Ltd" with `is_demo=true` + 10-12 fake leads spanning every status. Use during P2-P4 testing. Charlotte's demo email: `hello+demo@switchable.org.uk`.
+5. **EMS cutover sequence** (mid-next-week, after P4 + Clara PPA review). Day 0 invite, days 0-14 parallel sheet + portal, day 14 emails switch to portal-only, day 21 sheet append disabled.
+6. **SwitchLeads provider-facing template drafts** when auto-flip cron re-arms: BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING (day-12), day-14 confirmation, day-19 dispute reminder. Charlotte voice (charlotte-voice.md), no PII (count + portal link only). Owner approves before going live in Brevo.
+7. **Re-arm auto-flip + day-12 warning crons** when prerequisites clear: Wren's day-12 template + Mira's activity-gate framework + Clara's PPA review + provider heads-up emails sent (Nell). One SQL block re-schedules both.
+8. **Verify Mable's frontend redirect for fastrack cohort_decline + l3_mismatch** lands cleanly when she ships (her Session 60 work, in progress per her message). Receiver code is already deployed and waiting.
 
 ## Decisions and open questions
 
 ### Decisions made this session
 
-- **Test 3 cohort_decline diagnosis pushed to Mable, not debugged on platform side first.** Why: Tests 1 + 2 verified the function code is correct; Test 3 failure was at the wire level (form POST never reached Netlify), which is a frontend-domain issue. Mable diagnosed within hours and shipped the fix.
-- **Owner's bad-faith vs misclick judgment on Sharnney Baker (parent 325): unflipped, treat as misclick.** EMS adviser will catch any L3 confusion on the call. Downside of unflipping is small; downside of leaving as DQ when she's eligible is real.
-- **Drift correction deferred to tomorrow's auto-run (04:00 UTC) rather than manual trigger tonight.** Owner stuck on the audit-key handover; cron retry semantics are built-in. Self-heals.
-- **Spurious unknown-form rows archived (not deleted).** Reversible per data-infrastructure rule (data fixes never delete).
-- **Mr Whitehead recovered via manual sheet fill (not curl-replay of fastrack-receive).** Replay would create a duplicate child row in DB. One-off manual fix is cleaner.
-- **Sheet UPDATE mode lookup key: Submission ID column.** Future fastracks ride the automatic path now. route-lead.ts had been silently dropping submission_id on append for months because no header matched (append-mode tolerates missing headers, update-mode does not).
-- **Appender extended in place (still v2), not bumped to v3.** Additive change, default mode stays append, existing callers unaffected.
+- **Provider portal MVP scope locked at "smallest" framing** (per Charlotte 2026-05-09): magic-link + passkey auth, status taxonomy expanded for attempt-by-attempt outcome marking, demo provider with `is_demo` flag, multi-user with provider_admin / provider_user roles, EMS-first strict-serial cutover. Build it now, defer marketplace / billing / invoicing UI to v2.
+- **Auto-flip cron only flips status='open' rows** (engaged statuses left alone). Pugh + Turnbull "open" but <14 days from routing, so not in immediate flip cohort.
+- **CD held back from auto-flip regardless of cron timing** (Marty's two-product-provider angle, £10/day ad spend stays running through new sales rep's first week, warm conversation not heavy).
+- **Defaults locked for Wren attribute names**: SW_PHONE, SW_LOST_REASON, SW_FASTRACK_COMPLETED, SW_FASTRACK_URL, SW_START_TIMING, SW_INTEREST_BREADTH, SW_INVESTMENT_WILLINGNESS, SW_CURRENT_QUALIFICATION. Wren can rename via Brevo dashboard later (low cost).
+- **SW_FASTRACK_URL pattern reuses Mable's existing `?ref=<client_nonce>` redirect param** so funded thank-you page logic handles nurture-email clicks without changes.
+- **Daily Brevo attribute reconcile (Layer 3) shipped now** rather than deferring — closes the architecture cleanly for the weekend portal build.
+- **Lucy Hizmo flipped lost → enrolled per sheet** (Status column authoritative over notes; "cancelled" note is informational and ambiguous, possibly stale alignment-bug residue from data-ops/015).
+- **Migration 0097 applied accidentally** alongside 0098 because `db push` processes all queued migrations together. Mitigation: cron unscheduled via SQL right after. Lesson: check `supabase migration list --linked` before push to know what's pending.
 
 ### Open questions
 
-- **Cohort-decline enrichment form schema** (cross-project from Mable, Session 59): question set + post-enrichment success state + automation cross-cuts marketing/utility legal-basis lines. Owner to confirm question set; spec automation with `switchable/email/` (and check `feedback_brevo_automation_blocklist_shared.md` memory) before promising automated comms.
-- **List-view fastrack indicator on /admin/leads:** ship or skip? Owner's call.
-- **Function-logic: should later fastracks override earlier DQ decisions?** Currently no. Ship the fix only if misclick pattern repeats.
+- None blocking the weekend portal build.
 
 ## Watch items
 
-- 🔴 First overnight cron runs (04:00 UTC drift retry, plus the standing daily set: sunset 03:00, reconcile 04:00, failure-alert 04:30, stalled 09:00, U4 09:30). Drift retry is the canary for the CHECK-constraint fix. A new CHECK-error dead_letter would mean redeploy didn't take.
-- 🟡 First several real fastrack submissions overnight + tomorrow morning. Watch `leads.dead_letter` source=`fastrack_side_effect` for any sheet-write failures. Should be empty.
-- 🟡 Mable's switchable/site Session 58 deploy. Daily `netlify-forms-audit` should pass on next firing now that `webhook_url` is set for `fastrack-funded-v1`.
-- 🟢 Whitehead (parent 316), Ryan (parent 322), Baker (parent 325): all in EMS sheet with appropriate state. Adviser can pick up tomorrow.
-- 🟢 7 `reconcile_backfill` dead_letter rows still in dashboard awaiting bulk-resolve by owner.
+- 🟡 First overnight runs of the new daily 04:45 UTC `brevo-attribute-reconcile-daily` cron. Should produce zero new dead_letter rows. Tomorrow 2026-05-10 is the first scheduled fire.
+- 🟡 Mable's frontend redirect ship for fastrack cohort_decline + l3_mismatch (her Session 60). Receiver is deployed; if any payload arrives with parent_ref but the lookup fails, dead_letter `source=edge_function_brevo_upsert` will surface it.
+- 🟢 Brevo consent reconcile cron (04:00 UTC) — fixed and verified clean today. Should remain clean.
+- 🟢 Aaron Ryan (322), Lucy Hizmo (25), Sam Stevens (34), Rebecca Rollinson (310) — Brevo spot-checks across provider/funding combinations confirmed all 8 new SW_* attributes landed correctly.
 
 ## Next session
 
 - **Folder:** platform/
-- **First task:** check Sasha's data-health dashboard. Confirm `brevo_consent_drift_alert` (dead_letter 166) self-cleared after the 04:00 UTC auto-run, no new CHECK-constraint errors fired, no new `fastrack_side_effect` dead_letters from overnight fastracks. Then start scoping Mable's cohort-decline enrichment form receiver (Next steps item 2): align with Mable on payload schema, decide table shape (extend `leads.fastrack_submissions` vs new `leads.fastrack_cohort_declines`), draft migration + Edge Function.
-- **Cross-project:** outgoing pushed at start of session to switchable/site Session 58 (cohort_decline diagnosis — resolved same evening by Mable). Incoming push from Mable Session 59: receiver Edge Function + form-allowlist webhook URL needed for `fastrack-cohort-decline-v1` (Next steps item 2 above). No new outgoing push from this session.
+- **First task:** Start Sessions P2 + P3 of the provider portal MVP build (~5-6h focused). Schema foundation already in place from migrations 0091-0096; demo provider seed + auth + portal pages still to ship. Alongside: monitor Mable's fastrack cohort_decline frontend ship for any payload anomalies via dead_letter.
+- **Cross-project:** No new outgoing pushes from this session beyond the five filed today (Nell, Mira, Clara, Mable, Wren). Incoming items will surface from each agent in their own session pace.

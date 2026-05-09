@@ -84,6 +84,23 @@ export interface SubmissionRow {
   preferred_intake_id: string | null;
   acceptable_intake_ids: string[] | null;
   referral_code: string | null;
+  // Migration 0099 enrichment fields. NULL on any submission that didn't
+  // come through (or wasn't enriched by) the switchable-waitlist-enrichment
+  // form. Pushed to Brevo as SW_PHONE / SW_START_TIMING / etc.
+  start_timing: string | null;
+  interest_breadth: string | null;
+  investment_willingness: string | null;
+  current_qualification: string | null;
+  source_form: string | null;
+  enriched_at: string | null;
+  // Migration 0087: stamped by fastrack-receive when fastrack form lands.
+  // NULL until fastracked. Pushed to Brevo as SW_FASTRACK_COMPLETED boolean.
+  fastracked_at: string | null;
+  // Migration 0087: client-generated UUIDv4 set by funded form pre-submit JS.
+  // Used to compose SW_FASTRACK_URL for nurture-email deep-links into the
+  // fastrack form, plus parent-lookup for cohort_decline / l3_mismatch
+  // enrichment via parent_ref. NULL on legacy pre-0087 rows.
+  client_nonce: string | null;
 }
 
 export type RouteTrigger = "owner_confirm" | "auto_route" | "re_application";
@@ -147,7 +164,10 @@ export async function routeLead(
              is_dq, dq_reason, primary_routed_to, archived_at,
              marketing_opt_in,
              preferred_intake_id, acceptable_intake_ids,
-             referral_code
+             referral_code, client_nonce,
+             start_timing, interest_breadth, investment_willingness,
+             current_qualification, source_form, enriched_at,
+             fastracked_at
         FROM leads.submissions
        WHERE id = ${submissionId}
     `;
@@ -207,11 +227,13 @@ export async function routeLead(
   }
 
   // Brevo learner upsert (best-effort; failure logs dead_letter, doesn't unwind
-  // routing). Fires here so both auto-route and manual-confirm paths trigger
-  // the Switchable utility + marketing email automations identically. Skips
-  // silently if BREVO_LIST_ID_SWITCHABLE_UTILITY isn't set (i.e. before the
-  // owner finishes the Brevo dashboard wiring) — no error, no dead_letter
-  // spam, just a no-op until the env vars land.
+  // routing). Fires here so both auto-route and manual-confirm paths upsert
+  // the contact + sync attributes + push channel-subscription state identically.
+  // Utility emails no longer rely on this — they moved to the Brevo
+  // Transactional API in the 2026-05-07 cutover. Marketing automations still
+  // do (Email campaigns channel + entry filters). The Switchable Utility list
+  // membership is legacy; the upsert keeps adding to it during the 90-day
+  // retention window so the list can be deleted on 2026-08-06.
   await upsertLearnerInBrevo(sql, provider, submission);
 
   // U1 transactional send (Phase 2a of email rearchitecture). Same posture as
@@ -503,6 +525,24 @@ function buildReferralUrl(
     : base;
 }
 
+// Per-contact deep-link into the fastrack form on the funded thank-you page.
+// Used by SW_FASTRACK_URL Brevo attribute (Wren ask 2026-05-09) so funded
+// nurture v2's fastrack-push automation can link learners straight to their
+// fastrack form with parent submission context resolved via client_nonce.
+//
+// Pattern reuses the existing `?ref=<client_nonce>` param that the funded-
+// form redirect handover already sets, so the thank-you page's existing
+// fastrack form rendering logic handles a nurture-email click identically
+// to a fresh form-submit landing.
+//
+// Returns empty string when client_nonce is missing (legacy pre-0087 rows
+// or non-funded submissions). Brevo template should gate rendering on the
+// attribute being non-empty.
+function buildFastrackUrl(clientNonce: string | null): string {
+  if (!clientNonce) return "";
+  return `https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(clientNonce)}`;
+}
+
 // Resolves course / region / intake / sector for a submission, branching on
 // funding_category. Self-funded leads skip matrix.json entirely (their
 // course_id is a YAML id, not a page slug, so the lookup would silently miss)
@@ -573,14 +613,16 @@ export async function upsertLearnerInBrevo(
 ): Promise<{ ok: boolean; error?: string }> {
   if (!submission.email) return { ok: false, error: "submission has no email" };
 
+  // Both list IDs are optional. Utility list-add is legacy post the 2026-05-07
+  // transactional cutover (utility emails fire via Brevo Transactional API,
+  // not list automations); the env var stays during the 90-day retention
+  // window (~delete 2026-08-06) so existing membership doesn't drift before
+  // the list is deleted. Marketing list-add is consent-gated by
+  // submission.marketing_opt_in. If both env vars are unset, the contact
+  // upsert still fires (attributes + channel state) but with no list
+  // membership change — Brevo handles empty listIds.
   const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
   const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
-
-  if (utilityListId == null) {
-    // Email launch hasn't been wired yet — silently skip rather than spam
-    // dead_letter. Owner sets the list IDs once Brevo dashboard is configured.
-    return { ok: false, error: "BREVO_LIST_ID_SWITCHABLE_UTILITY not set" };
-  }
 
   const ctx = await composeBrevoCourseContext(submission);
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
@@ -594,18 +636,20 @@ export async function upsertLearnerInBrevo(
   // marketing automation segment by lifecycle (open / enrolled / etc.) so
   // re-engagement campaigns can target only open leads.
   let enrolStatus = "";
+  let lostReason = "";
   try {
-    const [enrolRow] = await sql<Array<{ status: string }>>`
-      SELECT status
+    const [enrolRow] = await sql<Array<{ status: string; lost_reason: string | null }>>`
+      SELECT status, lost_reason
         FROM crm.enrolments
        WHERE submission_id = ${submission.id}
          AND provider_id   = ${provider.provider_id}
        LIMIT 1
     `;
     enrolStatus = enrolRow?.status ?? "";
+    lostReason = enrolRow?.lost_reason ?? "";
   } catch (err) {
     console.error("crm.enrolments.status read failed:", String(err));
-    // Continue with empty string; one missing attribute shouldn't sink the upsert.
+    // Continue with empty strings; one missing attribute shouldn't sink the upsert.
   }
 
   // Attribute namespacing: FIRSTNAME / LASTNAME stay as unprefixed Brevo
@@ -641,13 +685,29 @@ export async function upsertLearnerInBrevo(
     SW_ENROL_STATUS: mapEnrolStatusForBrevo(enrolStatus),
     SW_REFERRAL_CODE: submission.referral_code ?? "",
     SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
+    // Migration 0099 attributes. SW_PHONE for outreach/SMS targeting.
+    // SW_LOST_REASON mirrors crm.enrolments.lost_reason so marketing can
+    // segment lost reasons (cohort_decline / l3_mismatch / etc.).
+    // SW_FASTRACK_COMPLETED true once the fastrack form has landed.
+    // The 4 enrichment fields come from waitlist-enrichment after a
+    // cohort_decline or generic /waitlist/ submit — populated on the
+    // parent row via the ingest UPDATE step.
+    SW_PHONE: submission.phone ?? "",
+    SW_LOST_REASON: lostReason,
+    SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
+    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce),
+    SW_START_TIMING: submission.start_timing ?? "",
+    SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
+    SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
+    SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
   };
 
   // One upsert call adds the contact to both lists atomically. Previously
   // this was a two-call sequence (upsert + addContactToList) which raced
   // against Brevo's backend and surfaced the misleading "Contact already in
   // list and/or does not exist" 400. Single call eliminates the race.
-  const listIds = [utilityListId];
+  const listIds: number[] = [];
+  if (utilityListId != null) listIds.push(utilityListId);
   if (submission.marketing_opt_in && marketingListId != null) {
     listIds.push(marketingListId);
   }
@@ -695,8 +755,9 @@ async function sendU1Transactional(
 
   const templateId = parseEnvInt(templateEnvName);
   if (templateId == null) {
-    // Mirror the BREVO_LIST_ID_SWITCHABLE_UTILITY posture: silently skip until
-    // Charlotte sets the env var, no dead_letter spam during shadow setup.
+    // Silently skip if the U1 template env var isn't set — no dead_letter
+    // spam during shadow setup or template-rebuild windows. Live in
+    // production since the 2026-05-07 cutover.
     return;
   }
 
@@ -718,6 +779,16 @@ async function sendU1Transactional(
     SW_FUNDING_ROUTE: submission.funding_route ?? "",
     SW_REFERRAL_CODE: submission.referral_code ?? "",
     SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
+    // Migration 0099 fields (also passed as template params for any U1
+    // template that wants to render them). Empty string for missing values
+    // to keep template renderers safe.
+    SW_PHONE: submission.phone ?? "",
+    SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
+    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce),
+    SW_START_TIMING: submission.start_timing ?? "",
+    SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
+    SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
+    SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
   };
 
   const recipientName = [submission.first_name, submission.last_name]
@@ -774,7 +845,10 @@ export async function upsertLearnerInBrevoNoMatch(
            is_dq, dq_reason, primary_routed_to, archived_at,
            marketing_opt_in,
            preferred_intake_id, acceptable_intake_ids,
-           referral_code
+           referral_code,
+           start_timing, interest_breadth, investment_willingness,
+           current_qualification, source_form, enriched_at,
+           fastracked_at
       FROM leads.submissions
      WHERE id = ${submissionId}
      LIMIT 1
@@ -783,12 +857,10 @@ export async function upsertLearnerInBrevoNoMatch(
   if (submission.archived_at) return { ok: false, error: "submission archived" };
   if (!submission.email) return { ok: false, error: "submission has no email" };
 
+  // Both list IDs optional — see upsertLearnerInBrevo for the post-cutover
+  // rationale (utility list-add is legacy, kept during 90-day retention).
   const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
   const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
-
-  if (utilityListId == null) {
-    return { ok: false, error: "BREVO_LIST_ID_SWITCHABLE_UTILITY not set" };
-  }
 
   const ctx = await composeBrevoCourseContext(submission);
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
@@ -818,9 +890,22 @@ export async function upsertLearnerInBrevoNoMatch(
     SW_ENROL_STATUS: "",
     SW_REFERRAL_CODE: submission.referral_code ?? "",
     SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
+    // Migration 0099 attributes (kept consistent across no_match / pending /
+    // matched lifecycle states so the contact record doesn't reshape on
+    // transition). SW_LOST_REASON is empty here because no enrolment row
+    // exists yet for these contacts.
+    SW_PHONE: submission.phone ?? "",
+    SW_LOST_REASON: "",
+    SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
+    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce),
+    SW_START_TIMING: submission.start_timing ?? "",
+    SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
+    SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
+    SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
   };
 
-  const listIds = [utilityListId];
+  const listIds: number[] = [];
+  if (utilityListId != null) listIds.push(utilityListId);
   if (submission.marketing_opt_in && marketingListId != null) {
     listIds.push(marketingListId);
   }

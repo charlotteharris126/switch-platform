@@ -4,6 +4,56 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-09: Provider portal foundation + DB ↔ Brevo single-source-of-truth architecture
+
+**Type:** 10 migrations (0091-0100), 4 Edge Function code paths updated + redeployed twice, 3 data-ops scripts applied, 1 Brevo full-cohort resync (twice — for SW_COURSE_SCHEDULE backfill and for the 8 new attributes). Major architecture milestone.
+
+**Status:** Live end-to-end. Triggers firing real-time on every relevant DB write. Daily reconcile cron scheduled (first run 2026-05-10 04:45 UTC). Brevo aligned across 174 routed-active contacts. All four pilot providers reconciled against their sheets.
+
+**Why:** Three threads converged this session: (a) provider portal MVP scoping locked in at "smallest" framing with EMS-first cutover mid-next-week — the schema foundation needed to land before this weekend's portal build, (b) Wren + Mable both flagged Brevo attribute gaps that the existing discipline-based push wasn't covering reliably, prompting a shift to trigger-based architecture, (c) Charlotte's "every change to lead data must update Brevo so automations trigger correctly" principle made the case for layer 1 + 2 + 3 architecture (triggers + cascades + daily reconcile) explicit.
+
+**Migration summary:**
+
+- 0091 status taxonomy expansion (open / attempt_1/2/3 / enrolment_meeting_booked / enrolled / lost / cannot_reach / presumed_enrolled). Dropped legacy 'contacted' (zero rows).
+- 0092 dropped legacy `enrolments_status_chk` constraint (0091's DROP IF EXISTS targeted the wrong name; lesson saved to memory `feedback_query_live_pg_proc_before_patching`).
+- 0093 `crm.providers.is_demo` + `crm.providers.portal_enabled` boolean flags.
+- 0094 `crm.provider_users` table (multi-user mapping + role + status CHECKs + RLS).
+- 0095 `audit.log_provider_action` SECURITY DEFINER helper.
+- 0096 `crm.provider_user_provider_id()` helper + 9 RLS policies for provider-context reads/writes across leads.submissions / leads.routing_log / leads.fastrack_submissions / crm.enrolments / crm.providers / crm.provider_users / crm.disputes. portal_enabled gate baked into the helper for per-provider cutover.
+- 0097 reactivated auto-flip + day-12 warning crons — applied alongside 0098 by accident, immediately disarmed via cron.unschedule SQL. Lesson: check `supabase migration list --linked` before push.
+- 0098 Postgres triggers on crm.enrolments + leads.submissions + crm.providers — auto-fires `crm.sync_leads_to_brevo` on every relevant change.
+- 0099 waitlist enrichment columns (start_timing, interest_breadth, investment_willingness, current_qualification, source_form, enriched_at) + extended trigger function.
+- 0100 daily 04:45 UTC Brevo attribute reconcile cron — Layer 3 belt-and-braces.
+
+**Brevo attribute set extended by 9 attributes today:**
+
+- `SW_COURSE_SCHEDULE` (Wren ask, shipped earlier today, 143 contacts backfilled)
+- `SW_PHONE`, `SW_LOST_REASON`, `SW_FASTRACK_COMPLETED`, `SW_FASTRACK_URL`, `SW_START_TIMING`, `SW_INTEREST_BREADTH`, `SW_INVESTMENT_WILLINGNESS`, `SW_CURRENT_QUALIFICATION` (Mable + Wren ask, all routed-active backfilled, 8 spot-checks confirmed clean)
+
+**Provider sheet ↔ DB reconciles:**
+
+- WYK (data-ops 016): 9 status corrections + 1 INSERT (Naomi @petsapp dedup child)
+- EMS (data-ops 017): 6 status corrections + 2 INSERTs (Glennis Adamson dedup children)
+- Courses Direct: no DB-side corrections needed (DB and sheet matched at Open across the board); held back from auto-flip per Marty's two-product-provider angle (separate funded provider Charlotte wants to onboard)
+- Riverside: no leads yet
+- DQ taxonomy consolidation (data-ops 018): 5 rows level/qual → overqualified, 3 rows location → region_mismatch. Form-side cleanup pushed to Mable's handoff.
+
+**Code architecture changes:**
+
+- `_shared/route-lead.ts`: 9 new SW_* attributes at all 3 composition sites (matched / U1 transactional / no-match-pending); SubmissionRow interface extended; SELECT statements extended; enrolment-status query extended to also pull lost_reason; `buildFastrackUrl(client_nonce)` helper added; utility list-add decoupled (env var now optional, ready for ~6 Aug list deletion per Wren).
+- `_shared/ingest.ts`: parent_ref-first parent lookup with email fallback; 6 new fields captured from switchable-waitlist-enrichment payloads; parent UPDATE step that mirrors enrichment fields onto the parent row when parent_ref + parent resolved.
+- `admin-brevo-resync/index.ts`: SELECT extended for new columns.
+- `brevo-consent-reconcile-daily/index.ts`: redeployed (Session 35's redeploy hadn't taken; verified clean via manual trigger returning 200 with one drift correction).
+- 4 Edge Functions redeployed.
+
+**Cross-project pushes:** Nell (CD warm conversation), Mira (provider activity-gate framework), Clara (PPA portal-access review), Mable (DQ taxonomy form-side fix), Wren (`brevo-attribute-architecture.md` reference doc + delivery confirmations).
+
+**Memory:** new `project_marty_dual_provider_angle`; updated `project_auto_flip_and_day12_deferred` (held until prerequisites land) + `feedback_query_live_pg_proc_before_patching` (broadened to cover constraints + indexes).
+
+**Sign-off:** owner approved each migration before apply; 4 spot-checks across providers + funding categories confirmed Brevo aligned end-to-end.
+
+---
+
 ## 2026-05-08: Added SW_COURSE_SCHEDULE Brevo contact attribute
 
 **Type:** Additive Brevo contact attribute. No DB migration. Single shared file change in `_shared/route-lead.ts`. Three Edge Functions redeploy (every function that imports `_shared/route-lead.ts`).

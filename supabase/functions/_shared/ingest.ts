@@ -98,6 +98,27 @@ export interface CanonicalSubmission {
   // migration 0087.
   client_nonce: string | null;
 
+  // Switchable-waitlist-enrichment fields (migration 0099). All NULL on
+  // any form that doesn't capture them. start_timing / interest_breadth /
+  // investment_willingness / current_qualification come from the
+  // enrichment form chips; source_form distinguishes entry surface
+  // (switchable-waitlist vs fastrack-cohort-decline); enriched_at is the
+  // timestamp the enrichment landed.
+  start_timing: string | null;
+  interest_breadth: string | null;
+  investment_willingness: string | null;
+  current_qualification: string | null;
+  source_form: string | null;
+  enriched_at: string | null;
+
+  // Transient: parent_ref carries the parent submission's client_nonce
+  // when the enrichment form was reached via fastrack-cohort-decline.
+  // Used by the parent-lookup logic to override the email-based dedup
+  // path (more accurate when same email has multiple submissions).
+  // Not persisted as its own column — the resolved parent_submission_id
+  // captures the relationship.
+  parent_ref: string | null;
+
   raw_payload: JsonValue;
   archived_at: string | null;
 }
@@ -218,13 +239,38 @@ export async function insertSubmission(
   return await sql.begin(async (trx: Sql) => {
     await trx`SET LOCAL ROLE functions_writer`;
 
-    // Parent lookup (lead dedup v1, migration 0026). Match by lower(email) +
-    // course_id within the last 90 days, excluding archived rows. Earliest
-    // match wins (chains back to the original parent, not an intermediate
-    // re-application). Skip the lookup entirely when email is missing.
+    // Parent lookup. Two paths, parent_ref takes precedence:
+    //
+    // 1. parent_ref present (migration 0099, fastrack-cohort-decline path):
+    //    look up parent by client_nonce. Set when the /waitlist/ page was
+    //    reached via the cohort_decline redirect from fastrack thank-you.
+    //    Matching by client_nonce is more accurate than email when the
+    //    same person has multiple submissions across different courses.
+    //
+    // 2. Email-based dedup (lead dedup v1, migration 0026): match by
+    //    lower(email) + course_id within last 90 days, excluding archived
+    //    rows. Earliest match wins.
+    //
+    // parent_ref-first means a fastrack-cohort-decline learner's enrichment
+    // attaches to their original funded submission, not to whichever parent
+    // their email last matched.
     let parentSubmissionId: number | null = null;
     let parentPrimaryRoutedTo: string | null = null;
-    if (row.email) {
+    if (row.parent_ref) {
+      const [parent] = await trx<Array<{ id: number; primary_routed_to: string | null }>>`
+        SELECT id, primary_routed_to
+          FROM leads.submissions
+         WHERE client_nonce = ${row.parent_ref}::uuid
+           AND archived_at IS NULL
+         ORDER BY submitted_at ASC
+         LIMIT 1
+      `;
+      if (parent) {
+        parentSubmissionId = Number(parent.id);
+        parentPrimaryRoutedTo = parent.primary_routed_to;
+      }
+    }
+    if (parentSubmissionId === null && row.email) {
       const [parent] = await trx<Array<{ id: number; primary_routed_to: string | null }>>`
         SELECT id, primary_routed_to
           FROM leads.submissions
@@ -258,6 +304,8 @@ export async function insertSubmission(
         is_dq, dq_reason, session_id,
         experiment_id, experiment_variant,
         client_nonce,
+        start_timing, interest_breadth, investment_willingness, current_qualification,
+        source_form, enriched_at,
         raw_payload, archived_at,
         parent_submission_id
       ) VALUES (
@@ -275,6 +323,8 @@ export async function insertSubmission(
         ${row.is_dq}, ${row.dq_reason}, ${row.session_id},
         ${row.experiment_id}, ${row.experiment_variant},
         ${row.client_nonce},
+        ${row.start_timing}, ${row.interest_breadth}, ${row.investment_willingness}, ${row.current_qualification},
+        ${row.source_form}, ${row.enriched_at},
         ${trx.json(row.raw_payload)}, ${row.archived_at},
         ${parentSubmissionId}
       )
@@ -290,6 +340,29 @@ export async function insertSubmission(
              SET is_complete = true,
                  updated_at  = now()
            WHERE session_id  = ${row.session_id}
+        `;
+      }
+      // Mirror enrichment fields onto the parent row so the parent's Brevo
+      // contact carries them as SW_* attributes (route-lead.ts reads from
+      // the routed submission, which is the parent for cohort_decline-
+      // sourced enrichment). The trigger from migration 0098 + 0099 picks
+      // up the parent UPDATE and fires sync_leads_to_brevo automatically.
+      // Only fires when this is a waitlist-enrichment row AND a parent was
+      // resolved (either via parent_ref or email-keyed dedup).
+      if (
+        row.dq_reason === "waitlist_enrichment"
+        && parentSubmissionId !== null
+      ) {
+        await trx`
+          UPDATE leads.submissions
+             SET phone                  = COALESCE(${row.phone}, phone),
+                 start_timing           = COALESCE(${row.start_timing}, start_timing),
+                 interest_breadth       = COALESCE(${row.interest_breadth}, interest_breadth),
+                 investment_willingness = COALESCE(${row.investment_willingness}, investment_willingness),
+                 current_qualification  = COALESCE(${row.current_qualification}, current_qualification),
+                 enriched_at            = ${row.enriched_at},
+                 updated_at             = now()
+           WHERE id = ${parentSubmissionId}
         `;
       }
       // Update parent's counters atomically with the child insert.
@@ -454,6 +527,19 @@ function normalise(
 
     client_nonce: parseClientNonce(data["client_nonce"]),
 
+    // Switchable-waitlist-enrichment fields (migration 0099). Default NULL
+    // on every form except the enrichment form; enrichment branch below
+    // overrides. parent_ref is also enrichment-only: it's a UUID matching a
+    // parent submission's client_nonce, set by the /waitlist/ page when
+    // arrived via fastrack-cohort-decline redirect.
+    start_timing: null,
+    interest_breadth: null,
+    investment_willingness: null,
+    current_qualification: null,
+    source_form: null,
+    enriched_at: null,
+    parent_ref: null,
+
     raw_payload: rawPayload,
     archived_at: null,
   };
@@ -498,12 +584,31 @@ function normalise(
   }
 
   if (formName === "switchable-waitlist-enrichment") {
+    // Extract enrichment fields. Form chips submit hyphenated names; tolerate
+    // both forms in case the form ever standardises.
     return {
       ...base,
       email: firstString(data["email"], data["ref_token"], body["email"]),
       course_id: firstString(data["course_id"]),
+      phone: firstString(data["phone"], data["telephone"]) ?? base.phone,
       is_dq: true,
       dq_reason: "waitlist_enrichment",
+      start_timing: firstString(data["start_timing"], data["start-timing"]),
+      interest_breadth: firstString(data["interest_breadth"], data["interest-breadth"]),
+      investment_willingness: firstString(
+        data["investment_willingness"], data["investment-willingness"],
+      ),
+      current_qualification: firstString(
+        data["current_qualification"], data["current-qualification"],
+      ),
+      // source_form distinguishes entry surface; defaults to 'switchable-waitlist'
+      // if missing for backward compat (older /waitlist/ submissions).
+      source_form: firstString(data["source_form"], data["source-form"])
+        ?? "switchable-waitlist",
+      // parent_ref is a UUID matching a parent's client_nonce. Validated
+      // through parseClientNonce (same UUID rules); invalid → NULL.
+      parent_ref: parseClientNonce(data["parent_ref"] ?? data["parent-ref"] ?? data["parent"]),
+      enriched_at: base.submitted_at,
     };
   }
 
