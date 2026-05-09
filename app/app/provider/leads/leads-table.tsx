@@ -131,7 +131,7 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
               {filtered.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-3">
-                    <Link href={`/provider/leads/${r.id}`} className="text-slate-900 font-medium hover:underline">
+                    <Link href={`/provider/leads/${r.id}`} className="text-slate-900 font-medium hover:underline cursor-pointer">
                       {r.name}
                     </Link>
                     {r.email && <div className="text-xs text-slate-500">{r.email}</div>}
@@ -181,10 +181,10 @@ function FilterPill({
     <button
       type="button"
       onClick={onClick}
-      className={`px-3 py-1.5 rounded-md text-sm font-medium border transition-colors ${
+      className={`px-3 py-1.5 rounded-md text-sm font-medium border transition-colors cursor-pointer ${
         active
           ? "bg-slate-900 text-white border-slate-900"
-          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
       }`}
     >
       {label}

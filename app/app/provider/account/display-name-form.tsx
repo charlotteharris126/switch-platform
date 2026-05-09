@@ -26,7 +26,7 @@ export function DisplayNameForm({ initialValue, onSave }: Props) {
               setSaved(false);
               setEditing(true);
             }}
-            className="text-xs font-medium text-slate-600 hover:text-slate-900 underline-offset-2 hover:underline"
+            className="text-xs font-medium text-slate-600 hover:text-slate-900 underline-offset-2 hover:underline cursor-pointer"
           >
             Edit
           </button>
@@ -64,7 +64,7 @@ export function DisplayNameForm({ initialValue, onSave }: Props) {
               }
             });
           }}
-          className="px-3 py-1.5 bg-slate-900 text-white rounded-md text-xs font-semibold hover:bg-slate-800 disabled:opacity-60"
+          className="px-3 py-1.5 bg-slate-900 text-white rounded-md text-xs font-semibold hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
         >
           {pending ? "Saving…" : "Save"}
         </button>
@@ -76,7 +76,7 @@ export function DisplayNameForm({ initialValue, onSave }: Props) {
             setValue(initialValue);
             setError(null);
           }}
-          className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
+          className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer disabled:cursor-not-allowed"
         >
           Cancel
         </button>

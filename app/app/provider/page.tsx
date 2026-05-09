@@ -151,7 +151,7 @@ export default async function ProviderHomePage() {
             </div>
             <Link
               href="/provider/leads"
-              className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
             >
               See all &rarr;
             </Link>
@@ -168,7 +168,7 @@ export default async function ProviderHomePage() {
                 const name = [s.first_name, s.last_name].filter(Boolean).join(" ") || s.email || `Lead ${s.id}`;
                 return (
                   <li key={s.id} className="hover:bg-slate-50 transition-colors">
-                    <Link href={`/provider/leads/${s.id}`} className="flex items-center justify-between px-6 py-3 gap-3">
+                    <Link href={`/provider/leads/${s.id}`} className="flex items-center justify-between px-6 py-3 gap-3 cursor-pointer">
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-slate-900 truncate">{name}</p>
                         <p className="text-xs text-slate-500 truncate">{s.course_id ?? "—"}</p>
@@ -234,7 +234,7 @@ function Tile({ label, value, href, tone, subtitle }: { label: string; value: nu
   return (
     <Link
       href={href}
-      className={`block p-4 rounded-xl border ${TILE_TONE[tone]} hover:shadow-sm transition-shadow`}
+      className={`block p-4 rounded-xl border ${TILE_TONE[tone]} hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer`}
     >
       <p className="text-xs uppercase tracking-wide font-semibold text-slate-600">{label}</p>
       <p className="text-3xl font-semibold text-slate-900 mt-1 tabular-nums">{value}</p>

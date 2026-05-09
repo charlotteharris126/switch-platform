@@ -75,7 +75,7 @@ export function PasskeyList({ passkeys, onRemove }: Props) {
                       type="button"
                       onClick={() => fireRemove(pk.id)}
                       disabled={pending}
-                      className="px-3 py-1 text-xs font-semibold text-white bg-rose-600 rounded-md hover:bg-rose-700 disabled:opacity-60"
+                      className="px-3 py-1 text-xs font-semibold text-white bg-rose-600 rounded-md hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
                     >
                       {isPending ? "Removing…" : "Confirm remove"}
                     </button>
@@ -83,7 +83,7 @@ export function PasskeyList({ passkeys, onRemove }: Props) {
                       type="button"
                       onClick={() => setConfirmingId(null)}
                       disabled={pending}
-                      className="px-3 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                      className="px-3 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer disabled:cursor-not-allowed"
                     >
                       Cancel
                     </button>
@@ -95,7 +95,7 @@ export function PasskeyList({ passkeys, onRemove }: Props) {
                       setError(null);
                       setConfirmingId(pk.id);
                     }}
-                    className="px-3 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-md border border-transparent hover:border-rose-200"
+                    className="px-3 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-md border border-transparent hover:border-rose-200 cursor-pointer transition-colors"
                   >
                     Remove
                   </button>

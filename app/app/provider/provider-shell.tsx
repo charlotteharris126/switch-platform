@@ -1,9 +1,11 @@
-// Layout shell shared across /provider/* pages: top nav with Leads / Sign out.
+// Layout shell shared across /provider/* pages: dark top nav with the
+// SwitchLeads logo + Home / Leads / Account / Sign out.
 //
-// Server Component. The sign-out form uses the same Server Action pattern as
-// /provider/page.tsx — useFormStatus on the button gives a pending state.
+// Server Component. The sign-out form uses the same Server Action pattern
+// as /provider/page.tsx — useFormStatus on the button gives a pending state.
 
 import Link from "next/link";
+import Image from "next/image";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
@@ -18,11 +20,17 @@ interface Props {
 export async function ProviderShell({ active, children }: Props) {
   return (
     <div className="min-h-screen bg-slate-50">
-      <nav className="bg-white border-b border-slate-200">
+      <nav className="bg-slate-900 border-b border-slate-800">
         <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-          <Link href="/provider" className="flex items-center gap-2">
-            <span className="text-xs uppercase tracking-widest text-slate-500 font-semibold">SwitchLeads</span>
-            <span className="text-sm font-semibold text-slate-900">Portal</span>
+          <Link href="/provider" className="flex items-center gap-3 cursor-pointer">
+            <Image
+              src="/brand/logo-dark.svg"
+              alt="SwitchLeads"
+              width={140}
+              height={21}
+              priority
+              className="h-5 w-auto"
+            />
           </Link>
           <div className="flex items-center gap-1 text-sm">
             <NavLink href="/provider" label="Home" active={active === "home"} />
@@ -43,8 +51,10 @@ function NavLink({ href, label, active }: { href: string; label: string; active:
   return (
     <Link
       href={href}
-      className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
-        active ? "bg-slate-100 text-slate-900 font-semibold" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+      className={`px-3 py-1.5 rounded-md text-sm transition-colors cursor-pointer ${
+        active
+          ? "bg-slate-800 text-white font-semibold"
+          : "text-slate-300 hover:bg-slate-800 hover:text-white"
       }`}
     >
       {label}

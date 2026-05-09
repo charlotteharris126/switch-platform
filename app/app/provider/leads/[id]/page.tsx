@@ -85,7 +85,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
   return (
     <ProviderShell active="leads">
       <div className="max-w-3xl mx-auto p-6">
-        <Link href="/provider/leads" className="text-sm text-slate-600 hover:text-slate-900">
+        <Link href="/provider/leads" className="text-sm text-slate-600 hover:text-slate-900 cursor-pointer">
           &larr; All leads
         </Link>
 

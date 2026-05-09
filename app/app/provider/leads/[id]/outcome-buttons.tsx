@@ -2,23 +2,35 @@
 
 import { useTransition, useState } from "react";
 import {
-  allowedNextStatuses,
+  isAllowedTransition,
   lostReasonsFor,
   STATUS_LABEL,
   type LeadStatus,
   type LostReason,
 } from "@/lib/lead-status";
 
-const TONE: Record<LeadStatus, string> = {
-  open: "border-slate-200 text-slate-700 hover:bg-slate-50",
-  attempt_1_no_answer: "border-amber-200 text-amber-800 hover:bg-amber-50",
-  attempt_2_no_answer: "border-amber-300 text-amber-800 hover:bg-amber-100",
-  attempt_3_no_answer: "border-orange-300 text-orange-800 hover:bg-orange-50",
-  enrolment_meeting_booked: "border-blue-200 text-blue-700 hover:bg-blue-50",
-  enrolled: "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
-  lost: "border-rose-200 text-rose-700 hover:bg-rose-50",
-  cannot_reach: "border-rose-200 text-rose-700 hover:bg-rose-50",
-  presumed_enrolled: "border-emerald-200 text-emerald-700",
+// Main happy-path progression. Click any unfilled step to advance.
+// Stepper hides closeout statuses (lost, cannot_reach) — those sit as
+// secondary actions below the line.
+const STEPPER_PATH: ReadonlyArray<LeadStatus> = [
+  "open",
+  "attempt_1_no_answer",
+  "attempt_2_no_answer",
+  "attempt_3_no_answer",
+  "enrolment_meeting_booked",
+  "enrolled",
+];
+
+const STEPPER_SHORT_LABEL: Record<LeadStatus, string> = {
+  open: "Open",
+  attempt_1_no_answer: "1st",
+  attempt_2_no_answer: "2nd",
+  attempt_3_no_answer: "3rd",
+  enrolment_meeting_booked: "Meeting",
+  enrolled: "Enrolled",
+  lost: "Lost",
+  cannot_reach: "Cannot reach",
+  presumed_enrolled: "Presumed",
 };
 
 const LOST_REASON_LABEL: Record<LostReason, string> = {
@@ -51,8 +63,9 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
     lostReasonsFor(currentStatus)[0] ?? "other",
   );
 
-  const nextStatuses = allowedNextStatuses(currentStatus);
   const lostReasons = lostReasonsFor(currentStatus);
+  const isOnPath = STEPPER_PATH.includes(currentStatus);
+  const isClosedOut = currentStatus === "lost" || currentStatus === "presumed_enrolled";
 
   function fire(value: LeadStatus, reason?: LostReason) {
     setError(null);
@@ -69,115 +82,246 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
     });
   }
 
-  if (nextStatuses.length === 0) {
+  // Lock-out states (terminal, no further moves possible)
+  if (isClosedOut) {
     return (
       <div className="mt-4 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-md p-3">
-        This lead is settled at <strong>{STATUS_LABEL[currentStatus]}</strong>. No
-        further outcomes can be set from the portal. If something needs unwinding,
-        message Charlotte.
+        This lead is settled at <strong>{STATUS_LABEL[currentStatus]}</strong>.
+        No further outcomes can be set from the portal — message Charlotte if
+        anything needs unwinding.
       </div>
     );
   }
 
-  // Group: progression statuses (attempts + meeting + enrolled) vs terminal-ish (lost / cannot_reach)
-  const progressKeys: LeadStatus[] = [
-    "attempt_1_no_answer",
-    "attempt_2_no_answer",
-    "attempt_3_no_answer",
-    "enrolment_meeting_booked",
-    "enrolled",
-  ];
-  const progressNext = nextStatuses.filter((s) => progressKeys.includes(s));
-  const closeoutNext = nextStatuses.filter((s) => s === "lost" || s === "cannot_reach");
+  // Off-path current state (cannot_reach) — render mini message + close-out only
+  if (!isOnPath && currentStatus === "cannot_reach") {
+    return (
+      <div className="mt-4 space-y-3">
+        <div className="text-sm text-slate-600 bg-amber-50 border border-amber-200 rounded-md p-3">
+          Marked <strong>Cannot reach</strong>. If the learner re-engages you can
+          still move them to <em>Meeting booked</em> or <em>Enrolled</em>.
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(["enrolment_meeting_booked", "enrolled"] as LeadStatus[]).map((s) => (
+            <PrimaryButton
+              key={s}
+              label={STATUS_LABEL[s]}
+              pending={pending && pendingValue === s}
+              disabled={pending}
+              onClick={() => fire(s)}
+              tone="ok"
+            />
+          ))}
+          <SecondaryButton
+            label="Mark lost…"
+            pending={pending && pendingValue === "lost"}
+            disabled={pending}
+            onClick={() => setShowLost((v) => !v)}
+            tone="rose"
+          />
+        </div>
+        {renderLostPicker()}
+        {error && renderError()}
+      </div>
+    );
+  }
+
+  // Stepper-rendered statuses (open + attempt 1/2/3 + meeting + enrolled)
+  const currentIndex = STEPPER_PATH.indexOf(currentStatus);
 
   return (
-    <div className="mt-4 space-y-4">
-      {progressNext.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-            Move forward
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {progressNext.map((s) => {
-              const isPending = pending && pendingValue === s;
-              return (
+    <div className="mt-4 space-y-5">
+      {/* Stepper */}
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
+          Move this lead forward
+        </p>
+        <div className="flex items-stretch gap-0">
+          {STEPPER_PATH.map((step, idx) => {
+            const isCurrent = idx === currentIndex;
+            const isPast = idx < currentIndex;
+            const isFuture = idx > currentIndex;
+            const canClick = isFuture && isAllowedTransition(currentStatus, step);
+            const isPending = pending && pendingValue === step;
+            return (
+              <div key={step} className="flex-1 flex flex-col items-center min-w-0 relative">
+                {/* Connector to next step */}
+                {idx < STEPPER_PATH.length - 1 && (
+                  <div
+                    className={`absolute top-4 left-1/2 right-0 h-0.5 ${
+                      idx < currentIndex ? "bg-slate-900" : "bg-slate-200"
+                    }`}
+                    style={{ width: "100%" }}
+                  />
+                )}
                 <button
-                  key={s}
                   type="button"
-                  disabled={pending}
-                  onClick={() => fire(s)}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium border bg-white ${TONE[s]} disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
+                  disabled={!canClick || pending}
+                  onClick={() => canClick && fire(step)}
+                  aria-label={`Mark ${STATUS_LABEL[step]}`}
+                  className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold border-2 transition-all ${
+                    isCurrent
+                      ? "bg-slate-900 border-slate-900 text-white"
+                      : isPast
+                        ? "bg-slate-300 border-slate-300 text-slate-500 cursor-not-allowed"
+                        : canClick
+                          ? "bg-white border-slate-300 text-slate-500 hover:border-slate-900 hover:text-slate-900 hover:scale-110 cursor-pointer"
+                          : "bg-white border-slate-200 text-slate-300 cursor-not-allowed"
+                  }`}
                 >
-                  {isPending ? "…" : STATUS_LABEL[s]}
+                  {isPending ? (
+                    <span className="animate-pulse">…</span>
+                  ) : isPast ? (
+                    "✓"
+                  ) : (
+                    idx + 1
+                  )}
                 </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {closeoutNext.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-            Close out
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {closeoutNext.map((s) => {
-              const isPending = pending && pendingValue === s;
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  disabled={pending}
-                  onClick={() => {
-                    if (s === "lost") {
-                      setShowLost((v) => !v);
-                      return;
-                    }
-                    fire(s);
-                  }}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium border bg-white ${TONE[s]} disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
+                <span
+                  className={`mt-2 text-xs text-center px-1 leading-tight ${
+                    isCurrent
+                      ? "text-slate-900 font-semibold"
+                      : isPast
+                        ? "text-slate-400"
+                        : canClick
+                          ? "text-slate-700"
+                          : "text-slate-300"
+                  }`}
                 >
-                  {isPending ? "…" : STATUS_LABEL[s]}
-                </button>
-              );
-            })}
-          </div>
+                  {STEPPER_SHORT_LABEL[step]}
+                </span>
+              </div>
+            );
+          })}
         </div>
-      )}
+        <p className="text-xs text-slate-500 mt-3">
+          Click a future step to mark it. Past steps are locked — message Charlotte if
+          something needs unwinding.
+        </p>
+      </div>
 
-      {showLost && (
-        <div className="p-3 bg-rose-50 border border-rose-200 rounded-md">
-          <label className="block text-xs font-semibold text-rose-900 uppercase tracking-wide">
-            Why was this lost?
-          </label>
-          <select
-            value={lostReason}
-            onChange={(e) => setLostReason(e.target.value as LostReason)}
-            className="mt-1 w-full border border-rose-300 rounded-md px-2 py-1.5 text-sm bg-white"
-          >
-            {lostReasons.map((r) => (
-              <option key={r} value={r}>
-                {LOST_REASON_LABEL[r]}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => fire("lost", lostReason)}
-            disabled={pending}
-            className="mt-2 px-3 py-1.5 bg-rose-600 text-white rounded-md text-sm font-semibold hover:bg-rose-700 disabled:opacity-60"
-          >
-            {pending && pendingValue === "lost" ? "Marking lost…" : "Mark lost"}
-          </button>
+      {/* Closeouts — secondary actions */}
+      <div className="border-t border-slate-100 pt-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+          Or close this out
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {isAllowedTransition(currentStatus, "cannot_reach") && (
+            <SecondaryButton
+              label="Cannot reach"
+              pending={pending && pendingValue === "cannot_reach"}
+              disabled={pending}
+              onClick={() => fire("cannot_reach")}
+              tone="amber"
+            />
+          )}
+          {isAllowedTransition(currentStatus, "lost") && (
+            <SecondaryButton
+              label="Mark lost…"
+              pending={pending && pendingValue === "lost"}
+              disabled={pending}
+              onClick={() => setShowLost((v) => !v)}
+              tone="rose"
+            />
+          )}
         </div>
-      )}
+      </div>
 
-      {error && (
-        <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2">
-          {error}
-        </div>
-      )}
+      {renderLostPicker()}
+      {error && renderError()}
     </div>
+  );
+
+  function renderLostPicker() {
+    if (!showLost) return null;
+    return (
+      <div className="p-3 bg-rose-50 border border-rose-200 rounded-md">
+        <label className="block text-xs font-semibold text-rose-900 uppercase tracking-wide">
+          Why was this lost?
+        </label>
+        <select
+          value={lostReason}
+          onChange={(e) => setLostReason(e.target.value as LostReason)}
+          className="mt-1 w-full border border-rose-300 rounded-md px-2 py-1.5 text-sm bg-white cursor-pointer"
+        >
+          {lostReasons.map((r) => (
+            <option key={r} value={r}>
+              {LOST_REASON_LABEL[r]}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => fire("lost", lostReason)}
+          disabled={pending}
+          className="mt-2 px-3 py-1.5 bg-rose-600 text-white rounded-md text-sm font-semibold hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+        >
+          {pending && pendingValue === "lost" ? "Marking lost…" : "Mark lost"}
+        </button>
+      </div>
+    );
+  }
+
+  function renderError() {
+    return (
+      <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2">
+        {error}
+      </div>
+    );
+  }
+}
+
+function PrimaryButton({
+  label,
+  pending,
+  disabled,
+  onClick,
+  tone,
+}: {
+  label: string;
+  pending: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  tone: "ok";
+}) {
+  void tone;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="px-4 py-2 rounded-md text-sm font-semibold border bg-slate-900 text-white border-slate-900 hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+    >
+      {pending ? "…" : label}
+    </button>
+  );
+}
+
+function SecondaryButton({
+  label,
+  pending,
+  disabled,
+  onClick,
+  tone,
+}: {
+  label: string;
+  pending: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  tone: "amber" | "rose";
+}) {
+  const toneClass =
+    tone === "amber"
+      ? "border-amber-300 text-amber-800 bg-white hover:bg-amber-50"
+      : "border-rose-300 text-rose-700 bg-white hover:bg-rose-50";
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-md text-sm font-medium border ${toneClass} disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors`}
+    >
+      {pending ? "…" : label}
+    </button>
   );
 }
