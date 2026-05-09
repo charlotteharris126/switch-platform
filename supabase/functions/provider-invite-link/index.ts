@@ -195,7 +195,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (existing.status === "suspended") {
       return jsonError("user_suspended", "this email is suspended for this provider; admin must un-suspend first", 409);
     }
-    providerUserId = existing.id;
+    // postgres-js returns BIGINT columns as strings; coerce so the JSON
+    // payload encodes as a number not "1".
+    providerUserId = Number(existing.id);
     // Re-issue: replace invite hash + expiry, leave status as-is. If they
     // were 'active' (already enrolled before), this issues a NEW invite that
     // — when consumed — registers an additional passkey for the same user.
@@ -209,7 +211,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       )
       RETURNING id
     `;
-    providerUserId = inserted.id;
+    providerUserId = Number(inserted.id);  // BIGINT → string from postgres-js, coerce
   }
 
   const token = await signInviteToken(providerUserId, inviteSecret);

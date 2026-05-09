@@ -37,11 +37,20 @@ export async function verifyInviteToken(token: string, secret: string): Promise<
     return { ok: false, error: "malformed" };
   }
 
-  if (
-    typeof payload.provider_user_id !== "number" ||
-    typeof payload.issued_at !== "number" ||
-    typeof payload.expires_at !== "number"
-  ) {
+  // Defensive: postgres-js used to return BIGINT-as-string and embed "1"
+  // into older tokens. Accept either number or numeric string and coerce.
+  const puidRaw = payload.provider_user_id as unknown;
+  let puid: number;
+  if (typeof puidRaw === "number") {
+    puid = puidRaw;
+  } else if (typeof puidRaw === "string" && /^\d+$/.test(puidRaw)) {
+    puid = parseInt(puidRaw, 10);
+  } else {
+    return { ok: false, error: "malformed" };
+  }
+  payload.provider_user_id = puid;
+
+  if (typeof payload.issued_at !== "number" || typeof payload.expires_at !== "number") {
     return { ok: false, error: "malformed" };
   }
 
