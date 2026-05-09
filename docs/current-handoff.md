@@ -1,113 +1,82 @@
-# Platform Handoff, Session 37, 2026-05-09
+# Platform Handoff, Session 38, 2026-05-09
 
 ## Current state
 
-Provider portal MVP P2 + P3 shipped end-to-end on production. Demo provider (`demo-provider-ltd`, `is_demo=true`) seeded with 12 fake leads spanning all 9 statuses; passkey enrolment, sign-in, leads list, lead detail, outcome marking all live and owner-tested. Five migrations applied (0101 through 0105), one new Edge Function deployed, 14 commits to main. Real-provider cutover (EMS first, mid-next-week target) gated on three Clara-approved conditions: audit-log wrapper, RLS proof, `/ultrareview`. Repo + origin clean on `main@974ffc6`.
+Two of Clara's three EMS-cutover gating conditions cleared this session: audit-log wrapper wired (mig 0106 + Server Action update) and RLS proof signed off 14/14 PASS (data-ops 020 + runbook). Real surprise: the proof caught that migration 0096's write-side policies were no-ops because table-level GRANTs were missing — `markOutcomeAction` has been silently failing since Session 37 despite the "owner-tested" claim. Migration 0108 grants the privileges 0096's comment already promised. Charlotte needs to retest outcome marking on the demo provider before EMS cutover. Clara's third gating condition was a multi-agent cloud diff review that isn't available in this setup; flagged to Charlotte to confirm an alternative review shape (focused single-agent diff review, or her own read).
 
 ## What was done this session
 
 Migrations:
 
-- **0101** filter `is_demo` providers out of `crm.sync_leads_to_brevo` (single filter point covers every trigger + the daily reconcile cron + direct callers; demo data never reaches Brevo)
-- **0102** `crm.provider_passkeys` table + invite-token state columns on `crm.provider_users` + `status='invited'` value + `enrolled_at` timestamp
-- **0103** `crm.provider_users.auth_user_id` made nullable so the Supabase auth user is created at register-verify (not invite-time), closing the OTP-hijack edge case where a dormant auth identity could be hit with `signInWithOtp` before passkey registration
-- **0104** extend `public.get_shared_secret()` allowlist to include `PROVIDER_INVITE_SECRET` (vault becomes single source of truth alongside `AUDIT_SHARED_SECRET`)
-- **0105** GRANT `service_role` on `crm` + `leads` + `audit` schemas with `ALTER DEFAULT PRIVILEGES` so future tables auto-grant. Closes the project-wide gap that surfaced when the new passkey API routes (which use service-role to read pre-session) returned silent empties
+- **0106** `public.log_provider_action_v1` — public-schema thin wrapper over `audit.log_provider_action`. SECURITY INVOKER, delegates auth identity through per-request `request.jwt.claims` GUC. Lets supabase-js `.rpc()` reach the audit writer without exposing the audit schema in the Data API. Versioned (`_v1`) for forward-compatible deprecation.
+- **0107** `REVOKE EXECUTE FROM anon` on the wrapper. Supabase's project-wide `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE TO {anon, authenticated, service_role}` auto-granted anon despite the 0106 `REVOKE FROM PUBLIC`. Inner audit function already rejects anon (`auth.uid()` NULL), but visible least-privilege wins.
+- **0108** `GRANT UPDATE ON crm.enrolments` + `GRANT INSERT ON crm.disputes` to `authenticated`. The bug: migration 0096 shipped policies (`provider_update_enrolments`, `provider_insert_own_disputes`) without the underlying GRANTs, so PostgreSQL short-circuited every write with `42501 permission denied` before RLS even evaluated. Demo provider's enrolments still had seed-time `updated_at` values, confirming Charlotte's "owner-tested" outcome marking never persisted. Fix grants what 0096's comment promised. Row scope still enforced by 0096 policies (re-ran the RLS proof post-grant — cross-tenant writes still return zero rows / RLS rejection).
 
-Edge Functions:
+Server Action:
 
-- **`provider-invite-link`** new — admin-authed via `x-audit-key` (vault-read), generates 15-min HMAC enrolment-only token, single-use enforced via sha256 hash on the row, sends Brevo invite email; demo-only fence (`is_demo=true` required) until Clara's three gating conditions clear; defensive trailing-slash strip on `PORTAL_BASE_URL`; `Number()` coercion on BIGINT `provider_user_id` before signing (postgres-js footgun)
+- **`app/app/provider/leads/[id]/actions.ts`** — `markOutcomeAction` now: SELECTs before-state, updates, calls `public.log_provider_action_v1` with before/after/context. Surfaces audit failure to caller (returns `ok:false`) rather than swallowing. Idempotent on identical-state retry (early return if `before == after`). The atomic UPDATE+audit refactor (single SQL function) is flagged below for Charlotte's call.
 
-Next.js portal (`app.switchleads.co.uk`):
+RLS proof + runbook:
 
-- **`/passkey-login`** + **`/passkey-enrol/[token]`** pages with `@simplewebauthn/browser` ceremonies and humanised error messages
-- **4 API routes** (`register-options`, `register-verify`, `login-options`, `login-verify`) — verify ceremonies via `@simplewebauthn/server`, mint Supabase sessions via `admin.generateLink('magiclink')` + server-side `verifyOtp` (Supabase Auth doesn't natively support WebAuthn — confirmed via docs)
-- **`/provider`** home rebuilt with four counter tiles (Open / In progress / Enrolled this month / Awaiting outcome > 7 days), CTA into the leads list
-- **`/provider/leads`** RLS-scoped list (name / course / routed-when / status badge); click row → detail
-- **`/provider/leads/[id]`** lead detail with full routed payload (contact, learner, course, free-text answers); outcome marking buttons calling Server Action that writes `crm.enrolments` via RLS, with `revalidatePath` on success
-- **`ProviderShell`** top nav (Home / Leads / Sign out with `useFormStatus` pending state)
-- **`proxy.ts`** updated: `/passkey-login`, `/passkey-enrol`, `/api/passkey/*` added to `SHARED_AUTH_PATHS` so they bypass the auth gate and hostname rewrite
+- **`supabase/data-ops/020_rls_proof_2026_05_09.sql`** — 14 assertions covering helper return value, baseline own-data SELECT, cross-tenant SELECT on 6 tables (submissions, routing_log, enrolments, fastrack_submissions, providers, provider_users), cross-tenant UPDATE on enrolments, cross-tenant INSERT on disputes, audit `actor_provider_id` spoof-rejection, `portal_enabled=false` helper-NULL + table-empty pair. Auth simulated via `SET LOCAL ROLE authenticated` + `set_config('request.jwt.claims', ...)`. All side effects rolled back; one audit-id sequence gap (~3-4 ids) consumed during proof iteration.
+- **`docs/rls-proof-2026-05-09.md`** — runbook + result table. 14/14 PASS. Documents what the proof proves and what it doesn't.
 
-Admin polish:
+Changelog:
 
-- New "Portal access" card on `/admin/providers/[id]` with Send portal invite form (pre-filled, demo badge, validates `portal_enabled=true`)
-- Demo data fence on `/admin/page.tsx`, `/admin/leads/page.tsx`, `/admin/providers/page.tsx`, `/admin/profit/page.tsx` via new `lib/demo.ts` helper (cached 30s)
-- Demo provider violet pill links above the providers table for direct access to demo detail page
-
-Auth model relock:
-
-- Pivot from magic-link to passkey-only after Charlotte raised UK GDPR Article 32 concerns (auth tokens at rest in email inboxes)
-- Clara approved the new model in `accounts-legal/changelog.md`: PPA v2 covers it, no addendum gate, sub-processor disclosure unchanged
-- Three conditions before real-provider cutover, captured in `accounts-legal/docs/current-handoff.md` item 2
-
-Demo data:
-
-- `data-ops/019_seed_demo_provider_2026_05_09.sql` ran cleanly — 1 provider + 12 fake leads + 12 routing_log + 12 enrolments. Brevo never received any of it (filter held; verified zero pg_net dispatches from the 12 enrolment INSERTs)
-
-Bug fixes worth naming (each surfaced as a different symptom but rooted in a real architectural gap):
-
-- **BIGINT-as-string coercion** — postgres-js returns BIGINT columns as JS strings; my Edge Function was embedding `"1"` into the JSON token, Next.js verify did `typeof === "number"` and rejected as malformed. Fixed both sides defensively.
-- **`service_role` schema GRANTs** — service_role had `BYPASSRLS` but no schema/table privileges on `crm`/`leads`. supabase-js calls returned `data: null` with no error, surfaced as 404 user_not_found. Fixed via 0105.
-- **Vault drift class** — `PROVIDER_INVITE_SECRET` was in two stores (Supabase Edge Function secrets + Netlify env), they disagreed, every invite click failed signature verify. Same fix pattern as 0019 did for `AUDIT_SHARED_SECRET`.
-- **Next.js 16 middleware → proxy convention** — added `middleware.ts` not knowing Next 16 had renamed it. Build failed; renamed routes to non-conflicting paths (`/passkey-login`, `/passkey-enrol`) so the existing `proxy.ts` works.
+- **`docs/changelog.md`** — Session 38 block at top covering 0106/0107/0108 + the missing-GRANT bug.
 
 ## Next steps
 
-1. **Wire `audit.log_provider_action` via public-schema wrapper** (~30 min, gates EMS cutover). Audit schema isn't exposed in Data API; either expose it + add `service_role` grant, or add a `public.log_provider_action_v1(...)` thin wrapper that delegates. Server Action `markOutcomeAction` has TODO comment in place. Required before real-provider cutover for Article 30 ROPA evidence.
+1. **Charlotte: re-test outcome marking on the demo portal.** Pre-0108, `markOutcomeAction` was silently failing. Post-0108, it should persist. Click 1-2 outcomes in the demo provider portal, confirm `crm.enrolments.updated_at` advances and `audit.actions` gets a new `surface='provider'` row. Quick query: `SELECT id, status, status_updated_at, updated_at FROM crm.enrolments WHERE provider_id='demo-provider-ltd' ORDER BY updated_at DESC LIMIT 5;`. If the audit row also appears with `actor_provider_id='demo-provider-ltd'` and `action='mark_outcome'`, the wrapper + grants are confirmed end-to-end.
 
-2. **RLS proof** (~1h, Clara condition). Build a fixture with the demo provider + one real provider. Authenticate via supabase-js as the demo passkey-enrolled user. Attempt `SELECT` on `leads.submissions`, `crm.enrolments`, `leads.routing_log`, `crm.disputes` rows belonging to the real provider. Assert zero rows returned in every case. Confirm `crm.provider_user_provider_id()` returns NULL for an unflagged (`portal_enabled=false`) provider. Output a runbook in `platform/docs/rls-proof-2026-05-XX.md`.
+2. **Decide an alternative review for Clara's gating condition #3.** The condition was originally framed as a multi-agent cloud diff review that this setup doesn't have. Two workable substitutes: (a) I delegate a focused single-agent code review across migrations 0091-0108 + the `app/app/provider/**` portal routes via the Agent tool with a clear "look for non-reversible migrations, RLS gaps, secret leaks, design-doc-vs-migration drift" brief; (b) Charlotte reads the diff herself. Either clears condition #3 in spirit. Charlotte to call which.
 
-3. **Run `/ultrareview`** on migrations 0091-0105 + portal route code (Clara condition, mandatory before real-provider cutover). Cloud-based multi-agent review across the diff per `.claude/rules/data-infrastructure.md` item 8.
+3. **Decide: atomic outcome-marking refactor.** The current `markOutcomeAction` is SELECT → UPDATE → audit RPC, three round-trips. Failure mode: if audit RPC fails after UPDATE succeeds, the user sees an error, retries, but on retry the early-return-if-identical-state path skips audit — leaving a permanent ROPA gap. The proper shape is a single SQL function (e.g. `crm.provider_mark_outcome(submission_id, status, lost_reason)`) that does UPDATE + audit in one transaction with ROLLBACK on failure. Recommendation: ship the atomic refactor before EMS cutover — it's ~30-60 min and removes a real (rare) ROPA gap. Ask Charlotte to confirm before I write 0109.
 
-4. **Disable email OTP at Supabase project level** (Supabase dashboard → Authentication → Providers → Email → disable). Stops `signInWithOtp` working against any provider auth user, even though we never call it ourselves. Defence-in-depth.
+4. **Disable email OTP at Supabase project level** (Supabase dashboard → Authentication → Providers → Email → disable). Stops `signInWithOtp` working against any provider auth user, even though we never call it ourselves. Defence-in-depth, carried over from Session 37.
 
-5. **Cleanup duplicate secret stores** (Charlotte action, ~5 min): delete `PROVIDER_INVITE_SECRET` from Supabase Edge Function secrets dashboard, delete `PROVIDER_INVITE_SECRET` + `AUDIT_SHARED_SECRET` from Netlify env (vault-RPC bypasses both now). Harmless if left, but tidy.
+5. **Cleanup duplicate secret stores** (Charlotte action, ~5 min): delete `PROVIDER_INVITE_SECRET` from Supabase Edge Function secrets dashboard, delete `PROVIDER_INVITE_SECRET` + `AUDIT_SHARED_SECRET` from Netlify env. Vault-RPC bypasses both now. Carried over from Session 37.
 
-6. **P4 admin polish** (~1-2h): last-login column on `/admin/providers`, "providers without recent login" tile on `/admin` home, provider-side activity panel on `/admin/leads/[id]`, Brevo "new lead routed" template updated to deep-link `/provider/leads/[id]` instead of "check your sheet". Templates dormant until Brevo IDs set.
+6. **P4 admin polish** (~1-2h): last-login column on `/admin/providers`, "providers without recent login" tile on `/admin` home, provider-side activity panel on `/admin/leads/[id]`, Brevo "new lead routed" template updated to deep-link `/provider/leads/[id]`. Templates dormant until Brevo IDs set.
 
-7. **EMS cutover sequence** (target mid-next-week, gated on 1+2+3 clearing). Day 0 invite, days 0-14 parallel sheet + portal, day 14 emails switch to portal-only, day 21 sheet append disabled. Clara's optional PPA clarification paragraph folds into addendum stack ticket [869d61kft](https://app.clickup.com/t/869d61kft) when it next goes out.
+7. **EMS cutover sequence** (target mid-next-week, gated on step 1 + 2 clearing). Day 0 invite, days 0-14 parallel sheet + portal, day 14 emails switch to portal-only, day 21 sheet append disabled. Clara's optional PPA clarification paragraph folds into addendum stack ticket [869d61kft](https://app.clickup.com/t/869d61kft) when it next goes out.
 
 8. **SwitchLeads provider-facing Brevo template drafts** (when auto-flip cron re-arms): `BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING` (day-12), day-14 confirmation, day-19 dispute reminder. Charlotte voice (`charlotte-voice.md`), no PII (count + portal link only). Owner approves before live.
 
 9. **Re-arm auto-flip + day-12 warning crons** when prerequisites clear: Wren's day-12 template + Mira's activity-gate framework + provider heads-up emails (Nell). Clara's PPA review now cleared. One SQL block re-schedules both.
 
-10. **Verify Mable's fastrack frontend redirect** for cohort_decline + l3_mismatch (Mable shipped commit `bd7093c` 2026-05-09 evening). Watch `leads.dead_letter` 24-48h for any `edge_function_brevo_upsert` rows with payload `switchable-waitlist-enrichment` carrying `parent_ref` + `source_form='fastrack-cohort-decline'` or `'fastrack-l3-mismatch'`. Clean = working.
+10. **Verify Mable's fastrack frontend redirect** for cohort_decline + l3_mismatch. Watch `leads.dead_letter` 24-48h for any `edge_function_brevo_upsert` rows with payload `switchable-waitlist-enrichment` carrying `parent_ref` + `source_form='fastrack-cohort-decline'` or `'fastrack-l3-mismatch'`. Clean = working.
 
 11. **Pre-fill enrichment form via backend lookup** (smart-to-have, Mable's flag). When `/waitlist/` loads with `?parent=<client_nonce>`, currently re-asks for phone (sloppy to pass PII via URL). Cleaner: small new Edge Function `enrichment-prefill` reads parent submission by client_nonce, returns public-safe pre-fillable fields. Lifts enrichment completion rate. No deadline.
 
-12. **Re-run `data-ops/018` for any rows written between SQL run and Mable's form-side fix** (Mable Session 5 push, 2026-05-09 evening). Quick query: `SELECT id, dq_reason, created_at FROM leads.submissions WHERE dq_reason IN ('age', 'location', 'level', 'qual') AND created_at > '<data-ops/018 run time>'`. If non-zero, re-run the same UPDATE block. 5-min job. After this second pass, future submissions won't write deprecated values, and `data-ops/018` retires.
+12. **Re-run `data-ops/018` for any rows written between SQL run and Mable's form-side fix** (Mable Session 5 push, 2026-05-09 evening). Quick query: `SELECT id, dq_reason, created_at FROM leads.submissions WHERE dq_reason IN ('age', 'location', 'level', 'qual') AND created_at > '<data-ops/018 run time>'`. If non-zero, re-run the same UPDATE block. After this second pass, `data-ops/018` retires.
 
-13. **Provider portal Conditional Mediation** (UX polish, ~30 min). Wire `useBrowserAutofill: true` on `/passkey-login` so a saved passkey shows up as autofill on the email field and a single tap completes sign-in. Currently disabled (caused user confusion this session). Future polish, not blocker.
+13. **Provider portal Conditional Mediation** (UX polish, ~30 min). Wire `useBrowserAutofill: true` on `/passkey-login` so a saved passkey shows up as autofill. Currently disabled (caused user confusion in Session 37).
 
 ## Decisions and open questions
 
 ### Decided this session
 
-- **Auth model: passkey-only with enrolment-only invite link** (was magic-link). UK GDPR Article 32: emailed auth tokens sit at rest in inboxes / IMAP / backups; passkeys never leave the device. Why now: Charlotte raised the concern mid-session; Clara approved the new shape same session.
-- **Custom WebAuthn implementation** (Option A from the auth-model decision tree). Supabase Auth's MFA surface is TOTP + SMS only; verified docs say no native passkey support. Why custom over a vendor (Hanko, Stytch, Clerk): no new sub-processor, no new monthly cost, no new vendor in the data-flow disclosure.
-- **Auth user creation deferred to register-verify** (not at invite-time). An invited-but-not-enrolled email would otherwise have a dormant auth identity that an attacker could hit with `signInWithOtp`. Migration 0103 made `auth_user_id` nullable to support this.
-- **Vault is single source of truth for shared secrets** (`AUDIT_SHARED_SECRET`, `PROVIDER_INVITE_SECRET`). Two-store drift class (Session 9 incident) bit again this session before the refactor; pattern from 0019 extended via 0104. Future shared secrets ship the same shape: `vault.create_secret()` + extend `public.get_shared_secret()` allowlist + read via the helper from any consumer.
-- **`service_role` granted on `crm` + `leads` + `audit` schemas with `ALTER DEFAULT PRIVILEGES`** (migration 0105). Was missing project-wide; only surfaced because the new passkey API routes need service-role for pre-session lookups. Closing it project-wide rather than per-table also stops future Edge Function / Server Action work from hitting the same silent failure mode.
-- **Demo data fenced via `lib/demo.ts` helper** (not via DB views or RLS). Faster path; the proper-architecture answer (DB views) is its own small refactor when there's appetite. Helper queries demo provider IDs (cached 30s), composes filter clauses inline.
-- **Session minting via `admin.generateLink('magiclink')` + server-side `verifyOtp`** (not via direct JWT signing). Supabase doesn't expose a clean "mint session for this user" API; this magic-link path is server-side only (link never leaves the server, never reaches an inbox), so the GDPR concern that motivated rejecting magic-link doesn't apply here. Pragmatic answer; cleaner long-term solution would be a Supabase-issued passkey grant once they add native WebAuthn support.
-- **Invite-link routes use non-conflicting names** (`/passkey-login`, `/passkey-enrol`) rather than `/provider/login`, `/provider/enrol`. The existing `proxy.ts` treats `/login` as shared (admin login lives there); shadowing it would have required surface-detection logic inside the shared login page. Renaming was simpler.
+- **Public-schema wrapper over schema-exposure** (option b from the audit-bridge decision tree). Adding `public.log_provider_action_v1` keeps the audit schema closed and gives a stable surface to deprecate without dragging the schema with it. Versioned (`_v1`) so future shape changes ship `_v2` with a deprecation window per data-infrastructure §12.
+- **Server Action surfaces audit failure** (not swallow + log). If audit write fails after UPDATE succeeds, `markOutcomeAction` returns `ok:false` so the caller sees the failure rather than the row landing without audit evidence. Trade-off: idempotent retry of the same state skips audit (early-return path). The atomic refactor in next-step #3 fixes this properly.
+- **0108 grants surfaced bug, not policy intent change.** The 0096 comment explicitly described the GRANT shape ("server-side Server Actions are the trust boundary, full-table UPDATE granted"); the GRANT was just never written. 0108 implements the promised state, doesn't change policy intent.
 
-### Open questions (none blocking demo, all gating EMS cutover)
+### Open questions
 
-- **Outcome → billing event auto-creation**: when provider clicks "Enrolled", should it auto-create a billing trigger? For pilot today, no billing system is wired; outcome marking is just status state. Resolve before first billable enrolment.
-- **Lost-device recovery UX**: admin re-issues enrolment link via "Send portal invite" button. Re-issue replaces invite hash; if the provider consumes the new invite, register-verify adds another row to `crm.provider_passkeys`. Untested; should work by construction. Worth one round-trip test before first real-provider cutover.
+- **Atomic outcome-marking refactor before EMS cutover?** See next step #3. Recommendation: yes. ~30-60 min, removes the ROPA gap on audit failure.
+- **Demo provider re-test confirms 0108 fix end-to-end?** See next step #1. Until Charlotte clicks an outcome and the DB confirms, the fix is verified at the SQL layer only.
 
 ## Watch items
 
+- 🟡 **Demo provider outcome marking** — pre-0108, never persisted. Post-0108, expected to work. Confirm via the query in next step #1 after Charlotte clicks an outcome.
+- 🟡 **Audit row format from the new wrapper** — first real audit-via-wrapper row will land when Charlotte tests outcome marking. Verify `surface='provider'`, `actor_provider_id` in `context`, `before`/`after` populated.
 - 🟡 First overnight runs of the new daily 04:45 UTC `brevo-attribute-reconcile-daily` cron (from Session 36). First scheduled fire 2026-05-10. Should produce zero new dead_letter rows.
-- 🟡 Mable's frontend redirect ship for fastrack `cohort_decline` + `l3_mismatch` (her Session 60). Receiver deployed; if any payload arrives with `parent_ref` but lookup fails, `leads.dead_letter source=edge_function_brevo_upsert` will surface it.
-- 🟡 Demo provider data filter on admin views — confirmed clean on the four pages updated. If new admin pages are added, `lib/demo.ts` filter must apply. Spot check after next session.
-- 🟡 PostgREST schema cache may take a moment to pick up the new 0105 grants. If any service_role calls 404 next session, sanity-check via `has_table_privilege`.
-- 🟢 Brevo consent reconcile cron — fixed and verified Session 36. Should remain clean.
-- 🟢 Provider portal end-to-end — invite + enrol + sign-in + outcome mark all owner-verified live. Demo passkey enrolled in Charlotte's iCloud Keychain.
+- 🟡 Mable's frontend redirect ship for fastrack `cohort_decline` + `l3_mismatch`. If any payload arrives with `parent_ref` but lookup fails, `leads.dead_letter source=edge_function_brevo_upsert` will surface it.
+- 🟡 PostgREST schema cache may take a moment to pick up 0108 grants. If Charlotte's first outcome click still fails with permission denied, wait ~30s and retry.
+- 🟢 Provider portal RLS — proven 14/14 against demo + EMS. Cross-tenant reads/writes blocked at row level.
 
 ## Next session
 
 - **Folder:** platform/
-- **First task:** Wire `audit.log_provider_action` via a public-schema wrapper, then run RLS proof + `/ultrareview` to clear two of Clara's three gating conditions before EMS cutover.
-- **Cross-project:** Clara already updated this session (`accounts-legal/docs/current-handoff.md` item 2 carries her sign-off + the three conditions). No new outgoing pushes needed beyond what's in this handoff.
+- **First task:** Confirm Charlotte's demo retest + audit row format (from watch items above), then write 0109 atomic-outcome-mark function if Charlotte greenlights it. Then resolve Clara's gating condition #3 via the route Charlotte picks (delegated review or her own read), then EMS cutover sequence kicks off.
+- **Cross-project:** No new outgoing pushes needed. Clara's gating conditions #1 and #2 cleared; condition #3 is open pending the substitute-review decision in next-step #2.
