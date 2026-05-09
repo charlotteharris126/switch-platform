@@ -43,7 +43,7 @@ interface BillingRow {
 export default async function ProvidersPage() {
   const supabase = await createClient();
 
-  const [providersRes, billingRes] = await Promise.all([
+  const [providersRes, billingRes, demoRes] = await Promise.all([
     supabase
       .schema("crm")
       .from("providers")
@@ -54,9 +54,16 @@ export default async function ProvidersPage() {
       .schema("crm")
       .from("vw_provider_billing_state")
       .select("provider_id, total_routed, confirmed_enrolled, presumed_enrolled, cannot_reach, lost, still_open, free_enrolments_used, free_enrolments_remaining, billable_count, conversion_rate_pct"),
+    supabase
+      .schema("crm")
+      .from("providers")
+      .select("provider_id,company_name")
+      .eq("is_demo", true)
+      .order("company_name"),
   ]);
 
   const rows = (providersRes.data ?? []) as ProviderRow[];
+  const demoProviders = (demoRes.data ?? []) as Array<{ provider_id: string; company_name: string }>;
   const billingByProvider = new Map<string, BillingRow>();
   for (const b of (billingRes.data ?? []) as BillingRow[]) {
     billingByProvider.set(b.provider_id, b);
@@ -75,6 +82,21 @@ export default async function ProvidersPage() {
           )
         }
       />
+
+      {demoProviders.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-[#5a6a72]">
+          <span className="uppercase tracking-wide font-semibold text-[#94a3b8]">Demo</span>
+          {demoProviders.map((d) => (
+            <Link
+              key={d.provider_id}
+              href={`/providers/${d.provider_id}`}
+              className="px-2 py-0.5 rounded-md bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100"
+            >
+              {d.company_name}
+            </Link>
+          ))}
+        </div>
+      )}
 
       <div className="bg-white border border-[#dad4cb] rounded-xl overflow-hidden shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
         <Table>
