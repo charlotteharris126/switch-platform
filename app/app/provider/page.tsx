@@ -81,5 +81,5 @@ async function signOutAction() {
   "use server";
   const supabase = await createClient();
   await supabase.auth.signOut();
-  redirect("/provider/login");
+  redirect("/passkey-login");
 }
