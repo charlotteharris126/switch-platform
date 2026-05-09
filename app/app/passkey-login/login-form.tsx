@@ -51,7 +51,7 @@ export function LoginForm() {
         type="email"
         required
         autoFocus
-        autoComplete="email webauthn"
+        autoComplete="email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
         placeholder="you@example.com"
