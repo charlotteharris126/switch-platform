@@ -179,7 +179,10 @@ export async function POST(request: NextRequest) {
   }
 
   await clearChallengeCookie();
-  return NextResponse.json({ ok: true, redirect: "/provider" });
+  // Redirect to the provider home. On app.switchleads.co.uk this is `/` (the
+  // proxy rewrites to /provider). On admin/local without a hostname rewrite,
+  // /provider works directly.
+  return NextResponse.json({ ok: true, redirect: "/" });
 }
 
 function b64urlOfRandom(bytes: number): string {

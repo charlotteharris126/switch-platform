@@ -43,7 +43,7 @@ export function EnrolForm({ token }: Props) {
       }
 
       setStatus("done");
-      router.push(verifyBody.redirect ?? "/provider");
+      router.push(verifyBody.redirect ?? "/");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setError(humaniseError(msg));

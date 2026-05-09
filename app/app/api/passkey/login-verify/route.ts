@@ -139,7 +139,7 @@ export async function POST(request: NextRequest) {
   }
 
   await clearChallengeCookie();
-  return NextResponse.json({ ok: true, redirect: "/provider" });
+  return NextResponse.json({ ok: true, redirect: "/" });
 }
 
 function hexBytesToUint8(hex: string): Uint8Array<ArrayBuffer> {

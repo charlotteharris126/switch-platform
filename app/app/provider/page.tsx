@@ -26,7 +26,7 @@ export default async function ProviderHomePage() {
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   const user = userData.user;
-  if (!user) redirect("/provider/login");
+  if (!user) redirect("/passkey-login");
 
   const admin = createAdminClient();
   const { data: pu } = await admin
@@ -41,7 +41,7 @@ export default async function ProviderHomePage() {
     // Auth user exists but no active provider_users mapping. Possibly suspended,
     // revoked, or auth user was created outside the portal flow. Sign them out.
     await supabase.auth.signOut();
-    redirect("/provider/login?error=no_active_account");
+    redirect("/passkey-login?error=no_active_account");
   }
 
   const { data: provider } = await admin

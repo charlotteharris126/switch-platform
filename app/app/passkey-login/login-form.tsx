@@ -37,7 +37,7 @@ export function LoginForm() {
         throw new Error(verifyBody.error ?? "Sign in failed");
       }
 
-      router.push(verifyBody.redirect ?? "/provider");
+      router.push(verifyBody.redirect ?? "/");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setError(humaniseError(msg));

@@ -20,6 +20,16 @@ const SHARED_AUTH_PATHS = [
   "/api/auth/linkedin/callback",
   "/api/auth/meta/connect",
   "/api/auth/meta/callback",
+  // Provider portal passkey auth (Session 37). These pages and API routes
+  // run BEFORE a Supabase session exists (the session is minted as the
+  // outcome of /api/passkey/login-verify or /api/passkey/register-verify).
+  // Treated as shared so the proxy doesn't redirect to /login.
+  "/passkey-login",
+  "/passkey-enrol",
+  "/api/passkey/register-options",
+  "/api/passkey/register-verify",
+  "/api/passkey/login-options",
+  "/api/passkey/login-verify",
 ];
 
 function detectSurface(hostname: string): "admin" | "provider" {
