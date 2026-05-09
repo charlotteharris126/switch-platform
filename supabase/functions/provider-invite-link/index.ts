@@ -54,7 +54,10 @@ const sql = postgres(DATABASE_URL, {
   prepare: false,
 });
 
-const PORTAL_BASE_URL = Deno.env.get("PORTAL_BASE_URL") ?? "http://localhost:3000";
+// Strip trailing slashes so concatenation never produces `//paths`. Setting
+// `https://app.switchleads.co.uk/` and `https://app.switchleads.co.uk` should
+// behave identically.
+const PORTAL_BASE_URL = (Deno.env.get("PORTAL_BASE_URL") ?? "http://localhost:3000").replace(/\/+$/, "");
 
 interface ProviderRow {
   provider_id: string;
