@@ -1,108 +1,113 @@
-# Platform Handoff, Session 36, 2026-05-09
+# Platform Handoff, Session 37, 2026-05-09
 
 ## Current state
 
-Provider portal MVP foundation built end-to-end (10 migrations applied, 0091 through 0100). Status taxonomy expanded for the new outcome buttons, `crm.provider_users` table + RLS policies + audit helper in place, demo-flag and portal-cutover-flag columns added, auto-flip cron held disarmed pending prerequisites. DB ↔ Brevo single-source-of-truth architecture shipped: triggers fire near-real-time push on every relevant write to crm.enrolments / leads.submissions / crm.providers, plus a daily 04:45 UTC reconcile cron as belt-and-braces. Brevo attribute set extended by 9 attributes today (SW_COURSE_SCHEDULE, SW_PHONE, SW_LOST_REASON, SW_FASTRACK_COMPLETED, SW_FASTRACK_URL, SW_START_TIMING, SW_INTEREST_BREADTH, SW_INVESTMENT_WILLINGNESS, SW_CURRENT_QUALIFICATION) to support Wren's nurture v2 and Mable's fastrack cohort_decline + l3_mismatch UX. All four pilot providers reconciled against their sheets (WYK, EMS via data-ops 016 + 017; CD no DB-side corrections needed; Riverside no leads yet). Brevo aligned across 174 routed-active contacts with 8 spot-checks confirmed clean. Cron error from Session 35 (brevo-consent-reconcile-daily CHECK constraint) verified fixed via fresh deploy + manual trigger. Repo + origin: ahead by today's commits, clean tree.
+Provider portal MVP P2 + P3 shipped end-to-end on production. Demo provider (`demo-provider-ltd`, `is_demo=true`) seeded with 12 fake leads spanning all 9 statuses; passkey enrolment, sign-in, leads list, lead detail, outcome marking all live and owner-tested. Five migrations applied (0101 through 0105), one new Edge Function deployed, 14 commits to main. Real-provider cutover (EMS first, mid-next-week target) gated on three Clara-approved conditions: audit-log wrapper, RLS proof, `/ultrareview`. Repo + origin clean on `main@974ffc6`.
 
 ## What was done this session
 
-Migrations applied (in order):
+Migrations:
 
-- **0091** status taxonomy expansion: open / attempt_1_no_answer / attempt_2_no_answer / attempt_3_no_answer / enrolment_meeting_booked / enrolled / lost / cannot_reach / presumed_enrolled. Dropped legacy 'contacted' value (zero rows).
-- **0092** dropped legacy `enrolments_status_chk` constraint (0091's DROP IF EXISTS targeted the wrong name; constraint-name mismatch logged in updated memory `feedback_query_live_pg_proc_before_patching`).
-- **0093** `crm.providers.is_demo` + `crm.providers.portal_enabled` boolean flags.
-- **0094** `crm.provider_users` table (multi-user mapping, role + status CHECKs, FK to auth.users, RLS, admin/functions/analytics policies).
-- **0095** `audit.log_provider_action` SECURITY DEFINER helper, gated on caller having an active provider_users row.
-- **0096** `crm.provider_user_provider_id()` helper + 9 RLS policies across leads.submissions / leads.routing_log / leads.fastrack_submissions / crm.enrolments / crm.providers / crm.provider_users / crm.disputes. portal_enabled flag baked into the helper for per-provider cutover gating.
-- **0097** auto-flip cron + day-12 warning cron rescheduled — applied alongside 0098 by accident, then disarmed via `cron.unschedule` SQL (db push pulled both pending migrations together; lesson noted, both crons now unscheduled pending prerequisites).
-- **0098** Postgres triggers on crm.enrolments + leads.submissions + crm.providers — auto-fires `crm.sync_leads_to_brevo` on every relevant change. Removes the "did the developer remember to call sync?" risk entirely.
-- **0099** waitlist enrichment columns (start_timing, interest_breadth, investment_willingness, current_qualification, source_form, enriched_at) + extended trigger function to cover the new fields + phone + fastracked_at.
-- **0100** daily Brevo attribute reconcile cron at 04:45 UTC, chunked 50 ids per pg_net dispatch.
+- **0101** filter `is_demo` providers out of `crm.sync_leads_to_brevo` (single filter point covers every trigger + the daily reconcile cron + direct callers; demo data never reaches Brevo)
+- **0102** `crm.provider_passkeys` table + invite-token state columns on `crm.provider_users` + `status='invited'` value + `enrolled_at` timestamp
+- **0103** `crm.provider_users.auth_user_id` made nullable so the Supabase auth user is created at register-verify (not invite-time), closing the OTP-hijack edge case where a dormant auth identity could be hit with `signInWithOtp` before passkey registration
+- **0104** extend `public.get_shared_secret()` allowlist to include `PROVIDER_INVITE_SECRET` (vault becomes single source of truth alongside `AUDIT_SHARED_SECRET`)
+- **0105** GRANT `service_role` on `crm` + `leads` + `audit` schemas with `ALTER DEFAULT PRIVILEGES` so future tables auto-grant. Closes the project-wide gap that surfaced when the new passkey API routes (which use service-role to read pre-session) returned silent empties
 
-Code changes:
+Edge Functions:
 
-- `_shared/route-lead.ts`: 9 new SW_* attributes pushed at all 3 composition sites (matched / U1 transactional / no-match-pending) plus extended SubmissionRow interface, extended SELECT statements, extended enrolment-status query to also pull lost_reason. Added `buildFastrackUrl(client_nonce)` helper. Decoupled BREVO_LIST_ID_SWITCHABLE_UTILITY (now optional, mirrors marketing list pattern — Wren's ask, ready for ~6 Aug list deletion).
-- `_shared/ingest.ts`: parent_ref-first parent lookup (UUID match against client_nonce) with email fallback, 6 new fields captured from switchable-waitlist-enrichment payloads, parent UPDATE step that mirrors enrichment fields onto the parent row when parent_ref + parent resolved.
-- `admin-brevo-resync/index.ts`: SELECT extended for new columns.
-- `brevo-consent-reconcile-daily/index.ts`: redeployed (Session 35's redeploy hadn't taken; verified by manual trigger returning 200 with one drift correction landing cleanly).
-- 4 Edge Functions redeployed twice today as new attributes landed: netlify-lead-router, routing-confirm, admin-brevo-resync, plus brevo-consent-reconcile-daily.
+- **`provider-invite-link`** new — admin-authed via `x-audit-key` (vault-read), generates 15-min HMAC enrolment-only token, single-use enforced via sha256 hash on the row, sends Brevo invite email; demo-only fence (`is_demo=true` required) until Clara's three gating conditions clear; defensive trailing-slash strip on `PORTAL_BASE_URL`; `Number()` coercion on BIGINT `provider_user_id` before signing (postgres-js footgun)
 
-Reconciles + data fixes:
+Next.js portal (`app.switchleads.co.uk`):
 
-- **data-ops/016** WYK sheet → DB: 9 status corrections + 1 INSERT (Naomi @petsapp dedup child). Zero in flip-cohort post-reconcile.
-- **data-ops/017** EMS sheet → DB: 6 status corrections + 2 INSERTs (Glennis Adamson dedup children). Zero in flip-cohort post-reconcile.
-- **data-ops/018** DQ reason consolidation: 5 rows level/qual → overqualified, 3 rows location → region_mismatch. Form-side cleanup pushed to Mable's handoff.
-- Brevo full-cohort resync over 174 routed-active contacts (twice — once for SW_COURSE_SCHEDULE backfill, once for the 8 new attributes). Zero new dead_letter rows both times. Single-source-of-truth verified with 164=164 alignment between sheets and DB unique-routed-active emails, 239 Brevo contacts explained by dedup math (12 owner-test contacts intentionally absent from Brevo).
+- **`/passkey-login`** + **`/passkey-enrol/[token]`** pages with `@simplewebauthn/browser` ceremonies and humanised error messages
+- **4 API routes** (`register-options`, `register-verify`, `login-options`, `login-verify`) — verify ceremonies via `@simplewebauthn/server`, mint Supabase sessions via `admin.generateLink('magiclink')` + server-side `verifyOtp` (Supabase Auth doesn't natively support WebAuthn — confirmed via docs)
+- **`/provider`** home rebuilt with four counter tiles (Open / In progress / Enrolled this month / Awaiting outcome > 7 days), CTA into the leads list
+- **`/provider/leads`** RLS-scoped list (name / course / routed-when / status badge); click row → detail
+- **`/provider/leads/[id]`** lead detail with full routed payload (contact, learner, course, free-text answers); outcome marking buttons calling Server Action that writes `crm.enrolments` via RLS, with `revalidatePath` on success
+- **`ProviderShell`** top nav (Home / Leads / Sign out with `useFormStatus` pending state)
+- **`proxy.ts`** updated: `/passkey-login`, `/passkey-enrol`, `/api/passkey/*` added to `SHARED_AUTH_PATHS` so they bypass the auth gate and hostname rewrite
 
-Cross-project pushes filed (durable record updates):
+Admin polish:
 
-- Nell `switchleads/clients/docs/current-handoff.md`: CD warm conversation prep when new sales rep arrives, Marty's two-product-provider angle (CD + separate funded provider) as relationship-keeping rationale; phantom Jade Millward note retracted (she applied for both EMS + CD courses separately).
-- Mira `strategy/docs/current-handoff.md`: provider activity-gate framework + two-product-provider rule needed for next Monday cycle.
-- Clara `accounts-legal/docs/current-handoff.md`: PPA portal-access review needed before EMS cutover mid-next-week.
-- Mable `switchable/site/docs/current-handoff.md`: funded form DQ taxonomy fix (level/qual/location → canonical) on 3 funded course pages + matrix.json schema doc + form-matrix simulator.
-- Wren `switchable/email/docs/current-handoff.md`: SW_COURSE_SCHEDULE delivery, utility-list decoupling, sunset-cron gating correction, plus a new `brevo-attribute-architecture.md` reference doc explaining the three-layer DB ↔ Brevo architecture for designing future automations.
+- New "Portal access" card on `/admin/providers/[id]` with Send portal invite form (pre-filled, demo badge, validates `portal_enabled=true`)
+- Demo data fence on `/admin/page.tsx`, `/admin/leads/page.tsx`, `/admin/providers/page.tsx`, `/admin/profit/page.tsx` via new `lib/demo.ts` helper (cached 30s)
+- Demo provider violet pill links above the providers table for direct access to demo detail page
 
-Memory updates:
+Auth model relock:
 
-- New `project_marty_dual_provider_angle` (CD relationship + funded-provider angle).
-- Updated `project_auto_flip_and_day12_deferred` (now "held until prerequisites land", not "indefinitely deferred").
-- Updated `feedback_query_live_pg_proc_before_patching` (broadened to cover constraints + indexes alongside functions).
+- Pivot from magic-link to passkey-only after Charlotte raised UK GDPR Article 32 concerns (auth tokens at rest in email inboxes)
+- Clara approved the new model in `accounts-legal/changelog.md`: PPA v2 covers it, no addendum gate, sub-processor disclosure unchanged
+- Three conditions before real-provider cutover, captured in `accounts-legal/docs/current-handoff.md` item 2
+
+Demo data:
+
+- `data-ops/019_seed_demo_provider_2026_05_09.sql` ran cleanly — 1 provider + 12 fake leads + 12 routing_log + 12 enrolments. Brevo never received any of it (filter held; verified zero pg_net dispatches from the 12 enrolment INSERTs)
+
+Bug fixes worth naming (each surfaced as a different symptom but rooted in a real architectural gap):
+
+- **BIGINT-as-string coercion** — postgres-js returns BIGINT columns as JS strings; my Edge Function was embedding `"1"` into the JSON token, Next.js verify did `typeof === "number"` and rejected as malformed. Fixed both sides defensively.
+- **`service_role` schema GRANTs** — service_role had `BYPASSRLS` but no schema/table privileges on `crm`/`leads`. supabase-js calls returned `data: null` with no error, surfaced as 404 user_not_found. Fixed via 0105.
+- **Vault drift class** — `PROVIDER_INVITE_SECRET` was in two stores (Supabase Edge Function secrets + Netlify env), they disagreed, every invite click failed signature verify. Same fix pattern as 0019 did for `AUDIT_SHARED_SECRET`.
+- **Next.js 16 middleware → proxy convention** — added `middleware.ts` not knowing Next 16 had renamed it. Build failed; renamed routes to non-conflicting paths (`/passkey-login`, `/passkey-enrol`) so the existing `proxy.ts` works.
 
 ## Next steps
 
-1. **Provider portal P2 — auth + invite flow** (~2h focused). Build over the weekend per Charlotte's plan. `provider-magic-link` Edge Function, `/provider/login` + `/provider/auth/callback` routes, auth middleware, passkey enrolment, admin "Send portal invite" button on `/admin/providers/[id]`. Done when admin invite to demo provider sends magic link, lands authenticated, sets up passkey.
-2. **Provider portal P3 — portal pages** (~3-4h). `/provider`, `/provider/leads` (filters + search + bulk select + day-count badges), `/provider/leads/[id]` (outcome buttons + notes + dispute + fraud-flag + audit history), `/provider/account`. Server Action for outcome marking — writes DB, fires `audit.log_provider_action`, fires CHASER template synchronously on attempt clicks.
-3. **Provider portal P4 — admin polish + cutover prep** (~1-2h). Last-login column on /admin/providers, "providers without recent login" tile, provider-side audit panel on /admin/leads/[id], Brevo "new lead routed" template updated for portal deep link, Day-14 + Day-19 cron infrastructure wiring (templates dormant until written).
-4. **Demo provider seed** — fixture script in `data-ops/` creating "Demo Provider Ltd" with `is_demo=true` + 10-12 fake leads spanning every status. Use during P2-P4 testing. Charlotte's demo email: `hello+demo@switchable.org.uk`.
-5. **EMS cutover sequence** (mid-next-week, after P4). Clara has signed off auth model + PPA coverage + sub-processor disclosure (see item 10 below for conditions). Day 0 invite, days 0-14 parallel sheet + portal, day 14 emails switch to portal-only, day 21 sheet append disabled.
-6. **SwitchLeads provider-facing template drafts** when auto-flip cron re-arms: BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING (day-12), day-14 confirmation, day-19 dispute reminder. Charlotte voice (charlotte-voice.md), no PII (count + portal link only). Owner approves before going live in Brevo.
-7. **Re-arm auto-flip + day-12 warning crons** when prerequisites clear: Wren's day-12 template + Mira's activity-gate framework + provider heads-up emails sent (Nell). Clara's PPA review now cleared (see item 10). One SQL block re-schedules both.
-8. **Verify Mable's frontend redirect for fastrack cohort_decline + l3_mismatch** lands cleanly. Mable shipped frontend at commit `bd7093c` 2026-05-09 evening. Both DQ paths flow into `/waitlist/` via consent click. Watch `leads.dead_letter` over the next 24-48h for any `edge_function_brevo_upsert` rows with payload shape `switchable-waitlist-enrichment` carrying `parent_ref` + `source_form='fastrack-cohort-decline'` or `'fastrack-l3-mismatch'`. Clean = working.
-9. **Pre-fill enrichment form via backend lookup** (smart-to-have, future-flagged by Mable). When `/waitlist/` loads with `?parent=<client_nonce>`, currently the form re-asks for phone (sloppy to pass PII via URL). Cleaner: small new Edge Function (e.g. `enrichment-prefill`) reads parent submission by client_nonce, returns public-safe pre-fillable fields (phone, first_name, etc.). Lifts enrichment completion rate. No deadline; queue when there's appetite.
+1. **Wire `audit.log_provider_action` via public-schema wrapper** (~30 min, gates EMS cutover). Audit schema isn't exposed in Data API; either expose it + add `service_role` grant, or add a `public.log_provider_action_v1(...)` thin wrapper that delegates. Server Action `markOutcomeAction` has TODO comment in place. Required before real-provider cutover for Article 30 ROPA evidence.
 
-10. **Inbound from Clara, accounts-legal Session 11, 2026-05-09: provider portal sign-off granted with three conditions before real-provider cutover.**
+2. **RLS proof** (~1h, Clara condition). Build a fixture with the demo provider + one real provider. Authenticate via supabase-js as the demo passkey-enrolled user. Attempt `SELECT` on `leads.submissions`, `crm.enrolments`, `leads.routing_log`, `crm.disputes` rows belonging to the real provider. Assert zero rows returned in every case. Confirm `crm.provider_user_provider_id()` returns NULL for an unflagged (`portal_enabled=false`) provider. Output a runbook in `platform/docs/rls-proof-2026-05-XX.md`.
 
-    a. **Auth model approved for Article 32 UK GDPR.** Passkey-only with enrolment-only invite link is a sufficient TOM. Materially stronger than magic-link or password+MFA. Demo-only build today against `demo-provider-ltd` is cleared to proceed (no real PII at risk).
+3. **Run `/ultrareview`** on migrations 0091-0105 + portal route code (Clara condition, mandatory before real-provider cutover). Cloud-based multi-agent review across the diff per `.claude/rules/data-infrastructure.md` item 8.
 
-    b. **Three conditions gate any real-provider cutover** (i.e. before EMS portal_enabled flip):
-       - **RLS proof must run green** on migrations 0091/0094/0096 with a fixture that includes ≥2 providers + a cross-provider read attempt, asserting provider A cannot SELECT provider B's rows in `leads.submissions`, `crm.enrolments`, `leads.routing_log`, `crm.disputes`. Confirm the `portal_enabled` gate baked into `crm.provider_user_provider_id()` (0096) returns zero rows for an unflagged provider.
-       - **`/ultrareview` mandatory on the migrations + portal route code** before EMS cutover, per `.claude/rules/data-infrastructure.md` item 8. Routes and Server Actions consuming RLS context are new code and need the cloud review pass even though migrations are already shipped.
-       - **Pen-test gate ([869d0hwxz](https://app.clickup.com/t/869d0hwxz)) holds firm before provider #5+ onboards.** Not gating EMS/CD/WYK/Riverside (three pilots we know personally + RLS as primary perimeter + 14-day parallel sheet operation). Must not slip when post-pilot providers come on.
+4. **Disable email OTP at Supabase project level** (Supabase dashboard → Authentication → Providers → Email → disable). Stops `signInWithOtp` working against any provider auth user, even though we never call it ourselves. Defence-in-depth.
 
-    c. **PPA coverage cleared, no addendum gate.** PPA v2 clauses 7.1-7.6 + 10.4 are delivery-channel agnostic; clause 7.4 covers provider's-internal-access-control as TOM obligation; audit logging via `audit.log_provider_action` (0095) is our Article 30 obligation, not a contract issue. Optional one-paragraph clarification clause drafted and folds into existing PPA addendum stack [869d61kft](https://app.clickup.com/t/869d61kft) when it next goes out for the four signed providers — does not block cutover.
+5. **Cleanup duplicate secret stores** (Charlotte action, ~5 min): delete `PROVIDER_INVITE_SECRET` from Supabase Edge Function secrets dashboard, delete `PROVIDER_INVITE_SECRET` + `AUDIT_SHARED_SECRET` from Netlify env (vault-RPC bypasses both now). Harmless if left, but tidy.
 
-    d. **Sub-processor disclosure unchanged.** Supabase Auth + WebAuthn introduce no new third party. Generic processor wording on both privacy policies covers the data flow. No Notion edit, no HTML edit.
+6. **P4 admin polish** (~1-2h): last-login column on `/admin/providers`, "providers without recent login" tile on `/admin` home, provider-side activity panel on `/admin/leads/[id]`, Brevo "new lead routed" template updated to deep-link `/provider/leads/[id]` instead of "check your sheet". Templates dormant until Brevo IDs set.
 
-    Full record: `accounts-legal/changelog.md` 2026-05-09 (later session) entry.
+7. **EMS cutover sequence** (target mid-next-week, gated on 1+2+3 clearing). Day 0 invite, days 0-14 parallel sheet + portal, day 14 emails switch to portal-only, day 21 sheet append disabled. Clara's optional PPA clarification paragraph folds into addendum stack ticket [869d61kft](https://app.clickup.com/t/869d61kft) when it next goes out.
 
-11. **Inbound from Mable, 2026-05-09: re-run data-ops/018 for any rows written between SQL run and form-side fix.** Mable shipped form-side `dq_reason` canonical alignment in commit `435e092` (2026-05-09 evening) on the funded mini-quiz showResult and the find-your-course showHolding handler. Both now translate at the write boundary to canonical values (`age` → `age_below_min`, `location` → `region_mismatch`, `level` → `overqualified`, `start_date` → `cant_commit_dates`, `qual` → `overqualified`, `no-match` → `no_course_match`). The platform SQL data-ops/018 cleaned 8 historical rows earlier today; the comment in that script anticipated a second pass once Mable's fix landed to clean any rows written in the gap. Quick query: `SELECT id, dq_reason, created_at FROM leads.submissions WHERE dq_reason IN ('age', 'location', 'level', 'qual') AND created_at > '<data-ops/018 run time>'` — if non-zero, re-run the same UPDATE block. Likely zero or a handful (gap was hours, not days). 5-min job. After this second pass, future submissions won't write any deprecated values, and data-ops/018 can be retired.
+8. **SwitchLeads provider-facing Brevo template drafts** (when auto-flip cron re-arms): `BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING` (day-12), day-14 confirmation, day-19 dispute reminder. Charlotte voice (`charlotte-voice.md`), no PII (count + portal link only). Owner approves before live.
+
+9. **Re-arm auto-flip + day-12 warning crons** when prerequisites clear: Wren's day-12 template + Mira's activity-gate framework + provider heads-up emails (Nell). Clara's PPA review now cleared. One SQL block re-schedules both.
+
+10. **Verify Mable's fastrack frontend redirect** for cohort_decline + l3_mismatch (Mable shipped commit `bd7093c` 2026-05-09 evening). Watch `leads.dead_letter` 24-48h for any `edge_function_brevo_upsert` rows with payload `switchable-waitlist-enrichment` carrying `parent_ref` + `source_form='fastrack-cohort-decline'` or `'fastrack-l3-mismatch'`. Clean = working.
+
+11. **Pre-fill enrichment form via backend lookup** (smart-to-have, Mable's flag). When `/waitlist/` loads with `?parent=<client_nonce>`, currently re-asks for phone (sloppy to pass PII via URL). Cleaner: small new Edge Function `enrichment-prefill` reads parent submission by client_nonce, returns public-safe pre-fillable fields. Lifts enrichment completion rate. No deadline.
+
+12. **Re-run `data-ops/018` for any rows written between SQL run and Mable's form-side fix** (Mable Session 5 push, 2026-05-09 evening). Quick query: `SELECT id, dq_reason, created_at FROM leads.submissions WHERE dq_reason IN ('age', 'location', 'level', 'qual') AND created_at > '<data-ops/018 run time>'`. If non-zero, re-run the same UPDATE block. 5-min job. After this second pass, future submissions won't write deprecated values, and `data-ops/018` retires.
+
+13. **Provider portal Conditional Mediation** (UX polish, ~30 min). Wire `useBrowserAutofill: true` on `/passkey-login` so a saved passkey shows up as autofill on the email field and a single tap completes sign-in. Currently disabled (caused user confusion this session). Future polish, not blocker.
 
 ## Decisions and open questions
 
-### Decisions made this session
+### Decided this session
 
-- **Provider portal MVP scope locked at "smallest" framing** (per Charlotte 2026-05-09): magic-link + passkey auth, status taxonomy expanded for attempt-by-attempt outcome marking, demo provider with `is_demo` flag, multi-user with provider_admin / provider_user roles, EMS-first strict-serial cutover. Build it now, defer marketplace / billing / invoicing UI to v2.
-- **Auto-flip cron only flips status='open' rows** (engaged statuses left alone). Pugh + Turnbull "open" but <14 days from routing, so not in immediate flip cohort.
-- **CD held back from auto-flip regardless of cron timing** (Marty's two-product-provider angle, £10/day ad spend stays running through new sales rep's first week, warm conversation not heavy).
-- **Defaults locked for Wren attribute names**: SW_PHONE, SW_LOST_REASON, SW_FASTRACK_COMPLETED, SW_FASTRACK_URL, SW_START_TIMING, SW_INTEREST_BREADTH, SW_INVESTMENT_WILLINGNESS, SW_CURRENT_QUALIFICATION. Wren can rename via Brevo dashboard later (low cost).
-- **SW_FASTRACK_URL pattern reuses Mable's existing `?ref=<client_nonce>` redirect param** so funded thank-you page logic handles nurture-email clicks without changes.
-- **Daily Brevo attribute reconcile (Layer 3) shipped now** rather than deferring — closes the architecture cleanly for the weekend portal build.
-- **Lucy Hizmo flipped lost → enrolled per sheet** (Status column authoritative over notes; "cancelled" note is informational and ambiguous, possibly stale alignment-bug residue from data-ops/015).
-- **Migration 0097 applied accidentally** alongside 0098 because `db push` processes all queued migrations together. Mitigation: cron unscheduled via SQL right after. Lesson: check `supabase migration list --linked` before push to know what's pending.
+- **Auth model: passkey-only with enrolment-only invite link** (was magic-link). UK GDPR Article 32: emailed auth tokens sit at rest in inboxes / IMAP / backups; passkeys never leave the device. Why now: Charlotte raised the concern mid-session; Clara approved the new shape same session.
+- **Custom WebAuthn implementation** (Option A from the auth-model decision tree). Supabase Auth's MFA surface is TOTP + SMS only; verified docs say no native passkey support. Why custom over a vendor (Hanko, Stytch, Clerk): no new sub-processor, no new monthly cost, no new vendor in the data-flow disclosure.
+- **Auth user creation deferred to register-verify** (not at invite-time). An invited-but-not-enrolled email would otherwise have a dormant auth identity that an attacker could hit with `signInWithOtp`. Migration 0103 made `auth_user_id` nullable to support this.
+- **Vault is single source of truth for shared secrets** (`AUDIT_SHARED_SECRET`, `PROVIDER_INVITE_SECRET`). Two-store drift class (Session 9 incident) bit again this session before the refactor; pattern from 0019 extended via 0104. Future shared secrets ship the same shape: `vault.create_secret()` + extend `public.get_shared_secret()` allowlist + read via the helper from any consumer.
+- **`service_role` granted on `crm` + `leads` + `audit` schemas with `ALTER DEFAULT PRIVILEGES`** (migration 0105). Was missing project-wide; only surfaced because the new passkey API routes need service-role for pre-session lookups. Closing it project-wide rather than per-table also stops future Edge Function / Server Action work from hitting the same silent failure mode.
+- **Demo data fenced via `lib/demo.ts` helper** (not via DB views or RLS). Faster path; the proper-architecture answer (DB views) is its own small refactor when there's appetite. Helper queries demo provider IDs (cached 30s), composes filter clauses inline.
+- **Session minting via `admin.generateLink('magiclink')` + server-side `verifyOtp`** (not via direct JWT signing). Supabase doesn't expose a clean "mint session for this user" API; this magic-link path is server-side only (link never leaves the server, never reaches an inbox), so the GDPR concern that motivated rejecting magic-link doesn't apply here. Pragmatic answer; cleaner long-term solution would be a Supabase-issued passkey grant once they add native WebAuthn support.
+- **Invite-link routes use non-conflicting names** (`/passkey-login`, `/passkey-enrol`) rather than `/provider/login`, `/provider/enrol`. The existing `proxy.ts` treats `/login` as shared (admin login lives there); shadowing it would have required surface-detection logic inside the shared login page. Renaming was simpler.
 
-### Open questions
+### Open questions (none blocking demo, all gating EMS cutover)
 
-- None blocking the weekend portal build.
+- **Outcome → billing event auto-creation**: when provider clicks "Enrolled", should it auto-create a billing trigger? For pilot today, no billing system is wired; outcome marking is just status state. Resolve before first billable enrolment.
+- **Lost-device recovery UX**: admin re-issues enrolment link via "Send portal invite" button. Re-issue replaces invite hash; if the provider consumes the new invite, register-verify adds another row to `crm.provider_passkeys`. Untested; should work by construction. Worth one round-trip test before first real-provider cutover.
 
 ## Watch items
 
-- 🟡 First overnight runs of the new daily 04:45 UTC `brevo-attribute-reconcile-daily` cron. Should produce zero new dead_letter rows. Tomorrow 2026-05-10 is the first scheduled fire.
-- 🟡 Mable's frontend redirect ship for fastrack cohort_decline + l3_mismatch (her Session 60). Receiver is deployed; if any payload arrives with parent_ref but the lookup fails, dead_letter `source=edge_function_brevo_upsert` will surface it.
-- 🟢 Brevo consent reconcile cron (04:00 UTC) — fixed and verified clean today. Should remain clean.
-- 🟢 Aaron Ryan (322), Lucy Hizmo (25), Sam Stevens (34), Rebecca Rollinson (310) — Brevo spot-checks across provider/funding combinations confirmed all 8 new SW_* attributes landed correctly.
+- 🟡 First overnight runs of the new daily 04:45 UTC `brevo-attribute-reconcile-daily` cron (from Session 36). First scheduled fire 2026-05-10. Should produce zero new dead_letter rows.
+- 🟡 Mable's frontend redirect ship for fastrack `cohort_decline` + `l3_mismatch` (her Session 60). Receiver deployed; if any payload arrives with `parent_ref` but lookup fails, `leads.dead_letter source=edge_function_brevo_upsert` will surface it.
+- 🟡 Demo provider data filter on admin views — confirmed clean on the four pages updated. If new admin pages are added, `lib/demo.ts` filter must apply. Spot check after next session.
+- 🟡 PostgREST schema cache may take a moment to pick up the new 0105 grants. If any service_role calls 404 next session, sanity-check via `has_table_privilege`.
+- 🟢 Brevo consent reconcile cron — fixed and verified Session 36. Should remain clean.
+- 🟢 Provider portal end-to-end — invite + enrol + sign-in + outcome mark all owner-verified live. Demo passkey enrolled in Charlotte's iCloud Keychain.
 
 ## Next session
 
 - **Folder:** platform/
-- **First task:** Start Sessions P2 + P3 of the provider portal MVP build (~5-6h focused). Schema foundation already in place from migrations 0091-0096; demo provider seed + auth + portal pages still to ship. Alongside: monitor Mable's fastrack cohort_decline frontend ship for any payload anomalies via dead_letter.
-- **Cross-project:** No new outgoing pushes from this session beyond the five filed today (Nell, Mira, Clara, Mable, Wren). Incoming items will surface from each agent in their own session pace.
+- **First task:** Wire `audit.log_provider_action` via a public-schema wrapper, then run RLS proof + `/ultrareview` to clear two of Clara's three gating conditions before EMS cutover.
+- **Cross-project:** Clara already updated this session (`accounts-legal/docs/current-handoff.md` item 2 carries her sign-off + the three conditions). No new outgoing pushes needed beyond what's in this handoff.
