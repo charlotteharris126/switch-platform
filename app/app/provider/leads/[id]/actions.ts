@@ -128,3 +128,64 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
   revalidatePath("/provider");
   return { ok: true };
 }
+
+const NOTES_MAX = 5000;
+
+export async function saveLeadNotesAction(args: {
+  submissionId: number;
+  notes: string;
+}): Promise<Result> {
+  if (typeof args.notes !== "string") {
+    return { ok: false, error: "Notes must be text." };
+  }
+  if (args.notes.length > NOTES_MAX) {
+    return { ok: false, error: `Notes too long (max ${NOTES_MAX} characters).` };
+  }
+
+  const trimmed = args.notes.trim().length === 0 ? null : args.notes;
+
+  const supabase = await createClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false, error: "Not signed in" };
+
+  const { data: existing, error: readError } = await supabase
+    .schema("crm")
+    .from("enrolments")
+    .select("id, notes")
+    .eq("submission_id", args.submissionId)
+    .maybeSingle();
+
+  if (readError) return { ok: false, error: readError.message };
+  if (!existing) {
+    return { ok: false, error: "No enrolment row found, or you don't have access" };
+  }
+
+  const before = existing.notes ?? null;
+  if (before === trimmed) {
+    return { ok: true };
+  }
+
+  const { error: updateError } = await supabase
+    .schema("crm")
+    .from("enrolments")
+    .update({ notes: trimmed, updated_at: new Date().toISOString() })
+    .eq("id", existing.id);
+
+  if (updateError) return { ok: false, error: updateError.message };
+
+  const { error: auditError } = await supabase.rpc("log_provider_action_v1", {
+    p_action: "save_notes",
+    p_target_table: "crm.enrolments",
+    p_target_id: String(existing.id),
+    p_before: { notes: before },
+    p_after: { notes: trimmed },
+    p_context: { submission_id: args.submissionId },
+  });
+
+  if (auditError) {
+    return { ok: false, error: `Notes saved but audit write failed: ${auditError.message}` };
+  }
+
+  revalidatePath(`/provider/leads/${args.submissionId}`);
+  return { ok: true };
+}

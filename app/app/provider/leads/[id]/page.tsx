@@ -12,8 +12,10 @@ import { createClient } from "@/lib/supabase/server";
 import { ProviderShell } from "../../provider-shell";
 import { DurationTimer } from "../../duration-timer";
 import { OutcomeButtons } from "./outcome-buttons";
-import { markOutcomeAction } from "./actions";
+import { NotesEditor } from "./notes-editor";
+import { markOutcomeAction, saveLeadNotesAction } from "./actions";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
+import { formatIntakeId } from "@/lib/intake-format";
 
 interface SubmissionRow {
   id: number;
@@ -31,6 +33,10 @@ interface SubmissionRow {
   funding_route: string | null;
   prior_level_3_or_higher: boolean | null;
   can_start_on_intake_date: boolean | null;
+  preferred_intake_id: string | null;
+  acceptable_intake_ids: string[] | null;
+  start_when: string | null;
+  start_timing: string | null;
   outcome_interest: string | null;
   why_this_course: string | null;
   la: string | null;
@@ -66,7 +72,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     .schema("leads")
     .from("submissions")
     .select(
-      "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
+      "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
     )
     .eq("id", submissionId)
     .maybeSingle<SubmissionRow>();
@@ -152,13 +158,19 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
             <Row label="Age band" value={submission.age_band} />
             <Row label="Employment" value={submission.employment_status} />
             <Row label="Has L3+" value={booleanLabel(submission.prior_level_3_or_higher)} />
-            <Row label="Can start on intake" value={booleanLabel(submission.can_start_on_intake_date)} />
             <Row label="Outcome they want" value={submission.outcome_interest} />
           </Section>
 
           <Section title="Course">
             <Row label="Course" value={submission.course_id} />
             <Row label="Funding" value={fundingLabel(submission.funding_category, submission.funding_route)} />
+            <IntakeRow
+              canStart={submission.can_start_on_intake_date}
+              preferredIntakeId={submission.preferred_intake_id}
+              acceptableIntakeIds={submission.acceptable_intake_ids}
+              startWhen={submission.start_when}
+              startTiming={submission.start_timing}
+            />
           </Section>
 
           <Section title="In their words">
@@ -168,15 +180,97 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
           </Section>
         </div>
 
-        {enrol?.notes && (
-          <div className="mt-6 bg-amber-50 border border-amber-200 rounded-xl p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Notes</p>
-            <p className="text-sm text-amber-900 mt-1 whitespace-pre-wrap">{enrol.notes}</p>
+        {/* Notes — editable by the provider */}
+        <div className="mt-6 bg-white border border-slate-200 rounded-xl p-6">
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold text-slate-900">Your notes on this lead</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Private to your business. Visible to anyone on your team in the portal.
+            </p>
           </div>
-        )}
+          <NotesEditor
+            submissionId={submission.id}
+            initialValue={enrol?.notes ?? ""}
+            onSave={saveLeadNotesAction}
+          />
+        </div>
       </div>
     </ProviderShell>
   );
+}
+
+function IntakeRow({
+  canStart,
+  preferredIntakeId,
+  acceptableIntakeIds,
+  startWhen,
+  startTiming,
+}: {
+  canStart: boolean | null;
+  preferredIntakeId: string | null;
+  acceptableIntakeIds: string[] | null;
+  startWhen: string | null;
+  startTiming: string | null;
+}) {
+  // Pre-routing / waitlist DQ leads have no intake answer; show their
+  // start-timing instead so the provider knows when they want to start.
+  if (canStart == null) {
+    if (startTiming) return <Row label="Wants to start" value={humanise(startTiming)} />;
+    if (startWhen) return <Row label="Wants to start" value={humanise(startWhen)} />;
+    return <Row label="Can start on intake" value={null} />;
+  }
+
+  if (canStart === false) {
+    return <Row label="Can start on intake" value="No" />;
+  }
+
+  // canStart === true: render a list of dates if we have them, otherwise a plain Yes.
+  const ids = (acceptableIntakeIds ?? []).filter((s) => s && s.length > 0);
+  if (ids.length === 0 && !preferredIntakeId) {
+    return <Row label="Can start on intake" value="Yes" />;
+  }
+
+  // Single-intake course (or only one acceptable date)
+  if (ids.length <= 1) {
+    const onlyId = preferredIntakeId ?? ids[0] ?? null;
+    return (
+      <Row
+        label="Can start on intake"
+        value={onlyId ? `Yes — ${formatIntakeId(onlyId)}` : "Yes"}
+      />
+    );
+  }
+
+  // Multi-intake course — show all acceptable dates, mark preferred
+  const sorted = [...ids].sort();
+  return (
+    <div className="text-sm">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-slate-500">Can start on intake</span>
+        <span className="text-slate-900 font-medium">Yes — {sorted.length} dates</span>
+      </div>
+      <ul className="mt-1 ml-3 space-y-0.5">
+        {sorted.map((id) => {
+          const isPreferred = id === preferredIntakeId;
+          return (
+            <li key={id} className="text-xs text-slate-700 flex items-center gap-2">
+              <span className="text-slate-400">•</span>
+              <span>{formatIntakeId(id)}</span>
+              {isPreferred && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  Preferred
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function humanise(snake: string): string {
+  return snake.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
