@@ -156,10 +156,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // Sign the invite token. We need the provider_user_id, so first
   // upsert the row (without the token), then sign + UPDATE the hash.
-  const inviteSecret = Deno.env.get("PROVIDER_INVITE_SECRET");
-  if (!inviteSecret) {
-    console.error("PROVIDER_INVITE_SECRET not set");
-    return jsonError("server_misconfigured", "invite secret missing", 500);
+  // PROVIDER_INVITE_SECRET lives in the database vault (migration 0104)
+  // alongside AUDIT_SHARED_SECRET. Single source of truth, same RPC pattern.
+  let inviteSecret: string;
+  try {
+    const [row] = await sql<{ secret: string | null }[]>`
+      SELECT public.get_shared_secret('PROVIDER_INVITE_SECRET') AS secret
+    `;
+    if (!row?.secret) {
+      console.error("PROVIDER_INVITE_SECRET not in vault");
+      return jsonError("server_misconfigured", "invite secret missing in vault", 500);
+    }
+    inviteSecret = row.secret;
+  } catch (err) {
+    console.error("get_shared_secret(PROVIDER_INVITE_SECRET) failed:", err);
+    return jsonError("server_misconfigured", "invite secret read failed", 500);
   }
 
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000);

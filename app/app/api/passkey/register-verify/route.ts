@@ -30,16 +30,23 @@ interface ProviderUserRow {
 }
 
 export async function POST(request: NextRequest) {
-  const inviteSecret = process.env.PROVIDER_INVITE_SECRET;
-  if (!inviteSecret) {
-    return NextResponse.json({ ok: false, error: "server_misconfigured" }, { status: 500 });
-  }
-
   const body = (await request.json().catch(() => null)) as { token?: string; response?: RegistrationResponseJSON } | null;
   const token = body?.token?.trim();
   const attestation = body?.response;
   if (!token) return NextResponse.json({ ok: false, error: "token_required" }, { status: 400 });
   if (!attestation) return NextResponse.json({ ok: false, error: "response_required" }, { status: 400 });
+
+  const admin = createAdminClient();
+
+  // PROVIDER_INVITE_SECRET lives in the database vault (migration 0104).
+  const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
+    p_name: "PROVIDER_INVITE_SECRET",
+  });
+  if (secretErr || typeof secretData !== "string" || !secretData) {
+    console.error("get_shared_secret(PROVIDER_INVITE_SECRET) failed:", secretErr);
+    return NextResponse.json({ ok: false, error: "server_misconfigured" }, { status: 500 });
+  }
+  const inviteSecret = secretData;
 
   // Verify token + cookie state
   const tokenVerify = await verifyInviteToken(token, inviteSecret);
@@ -54,7 +61,7 @@ export async function POST(request: NextRequest) {
   }
 
   const providerUserId = tokenVerify.payload!.provider_user_id;
-  const admin = createAdminClient();
+  // admin client already created above for the secret lookup; reuse.
 
   // Re-fetch row + re-check hash (single-use enforcement)
   const { data: row } = await admin

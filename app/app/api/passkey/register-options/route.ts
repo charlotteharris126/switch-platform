@@ -30,24 +30,30 @@ interface PasskeyRow {
 }
 
 export async function POST(request: NextRequest) {
-  const inviteSecret = process.env.PROVIDER_INVITE_SECRET;
-  if (!inviteSecret) {
-    return NextResponse.json({ ok: false, error: "server_misconfigured" }, { status: 500 });
-  }
-
   const body = (await request.json().catch(() => null)) as { token?: string } | null;
   const token = body?.token?.trim();
   if (!token) {
     return NextResponse.json({ ok: false, error: "token_required" }, { status: 400 });
   }
 
+  const admin = createAdminClient();
+
+  // PROVIDER_INVITE_SECRET lives in the database vault (migration 0104).
+  // Single source of truth shared with the Edge Function — no env drift.
+  const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
+    p_name: "PROVIDER_INVITE_SECRET",
+  });
+  if (secretErr || typeof secretData !== "string" || !secretData) {
+    console.error("get_shared_secret(PROVIDER_INVITE_SECRET) failed:", secretErr);
+    return NextResponse.json({ ok: false, error: "server_misconfigured" }, { status: 500 });
+  }
+  const inviteSecret = secretData;
+
   const verify = await verifyInviteToken(token, inviteSecret);
   if (!verify.ok) {
     return NextResponse.json({ ok: false, error: `token_${verify.error}` }, { status: 400 });
   }
   const providerUserId = verify.payload!.provider_user_id;
-
-  const admin = createAdminClient();
 
   // Look up the row + verify hash matches + expiry hasn't passed (defence in
   // depth — token's own exp already passed verifyInviteToken, but the row's
