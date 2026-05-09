@@ -1,0 +1,52 @@
+-- Migration 0108 — GRANT authenticated the writes the portal RLS policies expect
+-- Date:    2026-05-09
+-- Author:  Claude (platform Session 38) on Charlotte's instruction
+-- Reason:  Migration 0096 shipped two write-side RLS policies that rely on
+--          table-level GRANTs that don't exist:
+--            - provider_update_enrolments (UPDATE TO authenticated)
+--            - provider_insert_own_disputes (INSERT TO authenticated)
+--          authenticated had only SELECT on these tables. PostgreSQL evaluates
+--          GRANT before RLS, so a denied GRANT short-circuits the policy
+--          entirely with `permission denied for table <name>`. Bottom line:
+--          the portal Server Action markOutcomeAction has been unable to
+--          persist outcomes since shipping, even though Session 37 marked
+--          it as owner-tested. Caught running the RLS proof for Clara's
+--          gating condition #2 in Session 38; verified by inspecting
+--          `crm.enrolments.updated_at` for the demo provider — every row
+--          still carries the seed-time timestamp, no Charlotte-driven
+--          updates landed.
+--
+--          Fix is the privilege the comment in 0096 already promised:
+--          full-table UPDATE on crm.enrolments and INSERT on crm.disputes
+--          to authenticated, with the row scope enforced by the existing
+--          0096 policies. Column-level granularity intentionally not used
+--          (per 0096 comment): "the server-side Next.js Server Actions are
+--          the trust boundary" — they limit which columns actually move.
+--
+--          DELETE deliberately not granted: there is no provider-side
+--          delete path. SELECT already granted in earlier migration.
+--
+-- Impact assessment (per .claude/rules/data-infrastructure.md §8):
+--   1. Change: GRANT UPDATE ON crm.enrolments TO authenticated +
+--      GRANT INSERT ON crm.disputes TO authenticated. No table changes,
+--      no data migration.
+--   2. Readers/writers affected: portal Server Actions can now actually
+--      UPDATE outcomes and INSERT disputes. Without 0108 they have been
+--      hitting `42501 permission denied`. RLS still scopes the row set;
+--      cross-tenant writes remain blocked (RLS proof confirms post-grant).
+--   3. Schema version: not affected.
+--   4. Role/policy: no policy changes; pure GRANT.
+--   5. Rollback: REVOKE the same privileges. Portal write paths stop
+--      working (current behaviour); reverts to silent-fail mode.
+--   6. Sign-off: owner (this session, 2026-05-09).
+-- Related: 0096 (the policies that depend on these grants),
+--          .claude/rules/data-infrastructure.md §6.
+
+-- UP
+
+GRANT UPDATE ON crm.enrolments TO authenticated;
+GRANT INSERT ON crm.disputes TO authenticated;
+
+-- DOWN
+-- REVOKE INSERT ON crm.disputes FROM authenticated;
+-- REVOKE UPDATE ON crm.enrolments FROM authenticated;

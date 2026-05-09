@@ -58,10 +58,6 @@ All work in this folder is bound by:
 - Every new consumer of the DB gets its own scoped Postgres role (`readonly_analytics` / `n8n_writer` / `ads_ingest` / owner).
 - `docs/data-architecture.md` is the design source of truth. Migrations implement what the doc says, not the other way round.
 
-### Before a substantial deploy, run `/ultrareview`
-
-For any non-trivial migration, Edge Function change, or governance doc update, run `/ultrareview` before shipping. It runs a cloud-based multi-agent review across the diff and often catches issues a single pass misses (non-reversible migrations without `-- DOWN`, secret leaks in Edge Function code, drift between design doc and migration, missing RLS policies on new tables). Mandatory for anything touching production schema or RLS. Optional for doc-only changes.
-
 ### Key reference files
 
 - Schema design: `platform/docs/data-architecture.md`

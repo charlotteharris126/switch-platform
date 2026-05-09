@@ -7,8 +7,11 @@
 // UPDATE; we don't repeat those checks here. Server-side validation is
 // limited to status enum (CHECK constraint enforces too) + lost_reason.
 //
-// Audit: every change writes through audit.log_provider_action so the
-// admin-side activity panel can replay outcome history.
+// Audit: every change writes through public.log_provider_action_v1 (the
+// public-schema wrapper over audit.log_provider_action — the audit schema
+// itself is not exposed in the Data API). Surfaces audit failures to the
+// caller rather than swallowing, so a failed write is visible. Atomic
+// (UPDATE + audit in one transaction) is a pending refinement.
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
@@ -57,37 +60,57 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return { ok: false, error: "Not signed in" };
 
-  const update: Record<string, unknown> = {
-    status: args.status,
-    status_updated_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-  if (args.status === "lost") {
-    update.lost_reason = args.lostReason;
-  } else {
-    update.lost_reason = null;
-  }
+  const newLostReason = args.status === "lost" ? args.lostReason ?? null : null;
 
-  // RLS on crm.enrolments scopes by provider_id; this only succeeds if the
-  // submission is actually routed to the caller's provider.
-  const { data: updatedRows, error } = await supabase
+  // Capture before-state for audit. RLS scopes by provider_id, so this only
+  // returns the row if the caller's provider owns it. Race window between
+  // this SELECT and the UPDATE is tolerable: same RLS gate on both, no other
+  // writer competes for outcome columns.
+  const { data: existingRow, error: readError } = await supabase
     .schema("crm")
     .from("enrolments")
-    .update(update)
+    .select("id, status, lost_reason")
     .eq("submission_id", args.submissionId)
-    .select("id");
+    .maybeSingle();
 
-  if (error) return { ok: false, error: error.message };
-  if (!updatedRows || updatedRows.length === 0) {
+  if (readError) return { ok: false, error: readError.message };
+  if (!existingRow) {
     return { ok: false, error: "No enrolment row found, or you don't have access" };
   }
 
-  // TODO (next session): write to audit.log_provider_action. The audit
-  // schema isn't currently exposed via the Data API, so .rpc() can't reach
-  // it directly. Either expose audit in the API settings + grant
-  // service_role, or add a public-schema wrapper function. Required before
-  // real-provider cutover per Clara's three gating conditions (Article 30
-  // ROPA evidence).
+  const before = { status: existingRow.status, lost_reason: existingRow.lost_reason };
+  const after = { status: args.status, lost_reason: newLostReason };
+
+  if (before.status === after.status && before.lost_reason === after.lost_reason) {
+    return { ok: true };
+  }
+
+  const nowIso = new Date().toISOString();
+  const { error: updateError } = await supabase
+    .schema("crm")
+    .from("enrolments")
+    .update({
+      status: args.status,
+      lost_reason: newLostReason,
+      status_updated_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq("id", existingRow.id);
+
+  if (updateError) return { ok: false, error: updateError.message };
+
+  const { error: auditError } = await supabase.rpc("log_provider_action_v1", {
+    p_action: "mark_outcome",
+    p_target_table: "crm.enrolments",
+    p_target_id: String(existingRow.id),
+    p_before: before,
+    p_after: after,
+    p_context: { submission_id: args.submissionId },
+  });
+
+  if (auditError) {
+    return { ok: false, error: `Outcome saved but audit write failed: ${auditError.message}` };
+  }
 
   revalidatePath(`/provider/leads/${args.submissionId}`);
   revalidatePath("/provider/leads");

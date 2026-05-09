@@ -4,6 +4,20 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-09 (Session 38): Audit wrapper, RLS proof, and the missing-GRANT bug
+
+**Type:** 3 migrations (0106, 0107, 0108) + 1 data-ops script (020) + 1 Server Action edit + 1 runbook doc. Clears 2 of Clara's 3 EMS-cutover gating conditions.
+
+- **0106** `public.log_provider_action_v1` — public-schema thin wrapper over `audit.log_provider_action`. The audit schema is intentionally not exposed via the Data API, so supabase-js `.rpc()` from Server Actions couldn't reach the inner writer. SECURITY INVOKER, delegates straight through; auth identity flows via the per-request `request.jwt.claims` GUC. Versioned (`_v1`) so we can deprecate cleanly. Replaces the TODO in `markOutcomeAction` (Server Action now writes through the wrapper after every UPDATE; surfaces audit failure to the caller rather than swallowing).
+- **0107** REVOKE EXECUTE FROM anon on the wrapper. Supabase's `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ... TO anon, authenticated, service_role` auto-grants every new public function to anon; explicit REVOKE FROM PUBLIC didn't undo it. Defence-in-depth — inner gate already rejects anon (`auth.uid()` NULL), but visible least-privilege wins.
+- **0108** GRANT UPDATE ON `crm.enrolments` + INSERT ON `crm.disputes` to `authenticated`. **Bug surfaced during RLS proof:** migration 0096 shipped two write-side RLS policies that depended on table-level GRANTs that didn't exist. PostgreSQL evaluates GRANT before RLS, so a denied GRANT short-circuits the policy with `42501 permission denied`. Net effect: the portal Server Action `markOutcomeAction` had been silently unable to persist outcomes since shipping in Session 37, despite the handoff marking it owner-tested. Confirmed by inspecting `crm.enrolments.updated_at` on the demo provider — every row carried the seed timestamp, no Charlotte-driven UPDATEs had landed. 0108 fixes by granting what 0096's comment already promised. Row scope still enforced by 0096 policies (RLS proof confirmed cross-tenant writes still blocked post-grant).
+- **data-ops/020** RLS proof script. 14 assertions covering helper return value, baseline own-data SELECT, cross-tenant SELECT on 6 tables, cross-tenant UPDATE/INSERT, audit `actor_provider_id` spoof rejection, `portal_enabled=false` lockout. All side effects in a `BEGIN; ... ROLLBACK;`. 14/14 PASS recorded in `platform/docs/rls-proof-2026-05-09.md`.
+- **Server Action edit** `app/app/provider/leads/[id]/actions.ts` — captures before-state via SELECT, performs UPDATE, calls `public.log_provider_action_v1` with before/after, surfaces audit failure to caller. Idempotent on retry of identical state. Atomic UPDATE+audit refactor flagged as a follow-up consideration in handoff.
+
+**Sign-off:** owner approved 0106 + 0107 (wrapper + ACL hygiene) and 0108 (the GRANT fix surfaced during proof). RLS proof clears Clara's gating condition #2 (`accounts-legal/docs/current-handoff.md` item 2). Condition #3 (originally framed as a multi-agent cloud diff review) needs substituting with an alternative review path — open question for next session.
+
+---
+
 ## 2026-05-09 (later): Demo provider seeded + Brevo sync filters demo data
 
 **Type:** 1 migration (0101) + 1 data-ops script (019). Provider portal MVP P2-P4 fixture in place.
