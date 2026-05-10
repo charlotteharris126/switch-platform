@@ -40,6 +40,27 @@ export default async function ProviderSupportPage() {
           </p>
         </div>
 
+        {/* Long-form intro guide. Same page that lives outside the login
+            for first-time access — useful to share with a teammate before
+            their invite lands. */}
+        <section className="bg-white border border-slate-200 rounded-xl p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+            New to the portal?
+          </p>
+          <p className="text-sm text-slate-700">
+            The full first-time-access walkthrough lives at{" "}
+            <a
+              href="/help/getting-started"
+              target="_blank"
+              rel="noreferrer"
+              className="font-semibold text-slate-900 underline-offset-2 hover:underline"
+            >
+              /help/getting-started
+            </a>
+            . Shareable with anyone, no sign-in required.
+          </p>
+        </section>
+
         {/* Help guides: short answers to the things providers most often ask. */}
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
