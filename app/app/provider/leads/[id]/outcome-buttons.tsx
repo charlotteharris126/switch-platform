@@ -65,7 +65,7 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
 
   const lostReasons = lostReasonsFor(currentStatus);
   const isOnPath = STEPPER_PATH.includes(currentStatus);
-  const isClosedOut = currentStatus === "lost" || currentStatus === "presumed_enrolled";
+  const isClosedOut = currentStatus === "presumed_enrolled";
 
   function fire(value: LeadStatus, reason?: LostReason) {
     setError(null);
@@ -121,6 +121,47 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
           />
         </div>
         {renderLostPicker()}
+        {error && renderError()}
+      </div>
+    );
+  }
+
+  // Off-path: lost. Provider can correct a mis-click or re-open if the
+  // learner re-engaged and verified things.
+  if (currentStatus === "lost") {
+    return (
+      <div className="mt-4 space-y-3">
+        <div className="text-sm text-rose-900 bg-rose-50 border border-rose-200 rounded-md p-3">
+          Marked <strong>Lost</strong>. If you ticked the wrong button or the
+          learner has come back and verified things, you can still move them to
+          one of these:
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+            Move them to
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ["enrolled", "emerald"],
+                ["enrolment_meeting_booked", "blue"],
+                ["cannot_reach", "amber"],
+                ["attempt_1_no_answer", "rose"],
+                ["attempt_2_no_answer", "rose"],
+                ["attempt_3_no_answer", "rose"],
+              ] as Array<[LeadStatus, "emerald" | "blue" | "amber" | "rose"]>
+            ).map(([s, tone]) => (
+              <SecondaryButton
+                key={s}
+                label={STATUS_LABEL[s]}
+                pending={pending && pendingValue === s}
+                disabled={pending}
+                onClick={() => fire(s)}
+                tone={tone}
+              />
+            ))}
+          </div>
+        </div>
         {error && renderError()}
       </div>
     );
@@ -308,18 +349,20 @@ function SecondaryButton({
   pending: boolean;
   disabled: boolean;
   onClick: () => void;
-  tone: "amber" | "rose";
+  tone: "amber" | "rose" | "emerald" | "blue";
 }) {
-  const toneClass =
-    tone === "amber"
-      ? "border-amber-300 text-amber-800 bg-white hover:bg-amber-50"
-      : "border-rose-300 text-rose-700 bg-white hover:bg-rose-50";
+  const toneMap: Record<string, string> = {
+    amber: "border-amber-300 text-amber-800 bg-white hover:bg-amber-50",
+    rose: "border-rose-300 text-rose-700 bg-white hover:bg-rose-50",
+    emerald: "border-emerald-300 text-emerald-800 bg-white hover:bg-emerald-50",
+    blue: "border-blue-300 text-blue-800 bg-white hover:bg-blue-50",
+  };
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`px-3 py-1.5 rounded-md text-sm font-medium border ${toneClass} disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors`}
+      className={`px-3 py-1.5 rounded-md text-sm font-medium border ${toneMap[tone]} disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors`}
     >
       {pending ? "…" : label}
     </button>

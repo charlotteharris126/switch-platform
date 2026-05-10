@@ -75,7 +75,18 @@ const ALLOWED: Record<LeadStatus, ReadonlyArray<LeadStatus>> = {
   ],
   enrolment_meeting_booked: ["enrolled", "lost", "cannot_reach"],
   enrolled: ["lost"],
-  lost: [],
+  // lost is recoverable. Providers can correct a mis-click (wrong button)
+  // or move a lead back into the cycle if the learner re-engages and
+  // verifies things. Anything except 'open' (system default) and a no-op
+  // back to 'lost' is allowed.
+  lost: [
+    "attempt_1_no_answer",
+    "attempt_2_no_answer",
+    "attempt_3_no_answer",
+    "enrolment_meeting_booked",
+    "enrolled",
+    "cannot_reach",
+  ],
   cannot_reach: ["enrolment_meeting_booked", "enrolled", "lost"],
   presumed_enrolled: [],
 };
