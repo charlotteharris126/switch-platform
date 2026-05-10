@@ -36,8 +36,6 @@ interface ProviderUserRow {
 
 interface ProviderRow {
   company_name: string;
-  per_enrolment_fee: number | null;
-  free_enrolments_remaining: number | null;
 }
 
 interface EnrolmentCountRow {
@@ -143,7 +141,7 @@ export default async function ProviderHomePage() {
     admin
       .schema("crm")
       .from("providers")
-      .select("company_name, per_enrolment_fee, free_enrolments_remaining")
+      .select("company_name")
       .eq("provider_id", pu.provider_id)
       .maybeSingle<ProviderRow>(),
     recentIds.length
@@ -211,14 +209,6 @@ export default async function ProviderHomePage() {
     staleAttempts.map((e) => e.status_updated_at),
   );
 
-  // Estimated fees this month. naive: per_enrolment_fee × enrolledThisMonth.
-  // (Free-enrolments accounting is a follow-up. provider's first 3 enrolments
-  // are free per pilot pricing, but we'd need to know prior enrolments to
-  // model that exactly.)
-  const feesThisMonth = provider?.per_enrolment_fee != null
-    ? provider.per_enrolment_fee * enrolledThisMonth
-    : null;
-
   const recentEnrolBySub = new Map<number, RecentEnrolmentRow>();
   for (const e of (recentEnrolsResult.data ?? []) as RecentEnrolmentRow[]) {
     recentEnrolBySub.set(e.submission_id, e);
@@ -250,9 +240,11 @@ export default async function ProviderHomePage() {
           </h1>
         </div>
 
-        {/* Hero stat strip */}
+        {/* Hero stat strip. Billing-side stats (estimated fees) live with
+            the admin/billing surface for now and come back here in Phase 2
+            once invoicing is in. */}
         <section className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-2xl p-6 md:p-8 shadow-sm">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <p className="text-xs uppercase tracking-widest text-slate-300 font-semibold">
                 Enrolments this month
@@ -265,20 +257,6 @@ export default async function ProviderHomePage() {
                 {monthDelta === 0
                   ? `same as last month (${enrolledLastMonth})`
                   : `${Math.abs(monthDelta)} ${monthDelta > 0 ? "more" : "fewer"} than last month (${enrolledLastMonth})`}
-              </p>
-            </div>
-
-            <div className="border-t md:border-t-0 md:border-l border-slate-700 pt-4 md:pt-0 md:pl-6">
-              <p className="text-xs uppercase tracking-widest text-slate-300 font-semibold">
-                Estimated fees this month
-              </p>
-              <p className="text-3xl md:text-4xl font-semibold tabular-nums mt-2 leading-none">
-                {feesThisMonth == null ? "-" : `£${feesThisMonth.toLocaleString("en-GB")}`}
-              </p>
-              <p className="text-xs mt-3 text-slate-400">
-                {provider?.per_enrolment_fee != null
-                  ? `£${provider.per_enrolment_fee} per enrolment`
-                  : "Pricing on file unclear. email support@switchleads.co.uk"}
               </p>
             </div>
 

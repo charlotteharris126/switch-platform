@@ -192,7 +192,12 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
             <div className="lg:col-span-3">
-              <LeadsTable rows={rows} initialFilter={initialFilter} onBulkMark={bulkMarkOutcomeAction} />
+              <LeadsTable
+                key={initialFilter}
+                rows={rows}
+                initialFilter={initialFilter}
+                onBulkMark={bulkMarkOutcomeAction}
+              />
             </div>
             <div className="lg:col-span-1 lg:sticky lg:top-6">
               <LeadsSidebar
