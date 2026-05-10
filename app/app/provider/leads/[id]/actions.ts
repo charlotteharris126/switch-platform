@@ -208,6 +208,125 @@ export async function addLeadNoteAction(args: {
   return { ok: true };
 }
 
+// Bulk-mark outcomes across multiple submission IDs at once. Used by the
+// checkbox-based selection on /provider/leads. Each row is processed
+// independently — invalid transitions are skipped and counted, not
+// errored. Audit logs one row per successful update.
+//
+// Currently supports cannot_reach (no extra fields) and lost (with
+// shared lost_reason). Other transitions stay one-by-one because the
+// state machine is tighter on those (e.g. attempt_2 from open is wrong;
+// attempt_1 from already-attempt_1 is a no-op).
+export async function bulkMarkOutcomeAction(args: {
+  submissionIds: number[];
+  status: "cannot_reach" | "lost";
+  lostReason?: string | null;
+}): Promise<{ ok: boolean; applied: number; skipped: number; error?: string }> {
+  if (!Array.isArray(args.submissionIds) || args.submissionIds.length === 0) {
+    return { ok: false, applied: 0, skipped: 0, error: "No leads selected" };
+  }
+  if (args.submissionIds.length > 200) {
+    return { ok: false, applied: 0, skipped: 0, error: "Too many leads selected (max 200)" };
+  }
+  if (args.status !== "cannot_reach" && args.status !== "lost") {
+    return { ok: false, applied: 0, skipped: 0, error: `Bulk doesn't support status: ${args.status}` };
+  }
+  if (args.status === "lost") {
+    if (!args.lostReason || !isLostReason(args.lostReason)) {
+      return { ok: false, applied: 0, skipped: 0, error: "A lost reason is required for bulk lost" };
+    }
+  }
+
+  const supabase = await createClient();
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session?.user) {
+    return { ok: false, applied: 0, skipped: 0, error: "Not signed in" };
+  }
+
+  // RLS scopes the SELECT to the caller's own leads. Out-of-scope ids just
+  // don't appear; out-of-scope ids never get UPDATEd because the .in()
+  // filter on subsequent updates is a subset of returned ids.
+  const { data: existing, error: readError } = await supabase
+    .schema("crm")
+    .from("enrolments")
+    .select("id, submission_id, status, lost_reason")
+    .in("submission_id", args.submissionIds);
+  if (readError) return { ok: false, applied: 0, skipped: 0, error: readError.message };
+  const rows = (existing ?? []) as Array<{
+    id: number;
+    submission_id: number;
+    status: string;
+    lost_reason: string | null;
+  }>;
+
+  const targetStatus = args.status as LeadStatus;
+  const newLostReason: LostReason | null = args.status === "lost" ? (args.lostReason as LostReason) : null;
+  const nowIso = new Date().toISOString();
+
+  let applied = 0;
+  let skipped = 0;
+
+  for (const row of rows) {
+    const fromStatus = row.status as LeadStatus;
+    if (!isAllowedTransition(fromStatus, targetStatus)) {
+      skipped += 1;
+      continue;
+    }
+    if (args.status === "lost" && !lostReasonsFor(fromStatus).includes(args.lostReason as LostReason)) {
+      skipped += 1;
+      continue;
+    }
+    if (
+      row.status === targetStatus &&
+      (row.lost_reason ?? null) === (newLostReason ?? null)
+    ) {
+      skipped += 1;
+      continue;
+    }
+
+    const before = { status: row.status, lost_reason: row.lost_reason };
+    const after = { status: targetStatus, lost_reason: newLostReason };
+
+    const { error: updErr } = await supabase
+      .schema("crm")
+      .from("enrolments")
+      .update({
+        status: targetStatus,
+        lost_reason: newLostReason,
+        status_updated_at: nowIso,
+        updated_at: nowIso,
+        callback_requested_at: null,
+        callback_requested_by: null,
+      })
+      .eq("id", row.id);
+    if (updErr) {
+      skipped += 1;
+      continue;
+    }
+
+    await supabase.rpc("log_provider_action_v1", {
+      p_action: "mark_outcome_bulk",
+      p_target_table: "crm.enrolments",
+      p_target_id: String(row.id),
+      p_before: before,
+      p_after: after,
+      p_context: { submission_id: row.submission_id, bulk: true },
+    });
+
+    applied += 1;
+  }
+
+  // Skipped count includes both "transition not allowed" and submissions the
+  // caller doesn't own (those never appeared in the SELECT in the first place).
+  const totalRequested = args.submissionIds.length;
+  const notFound = totalRequested - rows.length;
+  skipped += notFound;
+
+  revalidatePath("/provider/leads");
+  revalidatePath("/provider");
+  return { ok: true, applied, skipped };
+}
+
 // Called when the provider opens a lead detail page. marks any unread
 // admin notes on that lead as read. Idempotent: a no-op if there's
 // nothing unread. RLS scopes the UPDATE to the provider's own leads.

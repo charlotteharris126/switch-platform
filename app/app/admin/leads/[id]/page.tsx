@@ -166,6 +166,48 @@ export default async function LeadDetailPage({
     author_role: n.author_role,
   }));
 
+  // Audit activity for this lead — every action recorded against the lead's
+  // submission or enrolment. Pulls from audit.actions which the audit schema
+  // helper (admin.is_admin RLS) gates.
+  const enrolmentIdString = enrolment ? String(enrolment.id) : null;
+  let auditQ = supabase
+    .schema("audit")
+    .from("actions")
+    .select("id, created_at, actor_email, surface, action, target_table, target_id, before_value, after_value, context")
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (enrolmentIdString) {
+    auditQ = auditQ.or(
+      `context->>submission_id.eq.${leadId},and(target_table.eq.crm.enrolments,target_id.eq.${enrolmentIdString}),and(target_table.eq.crm.lead_notes)`,
+    );
+  } else {
+    auditQ = auditQ.eq("context->>submission_id", String(leadId));
+  }
+  const { data: auditRowsRaw } = await auditQ;
+  type AuditRow = {
+    id: number;
+    created_at: string;
+    actor_email: string | null;
+    surface: "provider" | "admin" | "system" | string;
+    action: string;
+    target_table: string | null;
+    target_id: string | null;
+    before_value: Record<string, unknown> | null;
+    after_value: Record<string, unknown> | null;
+    context: Record<string, unknown> | null;
+  };
+  const auditRows = ((auditRowsRaw ?? []) as AuditRow[]).filter((r) => {
+    // Belt and braces: only keep rows that match this lead either by
+    // submission_id in context or by target enrolment_id.
+    if (r.context && (r.context as { submission_id?: number }).submission_id === leadId) return true;
+    if (
+      r.target_table === "crm.enrolments" &&
+      enrolmentIdString &&
+      r.target_id === enrolmentIdString
+    ) return true;
+    return false;
+  });
+
   const routing = (routingRes.data ?? []) as Array<{
     id: number;
     provider_id: string;
@@ -461,6 +503,42 @@ export default async function LeadDetailPage({
         />
       )}
 
+      {/* Audit activity — every action recorded against this lead */}
+      {!lead.is_dq && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Activity ({auditRows.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {auditRows.length === 0 ? (
+              <p className="text-xs text-[#5a6a72] p-4">No audit events recorded.</p>
+            ) : (
+              <ul className="divide-y divide-[#dde3e6]">
+                {auditRows.map((r) => (
+                  <li key={r.id} className="p-3 text-xs flex items-start gap-3">
+                    <div className="shrink-0 w-32">
+                      <span className="block text-[#5a6a72] tabular-nums">
+                        {formatDateTime(r.created_at)}
+                      </span>
+                      <SurfaceBadge surface={r.surface} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-[#0e1726]">
+                        {humaniseAction(r.action)}
+                        {r.actor_email && (
+                          <span className="ml-2 font-normal text-[#5a6a72]">by {r.actor_email}</span>
+                        )}
+                      </p>
+                      <AuditDiff before={r.before_value} after={r.after_value} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Routing log */}
       <Card>
         <CardHeader>
@@ -692,4 +770,74 @@ function FieldRow({ label, value }: { label: string; value: string | null | unde
       <span className="text-[#11242e] font-mono break-all">{value || "—"}</span>
     </div>
   );
+}
+
+function SurfaceBadge({ surface }: { surface: string }) {
+  const palette: Record<string, string> = {
+    provider: "bg-amber-100 text-amber-800 border-amber-200",
+    admin: "bg-blue-100 text-blue-800 border-blue-200",
+    system: "bg-slate-100 text-slate-700 border-slate-200",
+  };
+  const cls = palette[surface] ?? palette.system;
+  return (
+    <span className={`mt-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border ${cls}`}>
+      {surface}
+    </span>
+  );
+}
+
+const ACTION_LABEL: Record<string, string> = {
+  mark_outcome: "Marked outcome",
+  mark_outcome_bulk: "Marked outcome (bulk)",
+  add_note: "Added note",
+  add_admin_note: "Admin added note",
+  remove_passkey: "Removed passkey",
+  update_display_name: "Updated display name",
+  save_notes: "Saved notes",
+  upsert_enrolment_outcome: "Set enrolment outcome",
+};
+
+function humaniseAction(action: string): string {
+  return ACTION_LABEL[action] ?? action.replace(/_/g, " ");
+}
+
+function AuditDiff({
+  before,
+  after,
+}: {
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}) {
+  const keys = new Set<string>([
+    ...Object.keys(before ?? {}),
+    ...Object.keys(after ?? {}),
+  ]);
+  if (keys.size === 0) return null;
+  return (
+    <ul className="mt-1 space-y-0.5">
+      {[...keys].map((k) => {
+        const bv = before?.[k];
+        const av = after?.[k];
+        const same = JSON.stringify(bv) === JSON.stringify(av);
+        if (same) return null;
+        return (
+          <li key={k} className="text-[11px] text-[#5a6a72]">
+            <span className="font-semibold text-[#11242e]">{k}:</span>{" "}
+            {bv != null && (
+              <span className="line-through text-[#b3412e]">{stringify(bv)}</span>
+            )}
+            {bv != null && av != null && <span> → </span>}
+            {av != null && <span className="text-emerald-700">{stringify(av)}</span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function stringify(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return JSON.stringify(v);
 }
