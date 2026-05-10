@@ -191,17 +191,12 @@ export function EnrolmentOutcomeForm({
         </div>
       )}
 
-      <label className="flex flex-col gap-1 mb-3">
-        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Notes (optional)</span>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="e.g. spoke to provider, didn't show up to session 1"
-          rows={2}
-          disabled={pending}
-          className="text-xs border border-[#dad4cb] rounded-lg bg-white px-3 py-2 text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76] resize-y"
-        />
-      </label>
+      {/* Legacy notes editor removed — admin notes now live in the dedicated
+          AdminNotesPanel below, mirrored to the provider portal with author
+          + timestamp + audit. Existing crm.enrolments.notes value is
+          preserved on submit (the `notes` state is initialised from
+          currentNotes and re-sent unchanged), so historical text isn't
+          nulled. Column drop will follow in a later migration. */}
 
       <div className="flex items-center gap-3">
         <button
