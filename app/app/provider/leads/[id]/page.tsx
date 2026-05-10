@@ -14,6 +14,7 @@ import { DurationTimer } from "../../duration-timer";
 import { OutcomeButtons } from "./outcome-buttons";
 import { NotesLog, type NoteRow } from "./notes-log";
 import { MarkAdminNotesRead } from "./mark-admin-notes-read";
+import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { markOutcomeAction, addLeadNoteAction, markAdminNotesReadAction } from "./actions";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
 import { formatIntakeId } from "@/lib/intake-format";
@@ -206,6 +207,13 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
 
   return (
     <ProviderShell active="leads">
+      <RealtimeRefresh
+        tables={[
+          { schema: "crm", table: "enrolments" },
+          { schema: "crm", table: "lead_notes" },
+        ]}
+        channel={`rt-provider-lead-${submission.id}`}
+      />
       <div className="max-w-7xl mx-auto p-6">
         {/* Header row: back link + prev/next */}
         <div className="flex items-center justify-between gap-3">

@@ -139,7 +139,7 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
             />
           ))}
         </div>
-        <div className="relative">
+        <div className="flex items-center gap-2">
           <input
             type="search"
             value={query}
@@ -147,6 +147,19 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
             placeholder="Search name or course"
             className="border border-slate-300 rounded-md pl-3 pr-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-slate-400"
           />
+          <button
+            type="button"
+            onClick={() => downloadCsv(filtered)}
+            disabled={filtered.length === 0}
+            title={
+              filter === "all" && query.length === 0
+                ? "Download all leads as CSV"
+                : "Download the current filtered view as CSV"
+            }
+            className="px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 hover:border-slate-400 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          >
+            Export CSV
+          </button>
         </div>
       </div>
 
@@ -226,6 +239,60 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
       )}
     </div>
   );
+}
+
+// Export the currently-filtered rows as a CSV. Lives client-side because the
+// rows are already in memory; no extra round-trip.
+function downloadCsv(rows: LeadRow[]) {
+  const headers = [
+    "Lead ID",
+    "Name",
+    "Email",
+    "Course",
+    "Funding",
+    "Status",
+    "Routed at",
+    "Fastrack",
+    "Callback pending",
+  ];
+  const lines = [headers.map(csvCell).join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.id.toString(),
+        r.name,
+        r.email ?? "",
+        r.course_id ?? "",
+        r.funding_category ?? "",
+        STATUS_LABEL[r.status] ?? r.status,
+        r.routed_at ?? "",
+        r.has_fastrack ? "Yes" : "No",
+        r.callback_pending ? "Yes" : "No",
+      ]
+        .map(csvCell)
+        .join(","),
+    );
+  }
+  const csv = lines.join("\r\n");
+  // BOM so Excel opens UTF-8 cleanly without mangling non-ASCII names.
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.download = `switchleads-leads-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value: string): string {
+  // Quote if the value contains a quote, comma, or newline; double up internal quotes.
+  if (/[",\n\r]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
 }
 
 function FilterPill({

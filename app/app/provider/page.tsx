@@ -22,6 +22,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ProviderShell } from "./provider-shell";
 import { DurationTimer } from "./duration-timer";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
+import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 interface ProviderUserRow {
   id: number;
@@ -201,6 +202,14 @@ export default async function ProviderHomePage() {
 
   return (
     <ProviderShell active="home">
+      <RealtimeRefresh
+        tables={[
+          { schema: "leads", table: "submissions" },
+          { schema: "crm", table: "enrolments" },
+          { schema: "crm", table: "lead_notes" },
+        ]}
+        channel="rt-provider-home"
+      />
       <div className="max-w-7xl mx-auto p-6 space-y-6">
         {/* Greeting */}
         <div>

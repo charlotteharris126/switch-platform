@@ -18,6 +18,7 @@ import { ProviderShell } from "../provider-shell";
 import { LeadsTable, type LeadRow, type Filter } from "./leads-table";
 import { LeadsSidebar } from "./leads-sidebar";
 import type { LeadStatus } from "@/lib/lead-status";
+import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 const IN_PROGRESS_STATUSES = new Set<LeadStatus>([
   "attempt_1_no_answer",
@@ -166,6 +167,14 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
 
   return (
     <ProviderShell active="leads">
+      <RealtimeRefresh
+        tables={[
+          { schema: "leads", table: "submissions" },
+          { schema: "crm", table: "enrolments" },
+          { schema: "crm", table: "lead_notes" },
+        ]}
+        channel="rt-provider-leads"
+      />
       <div className="max-w-7xl mx-auto p-6">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold text-slate-900">Your leads</h1>
