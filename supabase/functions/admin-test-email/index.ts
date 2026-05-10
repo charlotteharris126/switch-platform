@@ -90,13 +90,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
              prior_level_3_or_higher, can_start_on_intake_date,
              outcome_interest, why_this_course,
              postcode, region, reason, interest, situation,
-             session_id, source_form, schema_version,
-             utm_source, utm_medium, utm_campaign, utm_content,
-             user_agent, page_url, referrer,
-             ip_address, ip_country, ip_country_code,
-             marketing_opt_in, terms_accepted, privacy_accepted,
-             primary_routed_to, fastracked_at, client_nonce, parent_submission_id,
-             archived_at, is_dq, dq_reason
+             qualification, start_when, budget, courses_selected,
+             is_dq, dq_reason, primary_routed_to, archived_at,
+             marketing_opt_in,
+             preferred_intake_id, acceptable_intake_ids,
+             referral_code, client_nonce,
+             start_timing, interest_breadth, investment_willingness,
+             current_qualification, source_form, enriched_at,
+             fastracked_at
         FROM leads.submissions
        WHERE id = ${submissionId}
     `;
