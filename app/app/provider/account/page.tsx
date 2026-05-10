@@ -10,6 +10,7 @@
 // fresh invite via /admin/providers/[id] when a provider needs an extra
 // device.
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -175,16 +176,22 @@ export default async function ProviderAccountPage() {
         {/* Support */}
         <Card title="Need help?">
           <p className="text-sm text-slate-700">
-            Email{" "}
+            Anything you can&apos;t do from the portal — billing queries, business details
+            to update, lost device, anything else.{" "}
+            <Link
+              href="/provider/support"
+              className="font-semibold text-slate-900 hover:underline underline-offset-2"
+            >
+              Open the Support form
+            </Link>{" "}
+            (or email{" "}
             <a
               href="mailto:support@switchleads.co.uk"
               className="font-semibold text-slate-900 hover:underline underline-offset-2"
             >
               support@switchleads.co.uk
-            </a>{" "}
-            for anything you can&apos;t do from the portal — billing queries, business
-            details to update, lost device, anything else. We aim to get back to you
-            within one working day.
+            </a>
+            ). We aim to reply within one working day.
           </p>
         </Card>
       </div>

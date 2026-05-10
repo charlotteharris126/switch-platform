@@ -487,3 +487,6 @@ verify_jwt = false
 
 [functions.admin-test-email]
 verify_jwt = false
+
+[functions.provider-support-notify]
+verify_jwt = false

@@ -13,7 +13,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
 
-type Active = "home" | "leads" | "account";
+type Active = "home" | "leads" | "account" | "support";
 
 interface Props {
   active: Active;
@@ -40,6 +40,7 @@ export async function ProviderShell({ active, children }: Props) {
             <Suspense fallback={<NavLink href="/provider/leads" label="Leads" active={active === "leads"} />}>
               <LeadsNavLink active={active === "leads"} />
             </Suspense>
+            <NavLink href="/provider/support" label="Support" active={active === "support"} />
             <NavLink href="/provider/account" label="Account" active={active === "account"} />
             <form action={signOutAction} className="ml-2">
               <SignOutButton />
