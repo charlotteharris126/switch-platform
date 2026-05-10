@@ -41,13 +41,37 @@ extract_env() {
 BREVO_API_KEY=$(extract_env BREVO_API_KEY)
 SUPABASE_DB_URL=$(extract_env SUPABASE_DB_URL)
 
-if [[ -z "$BREVO_API_KEY" ]]; then
-  echo "Error: BREVO_API_KEY missing or empty in $ENV_FILE"
-  exit 1
-fi
 if [[ -z "$SUPABASE_DB_URL" ]]; then
   echo "Error: SUPABASE_DB_URL missing or empty in $ENV_FILE"
   exit 1
+fi
+
+# BREVO_API_KEY isn't part of the standard local .env (Edge Functions read
+# it from their own env, not the dev .env). If it's missing, prompt for it
+# silently (paste from LastPass, hit enter — input not echoed). Optional
+# one-time fix: add `BREVO_API_KEY=xkeysib-...` to your .env.
+if [[ -z "$BREVO_API_KEY" ]]; then
+  echo "BREVO_API_KEY not found in $ENV_FILE."
+  echo "Paste it now (from LastPass / Brevo account → SMTP & API → API keys)."
+  echo "Input is hidden. Press Enter when done."
+  echo ""
+  printf "BREVO_API_KEY: "
+  read -rs BREVO_API_KEY
+  echo ""
+  if [[ -z "$BREVO_API_KEY" ]]; then
+    echo "Error: nothing entered, aborting."
+    exit 1
+  fi
+  if [[ "$BREVO_API_KEY" != xkeysib-* ]]; then
+    echo "Warning: that doesn't look like a Brevo API key (expected to start with 'xkeysib-')."
+    printf "Continue anyway? [y/N] "
+    read -r confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+      echo "Aborted."
+      exit 1
+    fi
+  fi
+  echo ""
 fi
 
 export BREVO_API_KEY SUPABASE_DB_URL

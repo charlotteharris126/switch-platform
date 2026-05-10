@@ -1,5 +1,39 @@
 # Platform Handoff, Session 38, 2026-05-09
 
+## ⚡ PUSH FROM switchable/email Session 14, 2026-05-10: Brevo contact-attribute backfill (SW_REFERRAL_URL + SW_FASTRACK_URL)
+
+**Urgency:** important but not urgent. Site redirect (`switchable-site` commit `e99fd6d`) is rescuing the click path. Backfill is data hygiene and a precondition for the next marketing broadcast referencing either attribute. Tomorrow morning is fine.
+
+### What happened tonight
+
+Switchable email referral launch broadcast shipped stale `SW_REFERRAL_URL` values to EMS-matched contacts. Root cause: `_shared/route-lead.ts` `buildReferralUrl()` originally wrote `SW_REFERRAL_URL = /find-funded-courses/?ref=CODE` (funded) or `/find-your-course/?ref=CODE` (self-funded) per commit aadf5ad on 4 May 11:41 BST. Rewired to `/refer/?ref=CODE` for everyone per commit 30e62e0 on 4 May 18:06 BST. No Brevo backfill ran when the wiring changed. Existing contacts on the Switchable Marketing list held stale URLs. Broadcast filter `SW_REFERRAL_URL not empty` caught stale values happily.
+
+1 real recipient clicked the broken link before the site redirect rescued the flow. Wren also drafted a correction broadcast but did not send it (blast-radius didn't justify mass apology). Tonight's redirect is permanent defence-in-depth.
+
+### Task: Brevo contact-attribute backfill
+
+For every contact on the Switchable Marketing list (or more cleanly: every Brevo contact where a matching `leads.submissions` row exists with `referral_code` set):
+
+1. **Backfill `SW_REFERRAL_URL`** — rebuild as `https://switchable.org.uk/refer/?ref=<referral_code>` matching current `buildReferralUrl()` output. Push via the existing `upsertBrevoContact` helper used in `route-lead.ts` (same idempotency, same error handling, same audit row).
+2. **Backfill `SW_FASTRACK_URL` in the same pass.** Wiring shipped 2026-05-09 (commit not in my context but the helper is `buildFastrackUrl(submission.client_nonce)` in the same file). Pre-2026-05-09 funded contacts won't have it set. Empty string is correct for self-funded (no `client_nonce`) and for any funded row without a `client_nonce`. The new `u1-funded.html` template (live after the owner pastes it into Brevo Transactional) references `SW_FASTRACK_URL`, and any future marketing reference would need the backfill anyway.
+3. **Spot-check 3 contacts in Brevo manually before/after.** Pull the current attribute value from the Brevo dashboard or Contact API for the same email pre- and post-backfill. Confirm each value matches what live wiring would produce for that contact's source data.
+4. **Log to `platform/docs/changelog.md`** with date, contact count attempted, count succeeded, any failures.
+
+**Scope:** every contact with `marketing_opt_in = true` on their latest submission, regardless of provider. Don't filter on EMS only, the same staleness affects every other broadcast we would send next.
+
+**Out of scope (Wren is handling):** the site redirect, the correction email draft, the process lock.
+
+**Report back to owner with:** total count attempted, total succeeded, Brevo API failures (likely dead-letter), 3 spot-check before/after values.
+
+### Reference docs
+
+- `switchable/email/docs/current-handoff.md` Session 14 — full incident detail
+- `platform/supabase/functions/_shared/route-lead.ts` lines 519-527 (current `buildReferralUrl`), lines 542-545 (current `buildFastrackUrl`)
+- Phase 3c backfill pattern from 2026-05-07 (47 contacts realigned) — closest precedent
+- **New process lock now in `platform/CLAUDE.md` core discipline + `switchable/email/CLAUDE.md` Pre-broadcast gate + memory entry `feedback_brevo_attribute_wiring_requires_backfill.md`.** TL;DR: every change to an attribute-producing function in `route-lead.ts` requires a same-session backfill plan before merge, and the next marketing broadcast referencing the attribute is gated on the backfill being run. This bullet was added to your Core discipline list this session.
+
+---
+
 ## Current state
 
 Two of Clara's three EMS-cutover gating conditions cleared this session: audit-log wrapper wired (mig 0106 + Server Action update) and RLS proof signed off 14/14 PASS (data-ops 020 + runbook). Real surprise: the proof caught that migration 0096's write-side policies were no-ops because table-level GRANTs were missing — `markOutcomeAction` has been silently failing since Session 37 despite the "owner-tested" claim. Migration 0108 grants the privileges 0096's comment already promised. Charlotte needs to retest outcome marking on the demo provider before EMS cutover. Clara's third gating condition was a multi-agent cloud diff review that isn't available in this setup; flagged to Charlotte to confirm an alternative review shape (focused single-agent diff review, or her own read).
