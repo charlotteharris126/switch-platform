@@ -91,7 +91,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
              outcome_interest, why_this_course,
              postcode, region, reason, interest, situation,
              session_id, source_form, schema_version,
-             utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+             utm_source, utm_medium, utm_campaign, utm_content,
              user_agent, page_url, referrer,
              ip_address, ip_country, ip_country_code,
              marketing_opt_in, terms_accepted, privacy_accepted,
