@@ -47,6 +47,7 @@ export interface ProviderRow {
   auto_route_enabled: boolean;
   trust_line: string | null;
   regions: string[] | null;
+  portal_enabled: boolean;
 }
 
 export interface SubmissionRow {
@@ -143,7 +144,7 @@ export async function routeLead(
       SELECT provider_id, company_name, contact_email, contact_name,
              sheet_id, sheet_webhook_url, crm_webhook_url, cc_emails,
              active, archived_at, auto_route_enabled,
-             trust_line, regions
+             trust_line, regions, portal_enabled
         FROM crm.providers
        WHERE provider_id = ${providerId}
     `;
@@ -1160,18 +1161,33 @@ async function sendProviderNotification(
   const sheetLink = provider.sheet_id
     ? `https://docs.google.com/spreadsheets/d/${provider.sheet_id}/edit`
     : null;
+  // Portal-enabled providers get a deep link into the portal lead detail.
+  // The proxy on app.switchleads.co.uk rewrites /leads/<id> → /provider/leads/<id>.
+  const portalLink = provider.portal_enabled
+    ? `https://app.switchleads.co.uk/leads/${submission.id}`
+    : null;
 
   const ownerEmail = getOwnerEmail();
   const ccList = buildCcList(ownerEmail, provider.cc_emails);
 
-  // Re-application: PII-free, references the parent lead by its label, points
-  // the provider at the marker row at the bottom of the sheet (status='Re-applied').
+  // Action link block — portal first when available, sheet as fallback.
+  const actionBlock = portalLink
+    ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>`
+    : sheetLink
+      ? `<p><a href="${sheetLink}">Open your sheet</a></p>`
+      : "";
+
+  // Re-application: PII-free, references the parent lead by its label.
   if (trigger === "re_application" && reApplicationContext) {
+    const reAppContextLine = portalLink
+      ? `<p>Open the lead in the portal — the re-application is logged in its history.</p>`
+      : `<p>You'll see a new row at the bottom of your sheet with status <strong>Re-applied</strong>, referencing the original.</p>`;
     const html = `
       <p>Hi ${provider.contact_name ?? "there"},</p>
       <p>A previous enquiry (${reApplicationContext.parentLeadId}) has just resubmitted the form.</p>
-      ${sheetLink ? `<p><a href="${sheetLink}">Open your sheet</a></p>` : ""}
-      <p>You'll see a new row at the bottom of your sheet with status <strong>Re-applied</strong>, referencing the original. This is a positive engagement signal — they're still keen. Worth a follow-up if you haven't already, or update the original row's status if you've spoken.</p>
+      ${actionBlock}
+      ${reAppContextLine}
+      <p>This is a positive engagement signal — they're still keen. Worth a follow-up if you haven't already, or update the status if you've spoken.</p>
       <p>Thanks,<br>SwitchLeads</p>
     `.trim();
     return await sendBrevoEmail({
@@ -1184,11 +1200,14 @@ async function sendProviderNotification(
   }
 
   // Standard new-enquiry email (auto-route + owner-confirm paths)
+  const enquiryContextLine = portalLink
+    ? `<p>The lead is at status <strong>open</strong>. Click through to see contact details, mark outcomes as you call, and add notes.</p>`
+    : `<p>The lead has been added with status <strong>open</strong>. Please update the status and notes in your sheet as you work through the follow-up.</p>`;
   const html = `
     <p>Hi ${provider.contact_name ?? "there"},</p>
-    <p>You have a new enquiry (${leadId}) in your SwitchLeads sheet.</p>
-    ${sheetLink ? `<p><a href="${sheetLink}">Open your sheet</a></p>` : ""}
-    <p>The lead has been added with status <strong>open</strong>. Please update the status and notes as you work through the follow-up.</p>
+    <p>You have a new enquiry (${leadId}) ${portalLink ? "ready in your SwitchLeads portal" : "in your SwitchLeads sheet"}.</p>
+    ${actionBlock}
+    ${enquiryContextLine}
     <p>Thanks,<br>SwitchLeads</p>
   `.trim();
 
