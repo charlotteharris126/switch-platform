@@ -41,9 +41,11 @@ export type Filter =
   | "enrolled"
   | "cold";
 
+// "Action needed" is rendered separately above as its own prominent pill
+// (rose when items waiting, emerald when zero). The standard filter row
+// below covers everything else.
 const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
-  { value: "action", label: "Action needed" },
   { value: "callback", label: "Needs callback" },
   { value: "fastrack", label: "Fastrack" },
   { value: "open", label: "Open" },
@@ -186,6 +188,40 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
 
   return (
     <div>
+      {/* Action-needed pill — elevated above the standard filter row.
+          Rose when there's anything waiting, emerald when all clear. */}
+      <button
+        type="button"
+        onClick={() => setFilter("action")}
+        className={`mb-3 w-full text-left px-4 py-3 rounded-xl border transition-colors cursor-pointer flex items-baseline justify-between gap-3 ${
+          counts.action > 0
+            ? filter === "action"
+              ? "bg-rose-600 border-rose-600 text-white"
+              : "bg-rose-50 border-rose-200 hover:bg-rose-100 hover:border-rose-300 text-rose-900"
+            : filter === "action"
+              ? "bg-emerald-600 border-emerald-600 text-white"
+              : "bg-emerald-50 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 text-emerald-900"
+        }`}
+      >
+        <span className="flex items-baseline gap-3">
+          <span className="text-sm font-semibold uppercase tracking-wide">
+            Action needed
+          </span>
+          <span className="text-xs opacity-80">
+            {counts.action > 0
+              ? "Callbacks, fastrack, open leads, and stale attempts"
+              : "All clear — nothing waiting on you"}
+          </span>
+        </span>
+        <span
+          className={`text-2xl font-semibold tabular-nums leading-none ${
+            counts.action === 0 && filter !== "action" ? "" : ""
+          }`}
+        >
+          {counts.action > 0 ? counts.action : "✓"}
+        </span>
+      </button>
+
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex flex-wrap gap-1">
           {FILTER_DEFS.map((f) => (
