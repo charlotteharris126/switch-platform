@@ -258,54 +258,54 @@ export default async function ProviderHomePage() {
           </div>
         </section>
 
-        {/* Action queue — only render when something needs attention. Four
-            uniform count cards: fastrack leads → callback requests → open
-            leads never called → call attempts need retrying. */}
-        {(fastrackReadyCount > 0 || callbackCount > 0 || counts.open > 0 || staleAttemptCount > 0) && (
-          <section>
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-              Needs your attention
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {fastrackReadyCount > 0 && (
-                <ActionCard
-                  href="/provider/leads"
-                  tone="violet"
-                  count={fastrackReadyCount}
-                  label={fastrackReadyCount === 1 ? "fastrack lead" : "fastrack leads"}
-                  hint="Cohort confirmed, ready to enrol"
-                />
-              )}
-              {callbackCount > 0 && (
-                <ActionCard
-                  href="/provider/leads?status=callback"
-                  tone="rose"
-                  count={callbackCount}
-                  label={callbackCount === 1 ? "callback request" : "callback requests"}
-                  hint="Switchable flagged for follow-up"
-                />
-              )}
-              {counts.open > 0 && (
-                <ActionCard
-                  href="/provider/leads?status=open"
-                  tone="amber"
-                  count={counts.open}
-                  label={counts.open === 1 ? "open lead never called" : "open leads never called"}
-                  hint="No contact attempt yet"
-                />
-              )}
-              {staleAttemptCount > 0 && (
-                <ActionCard
-                  href="/provider/leads?status=in_progress"
-                  tone="orange"
-                  count={staleAttemptCount}
-                  label={staleAttemptCount === 1 ? "call attempt needs retrying" : "call attempts need retrying"}
-                  hint="Last call was 48h+ ago"
-                />
-              )}
-            </div>
-          </section>
-        )}
+        {/* Action queue — four uniform cards, always rendered. When the
+            count is 0 the card flips to a calm emerald "all clear" state
+            so the layout stays predictable and good news is visible.
+            Order: fastrack leads → callback requests → open never called
+            → call attempts need retrying. */}
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
+            Needs your attention
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <ActionCard
+              href="/provider/leads"
+              tone="violet"
+              count={fastrackReadyCount}
+              label="fastrack leads"
+              labelSingular="fastrack lead"
+              hint="Cohort confirmed, ready to enrol"
+              doneHint="No fastracks waiting"
+            />
+            <ActionCard
+              href="/provider/leads?status=callback"
+              tone="rose"
+              count={callbackCount}
+              label="callback requests"
+              labelSingular="callback request"
+              hint="Switchable flagged for follow-up"
+              doneHint="No callbacks pending"
+            />
+            <ActionCard
+              href="/provider/leads?status=open"
+              tone="amber"
+              count={counts.open}
+              label="open leads never called"
+              labelSingular="open lead never called"
+              hint="No contact attempt yet"
+              doneHint="Every open lead's been tried"
+            />
+            <ActionCard
+              href="/provider/leads?status=in_progress"
+              tone="orange"
+              count={staleAttemptCount}
+              label="call attempts need retrying"
+              labelSingular="call attempt needs retrying"
+              hint="Last call was 48h+ ago"
+              doneHint="No stale attempts"
+            />
+          </div>
+        </section>
 
         {/* Pipeline pills */}
         <section>
@@ -381,14 +381,26 @@ function ActionCard({
   tone,
   count,
   label,
+  labelSingular,
   hint,
+  doneHint,
 }: {
   href: string;
   tone: "rose" | "violet" | "amber" | "orange";
   count: number;
+  /** Plural label for count !== 1. */
   label: string;
+  /** Singular form, used when count === 1. */
+  labelSingular: string;
+  /** Hint shown when count > 0. */
   hint: string;
+  /** Hint shown when count === 0 (alongside the emerald "all done" state). */
+  doneHint: string;
 }) {
+  const isDone = count === 0;
+
+  // When done, swap the per-card tone for emerald to signal "good, nothing
+  // for you here". When active, use the configured tone.
   const palette: Record<string, string> = {
     rose: "bg-rose-50 border-rose-200 hover:border-rose-300 hover:bg-rose-100 text-rose-900",
     violet:
@@ -397,26 +409,34 @@ function ActionCard({
       "bg-amber-50 border-amber-200 hover:border-amber-300 hover:bg-amber-100 text-amber-900",
     orange:
       "bg-orange-50 border-orange-200 hover:border-orange-300 hover:bg-orange-100 text-orange-900",
+    emerald:
+      "bg-emerald-50 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-100 text-emerald-900",
   };
   const numTone: Record<string, string> = {
     rose: "text-rose-700",
     violet: "text-violet-700",
     amber: "text-amber-700",
     orange: "text-orange-700",
+    emerald: "text-emerald-700",
   };
+  const effectiveTone = isDone ? "emerald" : tone;
+  const displayLabel = count === 1 ? labelSingular : label;
+
   return (
     <Link
       href={href}
-      className={`block p-4 rounded-xl border ${palette[tone]} transition-colors cursor-pointer`}
+      className={`block p-4 rounded-xl border ${palette[effectiveTone]} transition-colors cursor-pointer`}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <p className={`text-3xl font-semibold tabular-nums leading-none ${numTone[tone]}`}>
-          {count}
+        <p className={`text-3xl font-semibold tabular-nums leading-none ${numTone[effectiveTone]}`}>
+          {isDone ? "✓" : count}
         </p>
-        <span className="text-xs font-semibold opacity-80">Review &rarr;</span>
+        <span className="text-xs font-semibold opacity-80">
+          {isDone ? "All clear" : "Review →"}
+        </span>
       </div>
-      <p className="text-sm font-medium mt-2">{label}</p>
-      <p className="text-xs opacity-75 mt-0.5">{hint}</p>
+      <p className="text-sm font-medium mt-2">{displayLabel}</p>
+      <p className="text-xs opacity-75 mt-0.5">{isDone ? doneHint : hint}</p>
     </Link>
   );
 }
