@@ -25,12 +25,14 @@ export interface LeadRow {
   funding_category: string | null;
   routed_at: string | null;
   status: LeadStatus;
+  status_updated_at: string | null;
   has_fastrack: boolean;
   callback_pending: boolean;
 }
 
 export type Filter =
   | "all"
+  | "action"
   | "callback"
   | "fastrack"
   | "open"
@@ -41,6 +43,7 @@ export type Filter =
 
 const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
+  { value: "action", label: "Action needed" },
   { value: "callback", label: "Needs callback" },
   { value: "fastrack", label: "Fastrack" },
   { value: "open", label: "Open" },
@@ -49,6 +52,28 @@ const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "enrolled", label: "Enrolled" },
   { value: "cold", label: "Cold" },
 ];
+
+// "Action needed" = anything where the next move is on the provider:
+//   - callback flag pending
+//   - fastrack ready (lead has fastrack submission, not yet settled)
+//   - status=open (no contact attempt yet)
+//   - status=attempt_X with status_updated_at >48h ago (stale follow-up)
+const STALE_ATTEMPT_MS = 48 * 60 * 60 * 1000;
+function isActionRow(r: LeadRow): boolean {
+  if (r.callback_pending) return true;
+  if (r.has_fastrack && r.status !== "lost" && r.status !== "presumed_enrolled") return true;
+  if (r.status === "open") return true;
+  if (
+    (r.status === "attempt_1_no_answer" ||
+      r.status === "attempt_2_no_answer" ||
+      r.status === "attempt_3_no_answer") &&
+    r.status_updated_at &&
+    Date.now() - new Date(r.status_updated_at).getTime() > STALE_ATTEMPT_MS
+  ) {
+    return true;
+  }
+  return false;
+}
 
 const CALLING = new Set<LeadStatus>([
   "attempt_1_no_answer",
@@ -98,6 +123,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
   >(null);
 
   const counts = useMemo(() => {
+    let action = 0;
     let open = 0;
     let calling = 0;
     let meeting = 0;
@@ -106,6 +132,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
     let callback = 0;
     let fastrack = 0;
     for (const r of rows) {
+      if (isActionRow(r)) action += 1;
       if (r.callback_pending) callback += 1;
       if (r.has_fastrack) fastrack += 1;
       if (r.status === "open") open += 1;
@@ -114,7 +141,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
       if (ENROLLED.has(r.status)) enrolled += 1;
       if (COLD.has(r.status)) cold += 1;
     }
-    return { all: rows.length, callback, fastrack, open, calling, meeting, enrolled, cold };
+    return { all: rows.length, action, callback, fastrack, open, calling, meeting, enrolled, cold };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -122,6 +149,8 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
     const subset = rows.filter((r) => {
       if (filter === "all") {
         // pass
+      } else if (filter === "action") {
+        if (!isActionRow(r)) return false;
       } else if (filter === "callback") {
         if (!r.callback_pending) return false;
       } else if (filter === "fastrack") {

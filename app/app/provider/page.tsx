@@ -62,12 +62,14 @@ interface RecentEnrolmentRow {
   status_updated_at: string;
 }
 
-interface FastrackParentRow {
-  parent_submission_id: number;
-}
-
 interface RoutedIdRow {
   id: number;
+  routed_at: string | null;
+}
+
+interface FastrackTimedRow {
+  parent_submission_id: number;
+  submitted_at: string;
 }
 
 const STATUS_TONE: Record<LeadStatus, string> = {
@@ -118,14 +120,14 @@ export default async function ProviderHomePage() {
       supabase
         .schema("leads")
         .from("submissions")
-        .select("id")
+        .select("id, routed_at")
         .not("routed_at", "is", null)
         .is("archived_at", null)
         .is("parent_submission_id", null),
       supabase
         .schema("leads")
         .from("fastrack_submissions")
-        .select("parent_submission_id"),
+        .select("parent_submission_id, submitted_at"),
     ]);
 
   const pu = puResult.data;
@@ -160,27 +162,54 @@ export default async function ProviderHomePage() {
   const enrolledLastMonth = enrolledLastMonthCount(enrolments);
   const callbackCount = enrolments.filter((r) => r.callback_requested_at != null).length;
 
+  // Build routed-id → routed_at lookup so we can find the oldest lead in
+  // each "needs your attention" bucket.
+  const allRouted = (allRoutedResult.data ?? []) as RoutedIdRow[];
+  const routedAtById = new Map<number, string | null>();
+  for (const r of allRouted) routedAtById.set(r.id, r.routed_at);
+  const allRoutedIds = new Set<number>(allRouted.map((r) => r.id));
+
   // Fastrack-ready = routed leads with a fastrack submission, NOT yet at a
   // settled enrolment status (still actionable).
-  const allRoutedIds = new Set<number>(
-    ((allRoutedResult.data ?? []) as RoutedIdRow[]).map((r) => r.id),
-  );
-  const fastrackParentIds = new Set<number>(
-    (fastrackResult.data ?? []).map((r: FastrackParentRow) => r.parent_submission_id),
-  );
-  const fastrackReadyCount = [...fastrackParentIds].filter((id) => allRoutedIds.has(id)).length;
+  const fastrackRows = (fastrackResult.data ?? []) as FastrackTimedRow[];
+  const fastrackParentIds = new Set<number>(fastrackRows.map((r) => r.parent_submission_id));
+  const fastrackReadyIds = [...fastrackParentIds].filter((id) => allRoutedIds.has(id));
+  const fastrackReadyCount = fastrackReadyIds.length;
 
   // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >48h ago.
   // Provider rang once, no answer, hasn't tried again. Caller's nudge.
   const STALE_ATTEMPT_HOURS = 48;
   const staleAttemptCutoff = Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000;
-  const staleAttemptCount = enrolments.filter(
+  const staleAttempts = enrolments.filter(
     (e) =>
       (e.status === "attempt_1_no_answer" ||
         e.status === "attempt_2_no_answer" ||
         e.status === "attempt_3_no_answer") &&
       new Date(e.status_updated_at).getTime() < staleAttemptCutoff,
-  ).length;
+  );
+  const staleAttemptCount = staleAttempts.length;
+
+  // Oldest "since" timestamp per attention bucket — the live counter on
+  // each card shows how long this bucket has been waiting on the provider.
+  const oldestCallbackSince = oldestIso(
+    enrolments
+      .filter((e) => e.callback_requested_at != null)
+      .map((e) => e.callback_requested_at as string),
+  );
+  const oldestFastrackSince = oldestIso(
+    fastrackRows
+      .filter((r) => allRoutedIds.has(r.parent_submission_id))
+      .map((r) => r.submitted_at),
+  );
+  const oldestOpenSince = oldestIso(
+    enrolments
+      .filter((e) => e.status === "open")
+      .map((e) => routedAtById.get(e.submission_id) ?? null)
+      .filter((v): v is string => v != null),
+  );
+  const oldestStaleAttemptSince = oldestIso(
+    staleAttempts.map((e) => e.status_updated_at),
+  );
 
   // Estimated fees this month. naive: per_enrolment_fee × enrolledThisMonth.
   // (Free-enrolments accounting is a follow-up. provider's first 3 enrolments
@@ -278,13 +307,14 @@ export default async function ProviderHomePage() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             <ActionCard
-              href="/provider/leads"
+              href="/provider/leads?status=fastrack"
               tone="violet"
               count={fastrackReadyCount}
               label="fastrack leads"
               labelSingular="fastrack lead"
               hint="Cohort confirmed, ready to enrol"
               doneHint="No fastracks waiting"
+              oldestSince={oldestFastrackSince}
             />
             <ActionCard
               href="/provider/leads?status=callback"
@@ -294,6 +324,7 @@ export default async function ProviderHomePage() {
               labelSingular="callback request"
               hint="Switchable flagged for follow-up"
               doneHint="No callbacks pending"
+              oldestSince={oldestCallbackSince}
             />
             <ActionCard
               href="/provider/leads?status=open"
@@ -303,15 +334,17 @@ export default async function ProviderHomePage() {
               labelSingular="open lead never called"
               hint="No contact attempt yet"
               doneHint="Every open lead's been tried"
+              oldestSince={oldestOpenSince}
             />
             <ActionCard
-              href="/provider/leads?status=calling"
+              href="/provider/leads?status=action"
               tone="orange"
               count={staleAttemptCount}
               label="call attempts need retrying"
               labelSingular="call attempt needs retrying"
               hint="Last call was 48h+ ago"
               doneHint="No stale attempts"
+              oldestSince={oldestStaleAttemptSince}
             />
           </div>
         </section>
@@ -393,6 +426,7 @@ function ActionCard({
   labelSingular,
   hint,
   doneHint,
+  oldestSince,
 }: {
   href: string;
   tone: "rose" | "violet" | "amber" | "orange";
@@ -405,6 +439,8 @@ function ActionCard({
   hint: string;
   /** Hint shown when count === 0 (alongside the emerald "all done" state). */
   doneHint: string;
+  /** ISO timestamp of the oldest item in this bucket. Renders a live timer if set. */
+  oldestSince?: string | null;
 }) {
   const isDone = count === 0;
 
@@ -446,8 +482,28 @@ function ActionCard({
       </div>
       <p className="text-sm font-medium mt-2">{displayLabel}</p>
       <p className="text-xs opacity-75 mt-0.5">{isDone ? doneHint : hint}</p>
+      {!isDone && oldestSince && (
+        <p className="text-[11px] mt-1.5 font-medium opacity-80 tabular-nums">
+          Oldest waiting{" "}
+          <DurationTimer since={oldestSince} variant="full" />
+        </p>
+      )}
     </Link>
   );
+}
+
+function oldestIso(values: string[]): string | null {
+  if (values.length === 0) return null;
+  let oldest = values[0];
+  let oldestTime = new Date(oldest).getTime();
+  for (const v of values) {
+    const t = new Date(v).getTime();
+    if (t < oldestTime) {
+      oldest = v;
+      oldestTime = t;
+    }
+  }
+  return oldest;
 }
 
 function PipelinePill({

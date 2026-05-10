@@ -121,6 +121,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       funding_category: s.funding_category,
       routed_at: s.routed_at,
       status: (enrol?.status ?? "open") as LeadStatus,
+      status_updated_at: enrol?.status_updated_at ?? null,
       has_fastrack: fastrackParentIds.has(s.id),
       callback_pending: enrol?.callback_requested_at != null,
     };
@@ -228,6 +229,7 @@ function parseFilter(param: string | undefined): Filter {
   if (normalised === "enrolment_meeting_booked") return "meeting";
   if (
     normalised === "all" ||
+    normalised === "action" ||
     normalised === "callback" ||
     normalised === "fastrack" ||
     normalised === "open" ||

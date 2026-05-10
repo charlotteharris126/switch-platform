@@ -55,25 +55,61 @@ export async function ProviderShell({ active, children }: Props) {
 
 async function LeadsNavLink({ active }: { active: boolean }) {
   const supabase = await createClient();
-  // Two counts in parallel: status='open' (no contact attempt yet) +
-  // callback_requested_at IS NOT NULL (admin nudge pending). A lead can
-  // be in BOTH groups (open + callback flag) so we OR them server-side.
-  const [openResult, callbackResult] = await Promise.all([
+  // The badge needs to match what the "Action needed" filter shows on click.
+  // Action = (open) ∪ (callback_pending) ∪ (fastrack-ready, not settled) ∪
+  // (attempt_X with status_updated_at >48h ago). Server-side, fastrack
+  // membership and attempt-staleness need either a join or a derived
+  // calculation, so we pull the minimum row data and compute client-side.
+  // RLS scopes everything to this provider.
+  const STALE_ATTEMPT_HOURS = 48;
+  const cutoff = new Date(Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000).toISOString();
+
+  const [enrolmentsResult, fastrackResult] = await Promise.all([
     supabase
       .schema("crm")
       .from("enrolments")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "open"),
+      .select("submission_id, status, status_updated_at, callback_requested_at"),
     supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("id", { count: "exact", head: true })
-      .not("callback_requested_at", "is", null)
-      .neq("status", "open"),
+      .schema("leads")
+      .from("fastrack_submissions")
+      .select("parent_submission_id"),
   ]);
-  const total = (openResult.count ?? 0) + (callbackResult.count ?? 0);
+
+  const enrolments = (enrolmentsResult.data ?? []) as Array<{
+    submission_id: number;
+    status: string;
+    status_updated_at: string;
+    callback_requested_at: string | null;
+  }>;
+  const fastrackParents = new Set<number>(
+    ((fastrackResult.data ?? []) as Array<{ parent_submission_id: number }>).map(
+      (r) => r.parent_submission_id,
+    ),
+  );
+
+  const SETTLED = new Set(["lost", "presumed_enrolled"]);
+  const ATTEMPT = new Set([
+    "attempt_1_no_answer",
+    "attempt_2_no_answer",
+    "attempt_3_no_answer",
+  ]);
+  let total = 0;
+  for (const e of enrolments) {
+    const callback = e.callback_requested_at != null;
+    const fastrack = fastrackParents.has(e.submission_id) && !SETTLED.has(e.status);
+    const open = e.status === "open";
+    const staleAttempt =
+      ATTEMPT.has(e.status) && new Date(e.status_updated_at).toISOString() < cutoff;
+    if (callback || fastrack || open || staleAttempt) total += 1;
+  }
+
   return (
-    <NavLink href="/provider/leads" label="Leads" active={active} badge={total} />
+    <NavLink
+      href={total > 0 ? "/provider/leads?status=action" : "/provider/leads"}
+      label="Leads"
+      active={active}
+      badge={total}
+    />
   );
 }
 
