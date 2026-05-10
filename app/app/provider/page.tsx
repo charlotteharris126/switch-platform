@@ -65,12 +65,8 @@ interface FastrackParentRow {
   parent_submission_id: number;
 }
 
-interface RoutedSubRow {
+interface RoutedIdRow {
   id: number;
-  first_name: string | null;
-  last_name: string | null;
-  email: string | null;
-  routed_at: string | null;
 }
 
 const STATUS_TONE: Record<LeadStatus, string> = {
@@ -121,7 +117,7 @@ export default async function ProviderHomePage() {
       supabase
         .schema("leads")
         .from("submissions")
-        .select("id, first_name, last_name, email, routed_at")
+        .select("id")
         .not("routed_at", "is", null)
         .is("archived_at", null)
         .is("parent_submission_id", null),
@@ -165,30 +161,13 @@ export default async function ProviderHomePage() {
 
   // Fastrack-ready = routed leads with a fastrack submission, NOT yet at a
   // settled enrolment status (still actionable).
-  const allRouted = (allRoutedResult.data ?? []) as RoutedSubRow[];
-  const allRoutedIds = new Set<number>(allRouted.map((r) => r.id));
-  const subById = new Map<number, RoutedSubRow>();
-  for (const s of allRouted) subById.set(s.id, s);
+  const allRoutedIds = new Set<number>(
+    ((allRoutedResult.data ?? []) as RoutedIdRow[]).map((r) => r.id),
+  );
   const fastrackParentIds = new Set<number>(
     (fastrackResult.data ?? []).map((r: FastrackParentRow) => r.parent_submission_id),
   );
   const fastrackReadyCount = [...fastrackParentIds].filter((id) => allRoutedIds.has(id)).length;
-
-  // Coldest open lead = the open-status lead that's been waiting longest.
-  // Distinct from "stale follow-ups" (leads stuck mid-attempt cycle).
-  const coldestOpen = (() => {
-    const openEnrolments = enrolments.filter((e) => e.status === "open");
-    if (openEnrolments.length === 0) return null;
-    const candidates = openEnrolments
-      .map((e) => {
-        const s = subById.get(e.submission_id);
-        return s?.routed_at ? { sub: s, routedAt: new Date(s.routed_at).getTime() } : null;
-      })
-      .filter((c): c is { sub: RoutedSubRow; routedAt: number } => c != null);
-    if (candidates.length === 0) return null;
-    candidates.sort((a, b) => a.routedAt - b.routedAt);
-    return candidates[0].sub;
-  })();
 
   // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >48h ago.
   // Provider rang once, no answer, hasn't tried again. Caller's nudge.
@@ -279,40 +258,48 @@ export default async function ProviderHomePage() {
           </div>
         </section>
 
-        {/* Action queue — only render when something needs attention */}
-        {(callbackCount > 0 || fastrackReadyCount > 0 || coldestOpen != null || staleAttemptCount > 0) && (
+        {/* Action queue — only render when something needs attention. Four
+            uniform count cards: fastrack leads → callback requests → open
+            leads never called → call attempts need retrying. */}
+        {(fastrackReadyCount > 0 || callbackCount > 0 || counts.open > 0 || staleAttemptCount > 0) && (
           <section>
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
               Needs your attention
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {callbackCount > 0 && (
-                <ActionCard
-                  href="/provider/leads?status=callback"
-                  tone="rose"
-                  count={callbackCount}
-                  label={callbackCount === 1 ? "callback requested" : "callbacks requested"}
-                  hint="Switchable flagged for follow-up"
-                />
-              )}
               {fastrackReadyCount > 0 && (
                 <ActionCard
                   href="/provider/leads"
                   tone="violet"
                   count={fastrackReadyCount}
-                  label="fastrack ready"
+                  label={fastrackReadyCount === 1 ? "fastrack lead" : "fastrack leads"}
                   hint="Cohort confirmed, ready to enrol"
                 />
               )}
-              {coldestOpen && (
-                <ColdestLeadCard sub={coldestOpen} />
+              {callbackCount > 0 && (
+                <ActionCard
+                  href="/provider/leads?status=callback"
+                  tone="rose"
+                  count={callbackCount}
+                  label={callbackCount === 1 ? "callback request" : "callback requests"}
+                  hint="Switchable flagged for follow-up"
+                />
+              )}
+              {counts.open > 0 && (
+                <ActionCard
+                  href="/provider/leads?status=open"
+                  tone="amber"
+                  count={counts.open}
+                  label={counts.open === 1 ? "open lead never called" : "open leads never called"}
+                  hint="No contact attempt yet"
+                />
               )}
               {staleAttemptCount > 0 && (
                 <ActionCard
                   href="/provider/leads?status=in_progress"
                   tone="orange"
                   count={staleAttemptCount}
-                  label={staleAttemptCount === 1 ? "needs a second attempt" : "need a second attempt"}
+                  label={staleAttemptCount === 1 ? "call attempt needs retrying" : "call attempts need retrying"}
                   hint="Last call was 48h+ ago"
                 />
               )}
@@ -331,11 +318,10 @@ export default async function ProviderHomePage() {
               See all leads &rarr;
             </Link>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <PipelinePill label="Open" value={counts.open} tone="slate" href="/provider/leads?status=open" />
             <PipelinePill label="Calling" value={counts.attempts} tone="amber" href="/provider/leads?status=in_progress" />
-            <PipelinePill label="Meeting" value={counts.meeting_booked} tone="blue" href="/provider/leads?status=enrolment_meeting_booked" />
-            <PipelinePill label="Enrolled (mo)" value={enrolledThisMonth} tone="emerald" href="/provider/leads?status=enrolled" />
+            <PipelinePill label="Meeting booked" value={counts.meeting_booked} tone="blue" href="/provider/leads?status=enrolment_meeting_booked" />
           </div>
         </section>
 
@@ -431,30 +417,6 @@ function ActionCard({
       </div>
       <p className="text-sm font-medium mt-2">{label}</p>
       <p className="text-xs opacity-75 mt-0.5">{hint}</p>
-    </Link>
-  );
-}
-
-function ColdestLeadCard({ sub }: { sub: RoutedSubRow }) {
-  const name =
-    [sub.first_name, sub.last_name].filter(Boolean).join(" ") ||
-    sub.email ||
-    `Lead ${sub.id}`;
-  return (
-    <Link
-      href={`/provider/leads/${sub.id}`}
-      className="block p-4 rounded-xl border bg-amber-50 border-amber-200 hover:border-amber-300 hover:bg-amber-100 text-amber-900 transition-colors cursor-pointer"
-    >
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="text-xs uppercase tracking-wide font-semibold text-amber-700">
-          Coldest open
-        </p>
-        <span className="text-xs font-semibold opacity-80">Open &rarr;</span>
-      </div>
-      <p className="text-base font-semibold mt-1.5 truncate">{name}</p>
-      <p className="text-xs opacity-75 mt-0.5 tabular-nums">
-        Waiting <DurationTimer since={sub.routed_at} variant="full" />
-      </p>
     </Link>
   );
 }
