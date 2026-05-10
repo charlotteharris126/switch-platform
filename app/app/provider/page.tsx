@@ -40,6 +40,7 @@ interface ProviderRow {
 }
 
 interface EnrolmentCountRow {
+  submission_id: number;
   status: string;
   status_updated_at: string;
   callback_requested_at: string | null;
@@ -64,8 +65,12 @@ interface FastrackParentRow {
   parent_submission_id: number;
 }
 
-interface RoutedSubIdRow {
+interface RoutedSubRow {
   id: number;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  routed_at: string | null;
 }
 
 const STATUS_TONE: Record<LeadStatus, string> = {
@@ -103,7 +108,7 @@ export default async function ProviderHomePage() {
       supabase
         .schema("crm")
         .from("enrolments")
-        .select("status, status_updated_at, callback_requested_at"),
+        .select("submission_id, status, status_updated_at, callback_requested_at"),
       supabase
         .schema("leads")
         .from("submissions")
@@ -116,7 +121,7 @@ export default async function ProviderHomePage() {
       supabase
         .schema("leads")
         .from("submissions")
-        .select("id")
+        .select("id, first_name, last_name, email, routed_at")
         .not("routed_at", "is", null)
         .is("archived_at", null)
         .is("parent_submission_id", null),
@@ -160,13 +165,42 @@ export default async function ProviderHomePage() {
 
   // Fastrack-ready = routed leads with a fastrack submission, NOT yet at a
   // settled enrolment status (still actionable).
-  const allRoutedIds = new Set<number>(
-    (allRoutedResult.data ?? []).map((r: RoutedSubIdRow) => r.id),
-  );
+  const allRouted = (allRoutedResult.data ?? []) as RoutedSubRow[];
+  const allRoutedIds = new Set<number>(allRouted.map((r) => r.id));
+  const subById = new Map<number, RoutedSubRow>();
+  for (const s of allRouted) subById.set(s.id, s);
   const fastrackParentIds = new Set<number>(
     (fastrackResult.data ?? []).map((r: FastrackParentRow) => r.parent_submission_id),
   );
   const fastrackReadyCount = [...fastrackParentIds].filter((id) => allRoutedIds.has(id)).length;
+
+  // Coldest open lead = the open-status lead that's been waiting longest.
+  // Distinct from "stale follow-ups" (leads stuck mid-attempt cycle).
+  const coldestOpen = (() => {
+    const openEnrolments = enrolments.filter((e) => e.status === "open");
+    if (openEnrolments.length === 0) return null;
+    const candidates = openEnrolments
+      .map((e) => {
+        const s = subById.get(e.submission_id);
+        return s?.routed_at ? { sub: s, routedAt: new Date(s.routed_at).getTime() } : null;
+      })
+      .filter((c): c is { sub: RoutedSubRow; routedAt: number } => c != null);
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.routedAt - b.routedAt);
+    return candidates[0].sub;
+  })();
+
+  // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >48h ago.
+  // Provider rang once, no answer, hasn't tried again. Caller's nudge.
+  const STALE_ATTEMPT_HOURS = 48;
+  const staleAttemptCutoff = Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000;
+  const staleAttemptCount = enrolments.filter(
+    (e) =>
+      (e.status === "attempt_1_no_answer" ||
+        e.status === "attempt_2_no_answer" ||
+        e.status === "attempt_3_no_answer") &&
+      new Date(e.status_updated_at).getTime() < staleAttemptCutoff,
+  ).length;
 
   // Estimated fees this month — naive: per_enrolment_fee × enrolledThisMonth.
   // (Free-enrolments accounting is a follow-up — provider's first 3 enrolments
@@ -246,12 +280,12 @@ export default async function ProviderHomePage() {
         </section>
 
         {/* Action queue — only render when something needs attention */}
-        {(callbackCount > 0 || fastrackReadyCount > 0 || counts.awaiting_long > 0) && (
+        {(callbackCount > 0 || fastrackReadyCount > 0 || coldestOpen != null || staleAttemptCount > 0) && (
           <section>
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
               Needs your attention
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               {callbackCount > 0 && (
                 <ActionCard
                   href="/provider/leads?status=callback"
@@ -266,27 +300,30 @@ export default async function ProviderHomePage() {
                   href="/provider/leads"
                   tone="violet"
                   count={fastrackReadyCount}
-                  label={fastrackReadyCount === 1 ? "fastrack ready" : "fastrack ready"}
+                  label="fastrack ready"
                   hint="Cohort confirmed, ready to enrol"
                 />
               )}
-              {counts.awaiting_long > 0 && (
+              {coldestOpen && (
+                <ColdestLeadCard sub={coldestOpen} />
+              )}
+              {staleAttemptCount > 0 && (
                 <ActionCard
-                  href="/provider/leads?status=open"
-                  tone="amber"
-                  count={counts.awaiting_long}
-                  label={counts.awaiting_long === 1 ? "stale open lead" : "stale open leads"}
-                  hint="No contact attempt for 7+ days"
+                  href="/provider/leads?status=in_progress"
+                  tone="orange"
+                  count={staleAttemptCount}
+                  label={staleAttemptCount === 1 ? "needs a second attempt" : "need a second attempt"}
+                  hint="Last call was 48h+ ago"
                 />
               )}
             </div>
           </section>
         )}
 
-        {/* Pipeline funnel */}
-        <section className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="flex items-baseline justify-between mb-4">
-            <h2 className="text-sm font-semibold text-slate-900">Your pipeline</h2>
+        {/* Pipeline pills */}
+        <section>
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your pipeline</h2>
             <Link
               href="/provider/leads"
               className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
@@ -294,14 +331,12 @@ export default async function ProviderHomePage() {
               See all leads &rarr;
             </Link>
           </div>
-          <PipelineFunnel
-            stages={[
-              { label: "Open", value: counts.open, tone: "slate", href: "/provider/leads?status=open" },
-              { label: "Calling", value: counts.attempts, tone: "amber", href: "/provider/leads?status=in_progress" },
-              { label: "Meeting", value: counts.meeting_booked, tone: "blue", href: "/provider/leads?status=enrolment_meeting_booked" },
-              { label: "Enrolled (mo)", value: enrolledThisMonth, tone: "emerald", href: "/provider/leads?status=enrolled" },
-            ]}
-          />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <PipelinePill label="Open" value={counts.open} tone="slate" href="/provider/leads?status=open" />
+            <PipelinePill label="Calling" value={counts.attempts} tone="amber" href="/provider/leads?status=in_progress" />
+            <PipelinePill label="Meeting" value={counts.meeting_booked} tone="blue" href="/provider/leads?status=enrolment_meeting_booked" />
+            <PipelinePill label="Enrolled (mo)" value={enrolledThisMonth} tone="emerald" href="/provider/leads?status=enrolled" />
+          </div>
         </section>
 
         {/* Recent activity */}
@@ -363,7 +398,7 @@ function ActionCard({
   hint,
 }: {
   href: string;
-  tone: "rose" | "violet" | "amber";
+  tone: "rose" | "violet" | "amber" | "orange";
   count: number;
   label: string;
   hint: string;
@@ -374,11 +409,14 @@ function ActionCard({
       "bg-violet-50 border-violet-200 hover:border-violet-300 hover:bg-violet-100 text-violet-900",
     amber:
       "bg-amber-50 border-amber-200 hover:border-amber-300 hover:bg-amber-100 text-amber-900",
+    orange:
+      "bg-orange-50 border-orange-200 hover:border-orange-300 hover:bg-orange-100 text-orange-900",
   };
   const numTone: Record<string, string> = {
     rose: "text-rose-700",
     violet: "text-violet-700",
     amber: "text-amber-700",
+    orange: "text-orange-700",
   };
   return (
     <Link
@@ -397,50 +435,58 @@ function ActionCard({
   );
 }
 
-function PipelineFunnel({
-  stages,
-}: {
-  stages: Array<{ label: string; value: number; tone: "slate" | "amber" | "blue" | "emerald"; href: string }>;
-}) {
-  const toneBar: Record<string, string> = {
-    slate: "bg-slate-200",
-    amber: "bg-amber-200",
-    blue: "bg-blue-200",
-    emerald: "bg-emerald-200",
-  };
-  const toneText: Record<string, string> = {
-    slate: "text-slate-700",
-    amber: "text-amber-800",
-    blue: "text-blue-800",
-    emerald: "text-emerald-800",
-  };
-  const max = Math.max(1, ...stages.map((s) => s.value));
+function ColdestLeadCard({ sub }: { sub: RoutedSubRow }) {
+  const name =
+    [sub.first_name, sub.last_name].filter(Boolean).join(" ") ||
+    sub.email ||
+    `Lead ${sub.id}`;
   return (
-    <div className="space-y-2.5">
-      {stages.map((s) => {
-        const pct = Math.round((s.value / max) * 100);
-        return (
-          <Link
-            key={s.label}
-            href={s.href}
-            className="flex items-center gap-3 group cursor-pointer"
-          >
-            <span className="w-20 shrink-0 text-xs font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
-              {s.label}
-            </span>
-            <div className="flex-1 h-7 bg-slate-50 rounded-md overflow-hidden">
-              <div
-                className={`${toneBar[s.tone]} h-full rounded-md transition-all group-hover:brightness-95`}
-                style={{ width: `${Math.max(2, pct)}%` }}
-              />
-            </div>
-            <span className={`w-8 shrink-0 text-sm font-semibold tabular-nums text-right ${toneText[s.tone]}`}>
-              {s.value}
-            </span>
-          </Link>
-        );
-      })}
-    </div>
+    <Link
+      href={`/provider/leads/${sub.id}`}
+      className="block p-4 rounded-xl border bg-amber-50 border-amber-200 hover:border-amber-300 hover:bg-amber-100 text-amber-900 transition-colors cursor-pointer"
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-xs uppercase tracking-wide font-semibold text-amber-700">
+          Coldest open
+        </p>
+        <span className="text-xs font-semibold opacity-80">Open &rarr;</span>
+      </div>
+      <p className="text-base font-semibold mt-1.5 truncate">{name}</p>
+      <p className="text-xs opacity-75 mt-0.5 tabular-nums">
+        Waiting <DurationTimer since={sub.routed_at} variant="full" />
+      </p>
+    </Link>
+  );
+}
+
+function PipelinePill({
+  label,
+  value,
+  tone,
+  href,
+}: {
+  label: string;
+  value: number;
+  tone: "slate" | "amber" | "blue" | "emerald";
+  href: string;
+}) {
+  const palette: Record<string, string> = {
+    slate:
+      "bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm text-slate-900",
+    amber:
+      "bg-amber-50 border-amber-200 hover:border-amber-300 hover:shadow-sm text-amber-900",
+    blue: "bg-blue-50 border-blue-200 hover:border-blue-300 hover:shadow-sm text-blue-900",
+    emerald:
+      "bg-emerald-50 border-emerald-200 hover:border-emerald-300 hover:shadow-sm text-emerald-900",
+  };
+  return (
+    <Link
+      href={href}
+      className={`block p-4 rounded-xl border ${palette[tone]} transition-all cursor-pointer`}
+    >
+      <p className="text-xs uppercase tracking-wide font-semibold opacity-70">{label}</p>
+      <p className="text-2xl font-semibold tabular-nums mt-1 leading-none">{value}</p>
+    </Link>
   );
 }
 
