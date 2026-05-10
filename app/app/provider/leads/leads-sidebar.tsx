@@ -172,17 +172,22 @@ function StatLink({
   return (
     <Link
       href={href}
-      className="flex items-baseline justify-between gap-2 px-2 -mx-2 py-1.5 rounded-md hover:bg-slate-50 cursor-pointer transition-colors group"
+      className="flex items-center justify-between gap-2 px-2 -mx-2 py-2 rounded-md hover:bg-slate-100 active:bg-slate-200 cursor-pointer transition-colors group border border-transparent hover:border-slate-200"
     >
-      <span className="text-xs text-slate-600 group-hover:text-slate-900 transition-colors">
+      <span className="text-xs text-slate-700 group-hover:text-slate-900 group-hover:font-semibold transition-all">
         {label}
       </span>
-      <span
-        className={`tabular-nums ${
-          emphasis ? "text-2xl font-semibold" : "text-sm font-semibold"
-        } ${TONE_TEXT[tone]}`}
-      >
-        {value}
+      <span className="flex items-center gap-1.5">
+        <span
+          className={`tabular-nums ${
+            emphasis ? "text-2xl font-semibold" : "text-sm font-semibold"
+          } ${TONE_TEXT[tone]}`}
+        >
+          {value}
+        </span>
+        <span className="text-slate-400 group-hover:text-slate-700 transition-colors text-sm leading-none">
+          →
+        </span>
       </span>
     </Link>
   );

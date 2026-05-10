@@ -17,7 +17,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ProviderShell } from "../provider-shell";
 import { PasskeyList } from "./passkey-list";
 import { DisplayNameForm } from "./display-name-form";
+import { TeamPanel, type TeamUserRow } from "./team-panel";
 import { removePasskeyAction, updateDisplayNameAction } from "./actions";
+import { inviteProviderUserAction } from "./team-actions";
 
 interface ProviderUserRow {
   id: number;
@@ -80,8 +82,8 @@ export default async function ProviderAccountPage() {
     redirect("/passkey-login?error=no_active_account");
   }
 
-  // provider + passkeys in parallel. both depend on pu but not on each other.
-  const [providerResult, passkeyResult] = await Promise.all([
+  // provider + passkeys + team users in parallel. all depend on pu but not on each other.
+  const [providerResult, passkeyResult, teamResult] = await Promise.all([
     admin
       .schema("crm")
       .from("providers")
@@ -95,10 +97,36 @@ export default async function ProviderAccountPage() {
       .eq("provider_user_id", pu.id)
       .is("disabled_at", null)
       .order("created_at", { ascending: true }),
+    admin
+      .schema("crm")
+      .from("provider_users")
+      .select("id, contact_email, display_name, role, status, invited_at, last_login_at")
+      .eq("provider_id", pu.provider_id)
+      .order("invited_at", { ascending: true }),
   ]);
 
   const provider = providerResult.data;
   const passkeyRowsRaw = passkeyResult.data;
+  const teamRowsRaw = teamResult.data ?? [];
+  const teamUsers: TeamUserRow[] = (teamRowsRaw as Array<{
+    id: number;
+    contact_email: string;
+    display_name: string | null;
+    role: string;
+    status: string;
+    invited_at: string;
+    last_login_at: string | null;
+  }>).map((t) => ({
+    id: t.id,
+    contact_email: t.contact_email,
+    display_name: t.display_name,
+    role: t.role,
+    status: t.status,
+    invited_at: t.invited_at,
+    last_login_at: t.last_login_at,
+    is_self: t.id === pu.id,
+  }));
+  const callerIsAdmin = pu.role === "provider_admin";
 
   const passkeyRows = (passkeyRowsRaw ?? []) as PasskeyRow[];
 
@@ -152,6 +180,22 @@ export default async function ProviderAccountPage() {
             </a>{" "}
             and we&apos;ll send a fresh invite link.
           </p>
+        </Card>
+
+        {/* Team */}
+        <Card
+          title="Your team"
+          subtitle={
+            callerIsAdmin
+              ? "Everyone with access to this account. Invite teammates and re-issue links if someone loses their device."
+              : "Everyone with access to this account."
+          }
+        >
+          <TeamPanel
+            callerIsAdmin={callerIsAdmin}
+            users={teamUsers}
+            onInvite={inviteProviderUserAction}
+          />
         </Card>
 
         {/* Provider info */}
