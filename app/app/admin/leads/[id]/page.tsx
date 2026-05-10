@@ -17,6 +17,7 @@ import { OwnerTestToggle } from "./owner-test-toggle";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { AdminNotesPanel } from "./admin-notes-panel";
 import { addAdminLeadNoteAction, clearCallbackFlagAction } from "./actions";
+import { getDemoProviderIds } from "@/lib/demo";
 
 export default async function LeadDetailPage({
   params,
@@ -132,6 +133,12 @@ export default async function LeadDetailPage({
       }
     | null;
 
+  // Demo flag — surfaces a violet DEMO badge so admin can't mistake a
+  // demo lead for real client data.
+  const demoProviderIds = await getDemoProviderIds(supabase);
+  const isDemoLead = lead.primary_routed_to != null
+    && demoProviderIds.includes(lead.primary_routed_to);
+
   // Notes log — provider + admin notes inline. Newest first.
   const { data: leadNotesRaw } = await supabase
     .schema("crm")
@@ -242,6 +249,11 @@ export default async function LeadDetailPage({
             </Badge>
           ) : (
             <Badge variant="secondary">Unrouted</Badge>
+          )}
+          {isDemoLead && (
+            <Badge className="bg-violet-100 text-violet-800 hover:bg-violet-100 uppercase tracking-wider">
+              Demo
+            </Badge>
           )}
           {lead.fastracked_at && (
             <Badge className="bg-violet-100 text-violet-800 hover:bg-violet-100">
