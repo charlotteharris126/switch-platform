@@ -52,7 +52,9 @@ Update the constant + redeploy whenever a new owner-owned domain starts being us
 
 ## Cron Jobs
 
-Scheduled tasks. `readonly_analytics` reads via the `public.vw_cron_jobs` SECURITY DEFINER view (migrations 0006 + 0007 - pg_cron filters `cron.job` by ownership so a direct SELECT returns zero rows for non-owners, hence the view).
+> ⚠ **Do not query `cron.job` or `cron.job_run_details` directly.** pg_cron silently filters those tables by job owner — any role that isn't the owner sees zero rows even when crons are healthy. Always read schedule via `public.vw_cron_jobs` and run history via `public.vw_cron_runs` (SECURITY DEFINER views from migrations 0006 + 0007). A `count(*) = 0` from `cron.job` means "you're not the owner", not "no crons exist". This bit Iris on 2026-05-10 — full diagnosis of an "empty cron" turned out to be the ownership filter.
+
+Scheduled tasks. `readonly_analytics` reads via the `public.vw_cron_jobs` SECURITY DEFINER view (migrations 0006 + 0007).
 
 | Name | Critical | Schedule | Purpose | Verify | Last verified |
 |---|---|---|---|---|---|
