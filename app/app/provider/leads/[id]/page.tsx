@@ -47,7 +47,6 @@ interface SubmissionRow {
   start_when: string | null;
   start_timing: string | null;
   outcome_interest: string | null;
-  why_this_course: string | null;
   la: string | null;
   postcode: string | null;
   region: string | null;
@@ -324,14 +323,6 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
                   startWhen={submission.start_when}
                   startTiming={submission.start_timing}
                 />
-              </Section>
-
-              <Section title="In their words">
-                <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                  {submission.why_this_course || (
-                    <span className="text-slate-400 italic">Nothing recorded.</span>
-                  )}
-                </p>
               </Section>
             </div>
 

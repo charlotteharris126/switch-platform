@@ -46,6 +46,10 @@ type SearchParams = {
   // Comma-separated list of emails to filter by (e.g. pasted from a provider's
   // outcome report). Case-insensitive, exact match. Empty entries ignored.
   emails?: string;
+  // Demo-data toggle. Default fences out is_demo providers; set ?demo=1 to
+  // INVERT the fence and show ONLY demo leads. Used to test admin → provider
+  // flows (notes, callback flag) against the demo provider's seeded leads.
+  demo?: string;
 };
 
 const VALID_LEAD_STATUSES = ["open", "enrolled", "presumed_enrolled", "cannot_reach", "lost"] as const;
@@ -152,8 +156,10 @@ export default async function LeadsPage({
         .filter((e) => e.length > 0)
     : [];
 
-  // Demo-data fence: exclude submissions routed to demo providers from the
-  // real lead list. See lib/demo.ts.
+  // Demo-data fence: by default, exclude submissions routed to demo providers
+  // from the real lead list. ?demo=1 inverts to show ONLY demo leads, used
+  // for testing admin → provider flows. See lib/demo.ts.
+  const showDemoOnly = sp.demo === "1";
   const demoIds = await getDemoProviderIds(supabase);
   const demoInClause = demoProviderInClause(demoIds);
 
@@ -167,7 +173,9 @@ export default async function LeadsPage({
     .order("submitted_at", { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1);
 
-  if (demoInClause) {
+  if (showDemoOnly && demoInClause) {
+    q = q.in("primary_routed_to", demoIds);
+  } else if (demoInClause) {
     q = q.or(`primary_routed_to.is.null,primary_routed_to.not.in.${demoInClause}`);
   }
 
@@ -328,13 +336,23 @@ export default async function LeadsPage({
       <RealtimeRefresh tables={[{ schema: "leads", table: "submissions" }]} />
       <PageHeader
         eyebrow="Leads"
-        title="Lead submissions"
+        title={showDemoOnly ? "Lead submissions — DEMO ONLY" : "Lead submissions"}
         subtitle={
           error ? (
             <span className="text-[#b3412e]">Error: {error.message}</span>
           ) : (
             <>
               {totalCount.toLocaleString()} total · showing {rows.length} on page {page} of {totalPages}
+              {" · "}
+              {showDemoOnly ? (
+                <Link href="/leads" className="text-[#0e1726] underline hover:no-underline">
+                  Back to real leads
+                </Link>
+              ) : (
+                <Link href="/leads?demo=1" className="text-violet-700 underline hover:no-underline">
+                  View demo leads ({demoIds.length === 0 ? 0 : "→"})
+                </Link>
+              )}
             </>
           )
         }
