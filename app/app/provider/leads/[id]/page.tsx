@@ -83,6 +83,19 @@ interface FastrackRow {
   parent_submission_id: number;
 }
 
+interface FastrackDetailRow {
+  id: number;
+  submitted_at: string;
+  cohort_confirmed: boolean;
+  transport_help_requested: boolean;
+  docs_ready: boolean;
+  l3_reconfirmed: boolean;
+  l3_mismatch_flag: boolean;
+  voice_of_learner_intro: string | null;
+  terms_accepted: boolean;
+  marketing_opt_in: boolean;
+}
+
 interface Props {
   params: Promise<{ id: string }>;
 }
@@ -97,45 +110,62 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
   if (!sessionData.session?.user) redirect("/passkey-login");
 
   // Fetch in one wave: this submission, this enrolment, notes for this
-  // lead, all routed siblings (id + routed_at), and all fastrack parent
-  // ids. Last two power prev/next; small queries, RLS-scoped.
-  const [submissionResult, enrolResult, notesResult, siblingsResult, fastrackResult] =
-    await Promise.all([
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select(
-          "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
-        )
-        .eq("id", submissionId)
-        .maybeSingle<SubmissionRow>(),
-      supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("id,status,lost_reason,status_updated_at")
-        .eq("submission_id", submissionId)
-        .maybeSingle<EnrolmentRow>(),
-      supabase
-        .schema("crm")
-        .from("lead_notes")
-        .select("id, body, created_at, provider_users:provider_user_id(display_name, contact_email)")
-        .eq("submission_id", submissionId)
-        .order("created_at", { ascending: false })
-        .limit(200),
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id,routed_at")
-        .not("routed_at", "is", null)
-        .is("archived_at", null)
-        .is("parent_submission_id", null)
-        .order("routed_at", { ascending: false })
-        .limit(500),
-      supabase
-        .schema("leads")
-        .from("fastrack_submissions")
-        .select("parent_submission_id"),
-    ]);
+  // lead, all routed siblings (id + routed_at), all fastrack parent ids
+  // for prev/next ordering, plus this lead's own fastrack row if any.
+  // RLS-scoped throughout.
+  const [
+    submissionResult,
+    enrolResult,
+    notesResult,
+    siblingsResult,
+    fastrackResult,
+    fastrackDetailResult,
+  ] = await Promise.all([
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select(
+        "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
+      )
+      .eq("id", submissionId)
+      .maybeSingle<SubmissionRow>(),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id,status,lost_reason,status_updated_at")
+      .eq("submission_id", submissionId)
+      .maybeSingle<EnrolmentRow>(),
+    supabase
+      .schema("crm")
+      .from("lead_notes")
+      .select("id, body, created_at, provider_users:provider_user_id(display_name, contact_email)")
+      .eq("submission_id", submissionId)
+      .order("created_at", { ascending: false })
+      .limit(200),
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id,routed_at")
+      .not("routed_at", "is", null)
+      .is("archived_at", null)
+      .is("parent_submission_id", null)
+      .order("routed_at", { ascending: false })
+      .limit(500),
+    supabase
+      .schema("leads")
+      .from("fastrack_submissions")
+      .select("parent_submission_id"),
+    supabase
+      .schema("leads")
+      .from("fastrack_submissions")
+      .select(
+        "id, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in",
+      )
+      .eq("parent_submission_id", submissionId)
+      .order("submitted_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<FastrackDetailRow>(),
+  ]);
 
   const submission = submissionResult.data;
   if (!submission) notFound();
@@ -146,6 +176,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     (fastrackResult.data ?? []).map((r: FastrackRow) => r.parent_submission_id),
   );
   const hasFastrack = fastrackParentIds.has(submission.id);
+  const fastrackDetail = fastrackDetailResult.data;
 
   // Build the same ordering the leads list uses: fastrack first, then
   // routed_at desc.
@@ -294,6 +325,10 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
                 </p>
               </Section>
             </div>
+
+            {fastrackDetail && (
+              <FastrackSection detail={fastrackDetail} />
+            )}
           </div>
 
           {/* RIGHT: notes log (sticky on lg+) */}
@@ -406,6 +441,87 @@ function IntakeRow({
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+function FastrackSection({ detail }: { detail: FastrackDetailRow }) {
+  const submitted = new Date(detail.submitted_at).toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return (
+    <div className="bg-violet-50 border border-violet-200 rounded-xl p-5">
+      <div className="flex items-baseline justify-between gap-3 mb-3">
+        <div>
+          <h2 className="text-sm font-semibold text-violet-900">Fastrack submission</h2>
+          <p className="text-xs text-violet-700 mt-0.5">
+            Submitted {submitted}
+          </p>
+        </div>
+      </div>
+
+      {detail.l3_mismatch_flag && (
+        <div className="mb-3 bg-rose-100 border border-rose-300 rounded-md p-3 text-sm text-rose-900">
+          <strong>L3 mismatch flagged.</strong> The learner's reconfirmed Level 3 status doesn't
+          match what we routed on. Confirm with them before enrolling — this routes via the
+          waitlist if not resolved.
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+        <FastrackRow label="Cohort confirmed" value={detail.cohort_confirmed} />
+        <FastrackRow
+          label="L3 reconfirmed"
+          value={detail.l3_reconfirmed}
+          tone={detail.l3_mismatch_flag ? "warn" : "default"}
+        />
+        <FastrackRow label="Docs ready" value={detail.docs_ready} />
+        <FastrackRow label="Transport help requested" value={detail.transport_help_requested} />
+        <FastrackRow label="Terms accepted" value={detail.terms_accepted} />
+        <FastrackRow label="Opted in to marketing" value={detail.marketing_opt_in} />
+      </div>
+
+      {detail.voice_of_learner_intro && detail.voice_of_learner_intro.trim().length > 0 && (
+        <div className="mt-4 pt-4 border-t border-violet-200">
+          <p className="text-xs font-semibold uppercase tracking-wide text-violet-700 mb-1">
+            Their intro
+          </p>
+          <blockquote className="text-sm text-violet-900 italic whitespace-pre-wrap break-words">
+            &ldquo;{detail.voice_of_learner_intro}&rdquo;
+          </blockquote>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FastrackRow({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: boolean;
+  tone?: "default" | "warn";
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-violet-700">{label}</span>
+      <span
+        className={`text-sm font-medium ${
+          tone === "warn" && !value
+            ? "text-rose-700"
+            : value
+              ? "text-emerald-700"
+              : "text-slate-500"
+        }`}
+      >
+        {value ? "Yes" : "No"}
+      </span>
     </div>
   );
 }
