@@ -40,7 +40,7 @@ export default async function ProviderSupportPage() {
           </p>
         </div>
 
-        {/* Help guides — short answers to the things providers most often ask. */}
+        {/* Help guides: short answers to the things providers most often ask. */}
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
             Common questions
@@ -94,17 +94,21 @@ export default async function ProviderSupportPage() {
 
 // Short-form help. For longer how-tos, the public first-time-access guide
 // (coming next) sits at /help/getting-started outside the auth gate.
+//
+// Plain ASCII quotes only in q/a strings: q is rendered as a JSX expression
+// (not text), so HTML entities show literally; consistent with the rest of
+// the codebase. No em dashes per copy.md.
 const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
   {
     q: "How do I mark an outcome on a lead?",
     a: (
       <>
         Click into any lead from the Leads list. Use the stepper under
-        &ldquo;Move this lead forward&rdquo; to advance through 1st / 2nd / 3rd
-        no answer, Meeting booked, or Enrolled. Use the &ldquo;Or close this
-        out&rdquo; row for Cannot reach or Lost. Outcomes are forward-only on
-        the attempt counter, so once you&apos;re at &ldquo;2nd no answer&rdquo;
-        you can&apos;t step back to &ldquo;1st&rdquo;. If you ticked Lost by
+        &quot;Move this lead forward&quot; to advance through 1st / 2nd / 3rd
+        no answer, Meeting booked, or Enrolled. Use the &quot;Or close this
+        out&quot; row for Cannot reach or Lost. Outcomes are forward-only on
+        the attempt counter, so once you&apos;re at &quot;2nd no answer&quot;
+        you can&apos;t step back to &quot;1st&quot;. If you ticked Lost by
         mistake, the Lost screen has buttons to recover the lead back to any
         active state.
       </>
@@ -119,17 +123,17 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
         re-confirmed their Level 3 status. They&apos;re the closest to ready-to-
         enrol. Fastrack leads are pinned to the top of your leads list with a
         violet badge. Open the lead detail to see the full fastrack form
-        contents — including any L3 mismatch warning — under &ldquo;Fastrack
-        submission&rdquo;.
+        contents (including any L3 mismatch warning) under &quot;Fastrack
+        submission&quot;.
       </>
     ),
   },
   {
-    q: "What does &ldquo;Callback requested&rdquo; mean?",
+    q: 'What does "Callback requested" mean?',
     a: (
       <>
         It means the SwitchLeads team has flagged this lead for your immediate
-        attention — usually because the learner has been in touch and asked us
+        attention. Usually because the learner has been in touch and asked us
         to pass the message on. Callback leads pin to the top of your list with
         a red dot, you&apos;ll see a banner on the home page, and the count
         appears on the Leads nav badge. Open the lead detail and read the note
@@ -146,21 +150,21 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
         portal and to SwitchLeads support. They&apos;re NOT visible to the
         learner. Each note is timestamped and tagged with the author&apos;s
         display name, so you can keep a running log of what was said on each
-        call. Notes from SwitchLeads (in blue, tagged &ldquo;Switchable&rdquo;)
+        call. Notes from SwitchLeads (in blue, tagged &quot;Switchable&quot;)
         appear in the same log.
       </>
     ),
   },
   {
-    q: "What should I do when a lead doesn&apos;t pick up?",
+    q: "What should I do when a lead doesn't pick up?",
     a: (
       <>
-        Mark them &ldquo;1st no answer&rdquo;. Try again 24-48 hours later — if
-        no luck, mark them &ldquo;2nd no answer&rdquo;, then &ldquo;3rd&rdquo;.
+        Mark them &quot;1st no answer&quot;. Try again 24-48 hours later, and
+        if no luck, mark them &quot;2nd no answer&quot;, then &quot;3rd&quot;.
         After three solid attempts on different days/times, mark them
-        &ldquo;Cannot reach&rdquo;. Cannot reach isn&apos;t terminal — if they
-        get back in touch later, you can move them straight to &ldquo;Meeting
-        booked&rdquo; or &ldquo;Enrolled&rdquo; from the Cannot reach screen.
+        &quot;Cannot reach&quot;. Cannot reach isn&apos;t terminal: if they get
+        back in touch later, you can move them straight to &quot;Meeting
+        booked&quot; or &quot;Enrolled&quot; from the Cannot reach screen.
       </>
     ),
   },
@@ -168,16 +172,16 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     q: "When does the timer reset?",
     a: (
       <>
-        Two timers run on each lead. &ldquo;In your queue&rdquo; counts from
-        when the lead was routed to you and never resets. &ldquo;At current
-        status&rdquo; counts from the last status change you made — so it
-        resets every time you mark a new outcome. Both are visible at the top
-        of the lead detail page.
+        Two timers run on each lead. &quot;In your queue&quot; counts from when
+        the lead was routed to you and never resets. &quot;At current
+        status&quot; counts from the last status change you made, so it resets
+        every time you mark a new outcome. Both are visible at the top of the
+        lead detail page.
       </>
     ),
   },
   {
-    q: "Lost my passkey / new device — what do I do?",
+    q: "Lost my passkey / new device, what do I do?",
     a: (
       <>
         Email{" "}

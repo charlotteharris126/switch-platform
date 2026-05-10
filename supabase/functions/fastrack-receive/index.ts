@@ -244,7 +244,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
   else if (cohortDeclineFlag) lostReason = "cohort_decline";
 
   if (lostReason) {
+    const reasonHuman = lostReasonHumanText(lostReason);
+    const noteBody =
+      lostReason === "l3_mismatch_self_reported"
+        ? `Learner self-flagged L3 mismatch on the fastrack form. Auto-moved to Lost (reason: ${reasonHuman}).`
+        : `Learner declined the cohort dates on the fastrack form. Auto-moved to Lost (reason: ${reasonHuman}).`;
+
     try {
+      // Capture before-state so the audit row carries a meaningful diff.
+      const [beforeRow] = await sql<Array<{ id: number; status: string; lost_reason: string | null }>>`
+        SELECT id, status, lost_reason
+          FROM crm.enrolments
+         WHERE submission_id = ${parent.id}
+         LIMIT 1
+      `;
+
       await sql.begin(async (trx) => {
         await trx`SET LOCAL ROLE functions_writer`;
         await trx`
@@ -255,7 +269,46 @@ Deno.serve(async (req: Request): Promise<Response> => {
                  updated_at        = now()
            WHERE submission_id = ${parent.id}
         `;
+        // System-authored note so the provider sees a clear explanation in
+        // the lead's notes log alongside the silent status flip. Only
+        // written when the lead is actually routed to a provider — there's
+        // no notes log to write to otherwise.
+        if (parent.primary_routed_to) {
+          await trx`
+            INSERT INTO crm.lead_notes (
+              submission_id, provider_id, provider_user_id,
+              author_role, author_user_id, author_display_name, body
+            ) VALUES (
+              ${parent.id}, ${parent.primary_routed_to}, NULL,
+              'system', NULL, 'Switchable', ${noteBody}
+            )
+          `;
+        }
       });
+
+      // Audit trail. system surface so /admin/leads/[id] activity panel
+      // shows the auto-flip alongside provider/admin actions. Best-effort:
+      // failure here doesn't undo the UPDATE.
+      if (beforeRow) {
+        try {
+          await sql`
+            SELECT audit.log_system_action(
+              'fastrack-receive',
+              'mark_outcome_auto_dq',
+              'crm.enrolments',
+              ${String(beforeRow.id)},
+              ${JSON.stringify({ status: beforeRow.status, lost_reason: beforeRow.lost_reason })}::jsonb,
+              ${JSON.stringify({ status: "lost", lost_reason: lostReason })}::jsonb,
+              ${JSON.stringify({ submission_id: parent.id, source: "fastrack-receive", reason: lostReason })}::jsonb
+            )
+          `;
+        } catch (err) {
+          console.warn(
+            "fastrack: audit.log_system_action failed (non-fatal):",
+            describeError(err),
+          );
+        }
+      }
     } catch (err) {
       // Non-fatal: child row already landed; surface the failure but keep
       // going. Sheet write is still valuable; owner sees the issue via
