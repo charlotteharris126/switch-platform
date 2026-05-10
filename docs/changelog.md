@@ -4,6 +4,29 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-10 — Brevo backfill: SW_REFERRAL_URL + SW_FASTRACK_URL (Wren ask)
+
+**Type:** 1 data-ops script (`024_backfill_referral_and_fastrack_urls_2026_05_10.ts`). Pre-broadcast data hygiene.
+
+- **Why:** `_shared/route-lead.ts buildReferralUrl()` was rewired on 2026-05-04 (commit aadf5ad → 30e62e0) from per-funding-category referral paths to a single `/refer/?ref=`. No Brevo backfill ran when the wiring changed; existing contacts still hold stale URLs. Tonight's referral launch broadcast to EMS-matched contacts shipped with broken referral links (site redirect commit `e99fd6d` on switchable-site is rescuing clicks). Backfill is the precondition for the next clean broadcast referencing SW_REFERRAL_URL.
+- **Same pass also backfills `SW_FASTRACK_URL`** (introduced 2026-05-09 with the fastrack feature). Pre-2026-05-09 contacts won't have it set; the new U1 funded transactional template + future marketing both depend on it.
+- **Audience:** every Brevo contact whose latest `leads.submissions` row has `marketing_opt_in=true` (regardless of provider). Source of truth is the latest submission, not the Brevo Marketing list filter.
+- **Pattern:** clones the 013 backfill structure — paginated walk of Brevo contacts (100/page, 250ms inter-call delay), 0.5% halt threshold, resumable via `.024-checkpoint.json`, dry-run by default. URL helpers (`buildReferralUrl`, `buildFastrackUrl`) duplicated from `_shared/route-lead.ts` so the script and runtime emit byte-identical values.
+- **Spot-check:** 3 deterministic emails picked from the first batch + audience intersection, before/after dump printed by the script.
+- **Run log (to be filled in after `--apply`):**
+  - Audience size: TBD
+  - Mutated: TBD
+  - Skipped (not in audience): TBD
+  - Skipped (already matching): TBD
+  - Errors: TBD
+  - Spot-check 1: TBD before / TBD after
+  - Spot-check 2: TBD before / TBD after
+  - Spot-check 3: TBD before / TBD after
+- **Sign-off:** owner runs dry-run first, reviews output, approves `--apply`. Wren framed as "tomorrow morning is fine" — site redirect catches misdirected clicks in the meantime.
+- **Process lock:** memory entry `feedback_brevo_attribute_wiring_requires_backfill.md` and the `Core discipline` block in `platform/CLAUDE.md`. Any future change to a `_shared/route-lead.ts` function producing a Brevo attribute MUST queue a same-session backfill ticket before merge.
+
+---
+
 ## 2026-05-09 (Session 38): Audit wrapper, RLS proof, and the missing-GRANT bug
 
 **Type:** 3 migrations (0106, 0107, 0108) + 1 data-ops script (020) + 1 Server Action edit + 1 runbook doc. Clears 2 of Clara's 3 EMS-cutover gating conditions.

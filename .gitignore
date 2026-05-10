@@ -24,3 +24,5 @@ supabase/functions/_shared/dist/
 
 # Phase 3c backfill checkpoint (resume state, not source-controlled)
 supabase/data-ops/.backfill-checkpoint.json
+# 024 referral + fastrack URL backfill checkpoint
+supabase/data-ops/.024-checkpoint.json
