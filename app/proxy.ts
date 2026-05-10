@@ -30,6 +30,10 @@ const SHARED_AUTH_PATHS = [
   "/api/passkey/register-verify",
   "/api/passkey/login-options",
   "/api/passkey/login-verify",
+  // Public help pages. Reachable from invite emails before the recipient
+  // has a Supabase session, and shareable. Bypasses both the auth gate
+  // and the admin/provider surface rewrite.
+  "/help",
 ];
 
 function detectSurface(hostname: string): "admin" | "provider" {
