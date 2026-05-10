@@ -25,6 +25,7 @@ export interface LeadRow {
   funding_category: string | null;
   routed_at: string | null;
   status: LeadStatus;
+  has_fastrack: boolean;
 }
 
 type Filter = "all" | "open" | "in_progress" | "settled" | LeadStatus;
@@ -67,7 +68,7 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter((r) => {
+    const subset = rows.filter((r) => {
       if (filter === "all") {
         // pass
       } else if (filter === "open") {
@@ -84,6 +85,14 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
         if (!haystack.includes(q)) return false;
       }
       return true;
+    });
+    // Pin fastrack-submitted leads to the top, otherwise preserve the
+    // routed_at-desc order from the server query.
+    return [...subset].sort((a, b) => {
+      const aFast = a.has_fastrack ? 1 : 0;
+      const bFast = b.has_fastrack ? 1 : 0;
+      if (aFast !== bFast) return bFast - aFast;
+      return 0;
     });
   }, [rows, filter, query]);
 
@@ -129,11 +138,21 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                <tr
+                  key={r.id}
+                  className={`hover:bg-slate-50 transition-colors ${r.has_fastrack ? "bg-violet-50/40" : ""}`}
+                >
                   <td className="px-4 py-3">
-                    <Link href={`/provider/leads/${r.id}`} className="text-slate-900 font-medium hover:underline cursor-pointer">
-                      {r.name}
-                    </Link>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Link href={`/provider/leads/${r.id}`} className="text-slate-900 font-medium hover:underline cursor-pointer">
+                        {r.name}
+                      </Link>
+                      {r.has_fastrack && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-800 border border-violet-200">
+                          Fastrack
+                        </span>
+                      )}
+                    </div>
                     {r.email && <div className="text-xs text-slate-500">{r.email}</div>}
                   </td>
                   <td className="px-4 py-3 text-slate-700">

@@ -21,6 +21,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import {
   isAllowedTransition,
   isLeadStatus,
@@ -129,61 +130,69 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
   return { ok: true };
 }
 
-const NOTES_MAX = 5000;
+const NOTE_MAX = 5000;
 
-export async function saveLeadNotesAction(args: {
+export async function addLeadNoteAction(args: {
   submissionId: number;
-  notes: string;
+  body: string;
 }): Promise<Result> {
-  if (typeof args.notes !== "string") {
-    return { ok: false, error: "Notes must be text." };
+  if (typeof args.body !== "string") {
+    return { ok: false, error: "Note must be text." };
   }
-  if (args.notes.length > NOTES_MAX) {
-    return { ok: false, error: `Notes too long (max ${NOTES_MAX} characters).` };
+  const body = args.body.trim();
+  if (body.length === 0) return { ok: false, error: "Note can't be empty." };
+  if (body.length > NOTE_MAX) {
+    return { ok: false, error: `Note too long (max ${NOTE_MAX} characters).` };
   }
-
-  const trimmed = args.notes.trim().length === 0 ? null : args.notes;
 
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) return { ok: false, error: "Not signed in" };
+  const { data: sessionData } = await supabase.auth.getSession();
+  const user = sessionData.session?.user;
+  if (!user) return { ok: false, error: "Not signed in" };
 
-  const { data: existing, error: readError } = await supabase
+  // Resolve caller → provider_user_id + provider_id. Service-role client
+  // because crm.provider_users RLS scopes via auth.uid() but we only
+  // need our own row. RLS on crm.lead_notes will validate the insert.
+  const admin = createAdminClient();
+  const { data: pu, error: puErr } = await admin
     .schema("crm")
-    .from("enrolments")
-    .select("id, notes")
-    .eq("submission_id", args.submissionId)
-    .maybeSingle();
+    .from("provider_users")
+    .select("id, provider_id")
+    .eq("auth_user_id", user.id)
+    .eq("status", "active")
+    .maybeSingle<{ id: number; provider_id: string }>();
 
-  if (readError) return { ok: false, error: readError.message };
-  if (!existing) {
-    return { ok: false, error: "No enrolment row found, or you don't have access" };
-  }
+  if (puErr) return { ok: false, error: puErr.message };
+  if (!pu) return { ok: false, error: "Active provider user not found" };
 
-  const before = existing.notes ?? null;
-  if (before === trimmed) {
-    return { ok: true };
-  }
-
-  const { error: updateError } = await supabase
+  // INSERT via authenticated client so RLS validates the WITH CHECK
+  // (provider_id = caller's, submission_id is theirs).
+  const { data: inserted, error: insErr } = await supabase
     .schema("crm")
-    .from("enrolments")
-    .update({ notes: trimmed, updated_at: new Date().toISOString() })
-    .eq("id", existing.id);
+    .from("lead_notes")
+    .insert({
+      submission_id: args.submissionId,
+      provider_id: pu.provider_id,
+      provider_user_id: pu.id,
+      body,
+    })
+    .select("id")
+    .maybeSingle<{ id: number }>();
 
-  if (updateError) return { ok: false, error: updateError.message };
+  if (insErr) return { ok: false, error: insErr.message };
+  if (!inserted) return { ok: false, error: "Insert returned no row (RLS may have rejected)" };
 
   const { error: auditError } = await supabase.rpc("log_provider_action_v1", {
-    p_action: "save_notes",
-    p_target_table: "crm.enrolments",
-    p_target_id: String(existing.id),
-    p_before: { notes: before },
-    p_after: { notes: trimmed },
+    p_action: "add_note",
+    p_target_table: "crm.lead_notes",
+    p_target_id: String(inserted.id),
+    p_before: null,
+    p_after: { body },
     p_context: { submission_id: args.submissionId },
   });
 
   if (auditError) {
-    return { ok: false, error: `Notes saved but audit write failed: ${auditError.message}` };
+    return { ok: false, error: `Saved but audit write failed: ${auditError.message}` };
   }
 
   revalidatePath(`/provider/leads/${args.submissionId}`);

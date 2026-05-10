@@ -50,18 +50,30 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   const { data: sessionData } = await supabase.auth.getSession();
   if (!sessionData.session?.user) redirect("/passkey-login");
 
-  const { data: submissions, error: submissionsErr } = await supabase
-    .schema("leads")
-    .from("submissions")
-    .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count")
-    .not("routed_at", "is", null)
-    .is("archived_at", null)
-    .is("parent_submission_id", null)
-    .order("routed_at", { ascending: false })
-    .limit(200);
+  const [submissionsResult, fastrackResult] = await Promise.all([
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count")
+      .not("routed_at", "is", null)
+      .is("archived_at", null)
+      .is("parent_submission_id", null)
+      .order("routed_at", { ascending: false })
+      .limit(200),
+    supabase
+      .schema("leads")
+      .from("fastrack_submissions")
+      .select("parent_submission_id"),
+  ]);
+
+  const submissions = submissionsResult.data;
+  const submissionsErr = submissionsResult.error;
 
   const subs = (submissions ?? []) as SubmissionRow[];
   const ids = subs.map((s) => s.id);
+  const fastrackParentIds = new Set<number>(
+    (fastrackResult.data ?? []).map((r: { parent_submission_id: number }) => r.parent_submission_id),
+  );
 
   const { data: enrolments } = ids.length
     ? await supabase
@@ -86,12 +98,13 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       funding_category: s.funding_category,
       routed_at: s.routed_at,
       status: (enrol?.status ?? "open") as LeadStatus,
+      has_fastrack: fastrackParentIds.has(s.id),
     };
   });
 
   return (
     <ProviderShell active="leads">
-      <div className="max-w-5xl mx-auto p-6">
+      <div className="max-w-7xl mx-auto p-6">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold text-slate-900">Your leads</h1>
           <p className="text-sm text-slate-500 mt-1">

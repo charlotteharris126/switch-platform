@@ -1,10 +1,10 @@
-// /provider/leads/[id] — lead detail + outcome marking.
+// /provider/leads/[id] — lead detail + outcome marking + notes log.
 //
 // All routed payload fields are visible to the provider (RLS-scoped to
-// their primary_routed_to). The OutcomeButtons client component fires
-// markOutcomeAction (Server Action below) which writes crm.enrolments.status
-// and audit-logs the change. Authenticated client throughout, RLS the
-// trust boundary.
+// their primary_routed_to). Two-column layout: left = lead context +
+// outcomes, right = notes log. Header carries prev/next navigation
+// across the same ordering the leads list uses (fastrack pinned, then
+// routed_at desc).
 
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
@@ -12,8 +12,8 @@ import { createClient } from "@/lib/supabase/server";
 import { ProviderShell } from "../../provider-shell";
 import { DurationTimer } from "../../duration-timer";
 import { OutcomeButtons } from "./outcome-buttons";
-import { NotesEditor } from "./notes-editor";
-import { markOutcomeAction, saveLeadNotesAction } from "./actions";
+import { NotesLog, type NoteRow } from "./notes-log";
+import { markOutcomeAction, addLeadNoteAction } from "./actions";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
 import { formatIntakeId } from "@/lib/intake-format";
 
@@ -51,7 +51,28 @@ interface EnrolmentRow {
   status: string;
   lost_reason: string | null;
   status_updated_at: string;
-  notes: string | null;
+}
+
+interface NoteAuthor {
+  display_name: string | null;
+  contact_email: string;
+}
+
+interface NoteJoinRow {
+  id: number;
+  body: string;
+  created_at: string;
+  // supabase-js types embedded relations as array even for many-to-one
+  provider_users: NoteAuthor | NoteAuthor[] | null;
+}
+
+interface SiblingRow {
+  id: number;
+  routed_at: string | null;
+}
+
+interface FastrackRow {
+  parent_submission_id: number;
 }
 
 interface Props {
@@ -67,139 +88,252 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
   const { data: sessionData } = await supabase.auth.getSession();
   if (!sessionData.session?.user) redirect("/passkey-login");
 
-  // Submission + enrolment fetched in parallel — they only share the
-  // submissionId from the URL, no inter-query dependency. RLS scopes both.
-  const [submissionResult, enrolResult] = await Promise.all([
-    supabase
-      .schema("leads")
-      .from("submissions")
-      .select(
-        "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
-      )
-      .eq("id", submissionId)
-      .maybeSingle<SubmissionRow>(),
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("id,status,lost_reason,status_updated_at,notes")
-      .eq("submission_id", submissionId)
-      .maybeSingle<EnrolmentRow>(),
-  ]);
+  // Fetch in one wave: this submission, this enrolment, notes for this
+  // lead, all routed siblings (id + routed_at), and all fastrack parent
+  // ids. Last two power prev/next; small queries, RLS-scoped.
+  const [submissionResult, enrolResult, notesResult, siblingsResult, fastrackResult] =
+    await Promise.all([
+      supabase
+        .schema("leads")
+        .from("submissions")
+        .select(
+          "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
+        )
+        .eq("id", submissionId)
+        .maybeSingle<SubmissionRow>(),
+      supabase
+        .schema("crm")
+        .from("enrolments")
+        .select("id,status,lost_reason,status_updated_at")
+        .eq("submission_id", submissionId)
+        .maybeSingle<EnrolmentRow>(),
+      supabase
+        .schema("crm")
+        .from("lead_notes")
+        .select("id, body, created_at, provider_users:provider_user_id(display_name, contact_email)")
+        .eq("submission_id", submissionId)
+        .order("created_at", { ascending: false })
+        .limit(200),
+      supabase
+        .schema("leads")
+        .from("submissions")
+        .select("id,routed_at")
+        .not("routed_at", "is", null)
+        .is("archived_at", null)
+        .is("parent_submission_id", null)
+        .order("routed_at", { ascending: false })
+        .limit(500),
+      supabase
+        .schema("leads")
+        .from("fastrack_submissions")
+        .select("parent_submission_id"),
+    ]);
 
   const submission = submissionResult.data;
   if (!submission) notFound();
   const enrol = enrolResult.data;
-
   const status = (enrol?.status ?? "open") as LeadStatus;
+
+  const fastrackParentIds = new Set<number>(
+    (fastrackResult.data ?? []).map((r: FastrackRow) => r.parent_submission_id),
+  );
+  const hasFastrack = fastrackParentIds.has(submission.id);
+
+  // Build the same ordering the leads list uses: fastrack first, then
+  // routed_at desc.
+  const siblings = (siblingsResult.data ?? []) as SiblingRow[];
+  siblings.sort((a, b) => {
+    const aFast = fastrackParentIds.has(a.id) ? 1 : 0;
+    const bFast = fastrackParentIds.has(b.id) ? 1 : 0;
+    if (aFast !== bFast) return bFast - aFast;
+    const aT = a.routed_at ? new Date(a.routed_at).getTime() : 0;
+    const bT = b.routed_at ? new Date(b.routed_at).getTime() : 0;
+    return bT - aT;
+  });
+  const idx = siblings.findIndex((s) => s.id === submission.id);
+  const prevId = idx > 0 ? siblings[idx - 1].id : null;
+  const nextId = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1].id : null;
+
+  const noteRowsRaw = (notesResult.data ?? []) as unknown as NoteJoinRow[];
+  const notes: NoteRow[] = noteRowsRaw.map((n) => {
+    const author = Array.isArray(n.provider_users)
+      ? n.provider_users[0] ?? null
+      : n.provider_users;
+    return {
+      id: n.id,
+      body: n.body,
+      created_at: n.created_at,
+      author: author?.display_name ?? author?.contact_email ?? "Someone",
+    };
+  });
 
   return (
     <ProviderShell active="leads">
-      <div className="max-w-3xl mx-auto p-6">
-        <Link href="/provider/leads" className="text-sm text-slate-600 hover:text-slate-900 cursor-pointer">
-          &larr; All leads
-        </Link>
+      <div className="max-w-7xl mx-auto p-6">
+        {/* Header row: back link + prev/next */}
+        <div className="flex items-center justify-between gap-3">
+          <Link
+            href="/provider/leads"
+            className="text-sm text-slate-600 hover:text-slate-900 cursor-pointer"
+          >
+            &larr; All leads
+          </Link>
+          <div className="flex items-center gap-1 text-sm">
+            <span className="text-xs text-slate-500 mr-2">
+              {idx >= 0 ? `${idx + 1} of ${siblings.length}` : ""}
+            </span>
+            <NavButton href={prevId ? `/provider/leads/${prevId}` : null} label="Previous" direction="prev" />
+            <NavButton href={nextId ? `/provider/leads/${nextId}` : null} label="Next" direction="next" />
+          </div>
+        </div>
 
-        <div className="mt-4">
+        {/* Title */}
+        <div className="mt-4 flex items-baseline gap-3 flex-wrap">
           <h1 className="text-2xl font-semibold text-slate-900">
-            {[submission.first_name, submission.last_name].filter(Boolean).join(" ") || submission.email || `Lead ${submission.id}`}
+            {[submission.first_name, submission.last_name].filter(Boolean).join(" ") ||
+              submission.email ||
+              `Lead ${submission.id}`}
           </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Current status: <strong className="text-slate-900">{STATUS_LABEL[status] ?? status}</strong>
-          </p>
+          {hasFastrack && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-violet-100 text-violet-800 border border-violet-200">
+              Fastrack submitted
+            </span>
+          )}
         </div>
+        <p className="text-sm text-slate-500 mt-1">
+          Current status: <strong className="text-slate-900">{STATUS_LABEL[status] ?? status}</strong>
+        </p>
 
-        {/* Duration tiles */}
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <div className="bg-white border border-slate-200 rounded-xl p-4">
-            <p className="text-xs uppercase tracking-wide font-semibold text-slate-500">In your queue</p>
-            <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
-              <DurationTimer since={submission.routed_at} variant="full" />
-            </p>
-            <p className="text-xs text-slate-500 mt-1">
-              Routed {submission.routed_at ? new Date(submission.routed_at).toLocaleDateString("en-GB") : "—"}
-            </p>
+        {/* Two-column main */}
+        <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* LEFT: lead context + outcome (spans 2 of 3 cols) */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Duration tiles */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white border border-slate-200 rounded-xl p-4">
+                <p className="text-xs uppercase tracking-wide font-semibold text-slate-500">In your queue</p>
+                <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
+                  <DurationTimer since={submission.routed_at} variant="full" />
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Routed {submission.routed_at ? new Date(submission.routed_at).toLocaleDateString("en-GB") : "—"}
+                </p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-xl p-4">
+                <p className="text-xs uppercase tracking-wide font-semibold text-slate-500">At current status</p>
+                <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
+                  <DurationTimer since={enrol?.status_updated_at ?? submission.routed_at} variant="full" />
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {STATUS_LABEL[status] ?? status} since{" "}
+                  {enrol?.status_updated_at
+                    ? new Date(enrol.status_updated_at).toLocaleDateString("en-GB")
+                    : submission.routed_at
+                      ? new Date(submission.routed_at).toLocaleDateString("en-GB")
+                      : "—"}
+                </p>
+              </div>
+            </div>
+
+            {/* Outcome marking */}
+            <div className="bg-white border border-slate-200 rounded-xl p-6">
+              <h2 className="text-sm font-semibold text-slate-900">Mark outcome</h2>
+              <p className="text-xs text-slate-500 mt-1">
+                Click whichever applies. Forward only — once you&apos;ve moved past a step you can&apos;t go back.
+                Every change is logged.
+              </p>
+              <OutcomeButtons
+                submissionId={submission.id}
+                currentStatus={status}
+                onMark={markOutcomeAction}
+              />
+            </div>
+
+            {/* Lead detail cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Section title="Contact">
+                <Row label="Email" value={submission.email} />
+                <Row label="Phone" value={submission.phone} />
+                <Row label="Local authority" value={submission.la} />
+                <Row label="Postcode" value={submission.postcode} />
+                <Row label="Region" value={submission.region} />
+              </Section>
+
+              <Section title="About the learner">
+                <Row label="Age band" value={submission.age_band} />
+                <Row label="Employment" value={submission.employment_status} />
+                <Row label="Has L3+" value={booleanLabel(submission.prior_level_3_or_higher)} />
+                <Row label="Outcome they want" value={submission.outcome_interest} />
+              </Section>
+
+              <Section title="Course">
+                <Row label="Course" value={submission.course_id} />
+                <Row label="Funding" value={fundingLabel(submission.funding_category, submission.funding_route)} />
+                <IntakeRow
+                  canStart={submission.can_start_on_intake_date}
+                  preferredIntakeId={submission.preferred_intake_id}
+                  acceptableIntakeIds={submission.acceptable_intake_ids}
+                  startWhen={submission.start_when}
+                  startTiming={submission.start_timing}
+                />
+              </Section>
+
+              <Section title="In their words">
+                <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                  {submission.why_this_course || (
+                    <span className="text-slate-400 italic">Nothing recorded.</span>
+                  )}
+                </p>
+              </Section>
+            </div>
           </div>
-          <div className="bg-white border border-slate-200 rounded-xl p-4">
-            <p className="text-xs uppercase tracking-wide font-semibold text-slate-500">At current status</p>
-            <p className="text-xl font-semibold text-slate-900 mt-1 tabular-nums">
-              <DurationTimer since={enrol?.status_updated_at ?? submission.routed_at} variant="full" />
-            </p>
-            <p className="text-xs text-slate-500 mt-1">
-              {STATUS_LABEL[status] ?? status} since{" "}
-              {enrol?.status_updated_at
-                ? new Date(enrol.status_updated_at).toLocaleDateString("en-GB")
-                : submission.routed_at
-                  ? new Date(submission.routed_at).toLocaleDateString("en-GB")
-                  : "—"}
-            </p>
-          </div>
-        </div>
 
-        {/* Outcome marking */}
-        <div className="mt-6 bg-white border border-slate-200 rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-slate-900">Mark outcome</h2>
-          <p className="text-xs text-slate-500 mt-1">
-            Click whichever applies. Forward only — once you&apos;ve moved past a step you can&apos;t go back. Every change is logged.
-          </p>
-          <OutcomeButtons
-            submissionId={submission.id}
-            currentStatus={status}
-            onMark={markOutcomeAction}
-          />
-        </div>
-
-        {/* Contact + lead details */}
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Section title="Contact">
-            <Row label="Email" value={submission.email} />
-            <Row label="Phone" value={submission.phone} />
-            <Row label="Local authority" value={submission.la} />
-            <Row label="Postcode" value={submission.postcode} />
-            <Row label="Region" value={submission.region} />
-          </Section>
-
-          <Section title="About the learner">
-            <Row label="Age band" value={submission.age_band} />
-            <Row label="Employment" value={submission.employment_status} />
-            <Row label="Has L3+" value={booleanLabel(submission.prior_level_3_or_higher)} />
-            <Row label="Outcome they want" value={submission.outcome_interest} />
-          </Section>
-
-          <Section title="Course">
-            <Row label="Course" value={submission.course_id} />
-            <Row label="Funding" value={fundingLabel(submission.funding_category, submission.funding_route)} />
-            <IntakeRow
-              canStart={submission.can_start_on_intake_date}
-              preferredIntakeId={submission.preferred_intake_id}
-              acceptableIntakeIds={submission.acceptable_intake_ids}
-              startWhen={submission.start_when}
-              startTiming={submission.start_timing}
-            />
-          </Section>
-
-          <Section title="In their words">
-            <p className="text-sm text-slate-700 whitespace-pre-wrap">
-              {submission.why_this_course || <span className="text-slate-400 italic">Nothing recorded.</span>}
-            </p>
-          </Section>
-        </div>
-
-        {/* Notes — editable by the provider */}
-        <div className="mt-6 bg-white border border-slate-200 rounded-xl p-6">
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold text-slate-900">Your notes on this lead</h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Private to your business. Visible to anyone on your team in the portal.
-            </p>
-          </div>
-          <NotesEditor
-            submissionId={submission.id}
-            initialValue={enrol?.notes ?? ""}
-            onSave={saveLeadNotesAction}
-          />
+          {/* RIGHT: notes log (sticky on lg+) */}
+          <aside className="lg:col-span-1">
+            <div className="bg-white border border-slate-200 rounded-xl p-5 lg:sticky lg:top-6 max-h-[calc(100vh-3rem)] flex flex-col">
+              <div className="mb-3 shrink-0">
+                <h2 className="text-sm font-semibold text-slate-900">Notes</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Newest first. Visible to your team only.
+                </p>
+              </div>
+              <NotesLog submissionId={submission.id} notes={notes} onAdd={addLeadNoteAction} />
+            </div>
+          </aside>
         </div>
       </div>
     </ProviderShell>
+  );
+}
+
+function NavButton({
+  href,
+  label,
+  direction,
+}: {
+  href: string | null;
+  label: string;
+  direction: "prev" | "next";
+}) {
+  const arrow = direction === "prev" ? "←" : "→";
+  if (!href) {
+    return (
+      <span className="px-3 py-1.5 text-sm text-slate-300 cursor-not-allowed flex items-center gap-1">
+        {direction === "prev" && arrow}
+        {label}
+        {direction === "next" && arrow}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      className="px-3 py-1.5 rounded-md text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900 cursor-pointer flex items-center gap-1 transition-colors"
+    >
+      {direction === "prev" && arrow}
+      {label}
+      {direction === "next" && arrow}
+    </Link>
   );
 }
 
@@ -216,8 +350,6 @@ function IntakeRow({
   startWhen: string | null;
   startTiming: string | null;
 }) {
-  // Pre-routing / waitlist DQ leads have no intake answer; show their
-  // start-timing instead so the provider knows when they want to start.
   if (canStart == null) {
     if (startTiming) return <Row label="Wants to start" value={humanise(startTiming)} />;
     if (startWhen) return <Row label="Wants to start" value={humanise(startWhen)} />;
@@ -228,13 +360,11 @@ function IntakeRow({
     return <Row label="Can start on intake" value="No" />;
   }
 
-  // canStart === true: render a list of dates if we have them, otherwise a plain Yes.
   const ids = (acceptableIntakeIds ?? []).filter((s) => s && s.length > 0);
   if (ids.length === 0 && !preferredIntakeId) {
     return <Row label="Can start on intake" value="Yes" />;
   }
 
-  // Single-intake course (or only one acceptable date)
   if (ids.length <= 1) {
     const onlyId = preferredIntakeId ?? ids[0] ?? null;
     return (
@@ -245,7 +375,6 @@ function IntakeRow({
     );
   }
 
-  // Multi-intake course — show all acceptable dates, mark preferred
   const sorted = [...ids].sort();
   return (
     <div className="text-sm">

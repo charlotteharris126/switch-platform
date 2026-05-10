@@ -136,7 +136,7 @@ export default async function ProviderHomePage() {
 
   return (
     <ProviderShell active="home">
-      <div className="max-w-5xl mx-auto p-6">
+      <div className="max-w-7xl mx-auto p-6">
         <div className="mb-6">
           <p className="text-xs uppercase tracking-widest text-slate-500 font-semibold">
             {provider?.company_name ?? pu.provider_id}
