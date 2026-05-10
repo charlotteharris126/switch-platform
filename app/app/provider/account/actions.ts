@@ -8,7 +8,7 @@
 // provider RLS policy on provider_passkeys is a follow-up.
 //
 // Writes audit through public.log_provider_action_v1 same as outcome
-// marking — every passkey removal lands a row in audit.actions.
+// marking. every passkey removal lands a row in audit.actions.
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
@@ -67,7 +67,7 @@ export async function removePasskeyAction(args: { passkeyId: number }): Promise<
     return { ok: false, error: "Passkey is already removed" };
   }
 
-  // Refuse to remove the LAST active passkey — locks the user out.
+  // Refuse to remove the LAST active passkey. locks the user out.
   const { count, error: countErr } = await admin
     .schema("crm")
     .from("provider_passkeys")
@@ -77,7 +77,7 @@ export async function removePasskeyAction(args: { passkeyId: number }): Promise<
 
   if (countErr) return { ok: false, error: countErr.message };
   if ((count ?? 0) <= 1) {
-    return { ok: false, error: "This is your only passkey — removing it would lock you out. Add another one first, or contact Charlotte to re-issue an invite." };
+    return { ok: false, error: "This is your only passkey, so removing it would lock you out. Add another one first, or email support@switchleads.co.uk to re-issue an invite." };
   }
 
   const nowIso = new Date().toISOString();

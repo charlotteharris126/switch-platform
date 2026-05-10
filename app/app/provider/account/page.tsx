@@ -1,4 +1,4 @@
-// /provider/account — profile, provider info, passkeys.
+// /provider/account. profile, provider info, passkeys.
 //
 // Reads provider_users + providers + provider_passkeys via the admin
 // (service-role) client. crm.provider_passkeys has no provider-context
@@ -6,7 +6,7 @@
 // caller's row) is the trust boundary for the passkey list.
 //
 // Self-service "add another passkey" is a separate WebAuthn ceremony with
-// new API routes — not in this initial pass. For now support issues a
+// new API routes. not in this initial pass. For now support issues a
 // fresh invite via /admin/providers/[id] when a provider needs an extra
 // device.
 
@@ -80,7 +80,7 @@ export default async function ProviderAccountPage() {
     redirect("/passkey-login?error=no_active_account");
   }
 
-  // provider + passkeys in parallel — both depend on pu but not on each other.
+  // provider + passkeys in parallel. both depend on pu but not on each other.
   const [providerResult, passkeyResult] = await Promise.all([
     admin
       .schema("crm")
@@ -156,12 +156,12 @@ export default async function ProviderAccountPage() {
 
         {/* Provider info */}
         <Card title="Your business" subtitle="What we have on file. Email support@switchleads.co.uk to change anything here.">
-          <Row label="Company" value={provider?.company_name ?? "—"} />
-          <Row label="Business email" value={provider?.contact_email ?? "—"} />
-          <Row label="Business phone" value={provider?.contact_phone ?? "—"} />
+          <Row label="Company" value={provider?.company_name ?? "-"} />
+          <Row label="Business email" value={provider?.contact_email ?? "-"} />
+          <Row label="Business phone" value={provider?.contact_phone ?? "-"} />
           <Row
             label="Pilot status"
-            value={provider?.pilot_status ? humanise(provider.pilot_status) : "—"}
+            value={provider?.pilot_status ? humanise(provider.pilot_status) : "-"}
           />
           {provider?.is_demo && (
             <Row label="" value={<span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-800 border border-violet-200">Demo provider</span>} />
@@ -176,7 +176,7 @@ export default async function ProviderAccountPage() {
         {/* Support */}
         <Card title="Need help?">
           <p className="text-sm text-slate-700">
-            Anything you can&apos;t do from the portal — billing queries, business details
+            Anything you can&apos;t do from the portal: billing queries, business details
             to update, lost device, anything else.{" "}
             <Link
               href="/provider/support"
@@ -235,7 +235,7 @@ function Row({
 }
 
 function BillingSummary({ provider }: { provider: ProviderRow | null | undefined }) {
-  if (!provider) return <p className="text-sm text-slate-500">—</p>;
+  if (!provider) return <p className="text-sm text-slate-500">-</p>;
 
   const lines: Array<{ label: string; value: React.ReactNode }> = [];
   if (provider.pricing_model) lines.push({ label: "Pricing model", value: humanise(provider.pricing_model) });
@@ -244,15 +244,15 @@ function BillingSummary({ provider }: { provider: ProviderRow | null | undefined
     lines.push({ label: "Per enrolment", value: `£${provider.per_enrolment_fee}` });
   }
   if (provider.percent_rate != null) {
-    const min = provider.min_fee != null ? `£${provider.min_fee}` : "—";
-    const max = provider.max_fee != null ? `£${provider.max_fee}` : "—";
+    const min = provider.min_fee != null ? `£${provider.min_fee}` : "-";
+    const max = provider.max_fee != null ? `£${provider.max_fee}` : "-";
     lines.push({ label: "Percent of fee", value: `${provider.percent_rate}% (min ${min}, max ${max})` });
   }
   if (provider.free_enrolments_remaining != null) {
     lines.push({ label: "Free enrolments left", value: provider.free_enrolments_remaining });
   }
 
-  if (lines.length === 0) return <p className="text-sm text-slate-500">—</p>;
+  if (lines.length === 0) return <p className="text-sm text-slate-500">-</p>;
 
   return (
     <>

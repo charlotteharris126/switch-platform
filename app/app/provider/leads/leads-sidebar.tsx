@@ -1,4 +1,4 @@
-// Right-hand sidebar on /provider/leads — quick stats + actionable
+// Right-hand sidebar on /provider/leads. quick stats + actionable
 // "needs attention" list. Pure presentational; data is computed in
 // the page from already-loaded rows so no extra round-trip.
 

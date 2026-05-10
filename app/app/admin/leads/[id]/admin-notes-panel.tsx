@@ -126,7 +126,7 @@ export function AdminNotesPanel({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={3}
-            placeholder="Note for the provider — what came through, what to do."
+            placeholder="Note for the provider. what came through, what to do."
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                 e.preventDefault();
@@ -167,7 +167,7 @@ export function AdminNotesPanel({
         </div>
       ) : (
         <p className="text-xs text-[#5a6a72] italic">
-          This lead isn&apos;t routed to a provider yet — admin notes are only visible once a routing exists.
+          This lead isn&apos;t routed to a provider yet, so admin notes can&apos;t be added until it routes.
         </p>
       )}
 

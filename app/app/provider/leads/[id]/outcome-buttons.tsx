@@ -10,7 +10,7 @@ import {
 } from "@/lib/lead-status";
 
 // Main happy-path progression. Click any unfilled step to advance.
-// Stepper hides closeout statuses (lost, cannot_reach) — those sit as
+// Stepper hides closeout statuses (lost, cannot_reach). those sit as
 // secondary actions below the line.
 const STEPPER_PATH: ReadonlyArray<LeadStatus> = [
   "open",
@@ -87,13 +87,13 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
     return (
       <div className="mt-4 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-md p-3">
         This lead is settled at <strong>{STATUS_LABEL[currentStatus]}</strong>.
-        No further outcomes can be set from the portal — email support@switchleads.co.uk if
+        No further outcomes can be set from the portal. Email support@switchleads.co.uk if
         anything needs unwinding.
       </div>
     );
   }
 
-  // Off-path current state (cannot_reach) — render mini message + close-out only
+  // Off-path current state (cannot_reach). render mini message + close-out only
   if (!isOnPath && currentStatus === "cannot_reach") {
     return (
       <div className="mt-4 space-y-3">
@@ -236,12 +236,12 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
           })}
         </div>
         <p className="text-xs text-slate-500 mt-3">
-          Click a future step to mark it. Past steps are locked — email support@switchleads.co.uk if
+          Click a future step to mark it. Past steps are locked. Email support@switchleads.co.uk if
           something needs unwinding.
         </p>
       </div>
 
-      {/* Closeouts — secondary actions */}
+      {/* Closeouts. secondary actions */}
       <div className="border-t border-slate-100 pt-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
           Or close this out

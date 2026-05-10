@@ -1,4 +1,4 @@
-// /provider/support — contact the SwitchLeads team via a form.
+// /provider/support. contact the SwitchLeads team via a form.
 //
 // Submissions land in crm.support_requests + fire an email to
 // support@switchleads.co.uk. The form pre-resolves the caller's contact
@@ -35,7 +35,7 @@ export default async function ProviderSupportPage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Support</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Anything you can&apos;t do from the portal — drop us a line. We aim to reply
+            Anything you can&apos;t do from the portal? Drop us a line. We aim to reply
             within one working day.
           </p>
         </div>

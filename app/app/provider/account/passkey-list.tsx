@@ -36,7 +36,7 @@ export function PasskeyList({ passkeys, onRemove }: Props) {
   if (passkeys.length === 0) {
     return (
       <p className="text-sm text-slate-500">
-        No registered passkeys. (That shouldn&apos;t happen — email support@switchleads.co.uk.)
+        No registered passkeys. (That shouldn&apos;t happen, email support@switchleads.co.uk.)
       </p>
     );
   }

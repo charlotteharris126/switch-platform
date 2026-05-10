@@ -1,7 +1,7 @@
 // Edge Function: admin-test-email
 //
 // Manual re-fire of provider-facing transactional emails for testing.
-// Currently supports the "New enquiry" routing notification — admin
+// Currently supports the "New enquiry" routing notification. admin
 // triggers this from /admin/leads/[id] on a demo lead to verify the
 // email composition lands correctly without needing to create a fresh
 // lead through the form.

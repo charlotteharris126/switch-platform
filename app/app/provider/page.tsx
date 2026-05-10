@@ -1,10 +1,10 @@
-// /provider — gated home for authenticated provider users.
+// /provider. gated home for authenticated provider users.
 //
 // At-a-glance dashboard:
 //   - Hero strip: enrolments this month + month-on-month delta + estimated
 //     fees-this-month if we have a per-enrolment fee on file
 //   - Action queue: only renders cards that have non-zero counts (callbacks /
-//     fastrack ready / stale opens) — silent when nothing's urgent
+//     fastrack ready / stale opens). silent when nothing's urgent
 //   - Pipeline funnel: visual breakdown of where leads sit, segments
 //     proportional to count
 //   - Recent activity: last 5 routed leads with duration + status
@@ -90,7 +90,7 @@ export default async function ProviderHomePage() {
   const admin = createAdminClient();
 
   // Fan out: provider_user (admin client), all enrolments (auth, RLS-scoped),
-  // last 5 routed (auth), all routed sub ids (auth — for fastrack-ready
+  // last 5 routed (auth), all routed sub ids (auth. for fastrack-ready
   // count), all fastrack parents (auth, RLS-scoped).
   const [puResult, enrolmentsResult, recentSubsResult, allRoutedResult, fastrackResult] =
     await Promise.all([
@@ -181,8 +181,8 @@ export default async function ProviderHomePage() {
       new Date(e.status_updated_at).getTime() < staleAttemptCutoff,
   ).length;
 
-  // Estimated fees this month — naive: per_enrolment_fee × enrolledThisMonth.
-  // (Free-enrolments accounting is a follow-up — provider's first 3 enrolments
+  // Estimated fees this month. naive: per_enrolment_fee × enrolledThisMonth.
+  // (Free-enrolments accounting is a follow-up. provider's first 3 enrolments
   // are free per pilot pricing, but we'd need to know prior enrolments to
   // model that exactly.)
   const feesThisMonth = provider?.per_enrolment_fee != null
@@ -235,12 +235,12 @@ export default async function ProviderHomePage() {
                 Estimated fees this month
               </p>
               <p className="text-3xl md:text-4xl font-semibold tabular-nums mt-2 leading-none">
-                {feesThisMonth == null ? "—" : `£${feesThisMonth.toLocaleString("en-GB")}`}
+                {feesThisMonth == null ? "-" : `£${feesThisMonth.toLocaleString("en-GB")}`}
               </p>
               <p className="text-xs mt-3 text-slate-400">
                 {provider?.per_enrolment_fee != null
                   ? `£${provider.per_enrolment_fee} per enrolment`
-                  : "Pricing on file unclear — email support@switchleads.co.uk"}
+                  : "Pricing on file unclear. email support@switchleads.co.uk"}
               </p>
             </div>
 
@@ -258,7 +258,7 @@ export default async function ProviderHomePage() {
           </div>
         </section>
 
-        {/* Action queue — four uniform cards, always rendered. When the
+        {/* Action queue. four uniform cards, always rendered. When the
             count is 0 the card flips to a calm emerald "all clear" state
             so the layout stays predictable and good news is visible.
             Order: fastrack leads → callback requests → open never called
@@ -354,7 +354,7 @@ export default async function ProviderHomePage() {
                     <Link href={`/provider/leads/${s.id}`} className="flex items-center justify-between px-6 py-3 gap-3 cursor-pointer">
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-slate-900 truncate">{name}</p>
-                        <p className="text-xs text-slate-500 truncate">{s.course_id ?? "—"}</p>
+                        <p className="text-xs text-slate-500 truncate">{s.course_id ?? "-"}</p>
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
                         <span className="text-xs text-slate-500 tabular-nums">

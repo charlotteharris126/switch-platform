@@ -1,6 +1,6 @@
 "use server";
 
-// Server Action — provider submits the Support form.
+// Server Action. provider submits the Support form.
 //
 // Flow:
 //   1. Resolve caller → provider_user (admin client; provider_users RLS
@@ -12,7 +12,7 @@
 //      and stamps email_sent_at on the row.
 //
 // If the email dispatch fails, the row stays in the table with
-// email_sent_at = NULL — so we don't lose the submission and a follow-up
+// email_sent_at = NULL. so we don't lose the submission and a follow-up
 // retry can dispatch later. Returns ok:true regardless once the row is
 // inserted; the email warning is surfaced separately.
 

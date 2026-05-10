@@ -36,7 +36,7 @@ export function DurationTimer({ since, variant = "compact" }: Props) {
     return () => window.clearInterval(id);
   }, [since]);
 
-  if (!since) return <span className="text-slate-400">—</span>;
+  if (!since) return <span className="text-slate-400">-</span>;
 
   const ms = Math.max(0, now - new Date(since).getTime());
   return <>{format(ms, variant)}</>;

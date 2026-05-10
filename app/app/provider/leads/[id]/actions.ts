@@ -1,6 +1,6 @@
 "use server";
 
-// Server Action — provider marks an outcome on one of their leads.
+// Server Action. provider marks an outcome on one of their leads.
 //
 // Auth: the authenticated client (cookie session) is used. RLS policies
 // from migration 0096 limit which crm.enrolments rows the provider can
@@ -14,7 +14,7 @@
 //   - Lost reasons are validated against the lostReasonsFor(from) set.
 //
 // Audit: every change writes through public.log_provider_action_v1 (the
-// public-schema wrapper over audit.log_provider_action — the audit schema
+// public-schema wrapper over audit.log_provider_action. the audit schema
 // itself is not exposed in the Data API). Surfaces audit failures to the
 // caller rather than swallowing, so a failed write is visible. Atomic
 // (UPDATE + audit in one transaction) is a pending refinement.
@@ -98,7 +98,7 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
   }
 
   const nowIso = new Date().toISOString();
-  // Marking any new outcome clears the admin callback flag — "the
+  // Marking any new outcome clears the admin callback flag. "the
   // provider acted, the nudge is resolved". The flag's audit trail
   // lives in lead_notes (the original admin note that raised it
   // stays in history regardless).
@@ -208,7 +208,7 @@ export async function addLeadNoteAction(args: {
   return { ok: true };
 }
 
-// Called when the provider opens a lead detail page — marks any unread
+// Called when the provider opens a lead detail page. marks any unread
 // admin notes on that lead as read. Idempotent: a no-op if there's
 // nothing unread. RLS scopes the UPDATE to the provider's own leads.
 export async function markAdminNotesReadAction(args: {

@@ -178,7 +178,7 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
                     {r.email && <div className="text-xs text-slate-500">{r.email}</div>}
                   </td>
                   <td className="px-4 py-3 text-slate-700">
-                    {r.course_id ?? "—"}
+                    {r.course_id ?? "-"}
                     {r.funding_category && (
                       <div className="text-xs text-slate-500">
                         {r.funding_category === "gov"

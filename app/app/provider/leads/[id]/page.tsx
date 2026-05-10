@@ -1,4 +1,4 @@
-// /provider/leads/[id] — lead detail + outcome marking + notes log.
+// /provider/leads/[id]. lead detail + outcome marking + notes log.
 //
 // All routed payload fields are visible to the provider (RLS-scoped to
 // their primary_routed_to). Two-column layout: left = lead context +
@@ -263,7 +263,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
                   <DurationTimer since={submission.routed_at} variant="full" />
                 </p>
                 <p className="text-xs text-slate-500 mt-1">
-                  Routed {submission.routed_at ? new Date(submission.routed_at).toLocaleDateString("en-GB") : "—"}
+                  Routed {submission.routed_at ? new Date(submission.routed_at).toLocaleDateString("en-GB") : "-"}
                 </p>
               </div>
               <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -277,7 +277,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
                     ? new Date(enrol.status_updated_at).toLocaleDateString("en-GB")
                     : submission.routed_at
                       ? new Date(submission.routed_at).toLocaleDateString("en-GB")
-                      : "—"}
+                      : "-"}
                 </p>
               </div>
             </div>
@@ -286,7 +286,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
             <div className="bg-white border border-slate-200 rounded-xl p-6">
               <h2 className="text-sm font-semibold text-slate-900">Mark outcome</h2>
               <p className="text-xs text-slate-500 mt-1">
-                Click whichever applies. Forward only — once you&apos;ve moved past a step you can&apos;t go back.
+                Click whichever applies. Forward only: once you&apos;ve moved past a step you can&apos;t go back.
                 Every change is logged.
               </p>
               <OutcomeButtons
@@ -413,7 +413,7 @@ function IntakeRow({
     return (
       <Row
         label="Can start on intake"
-        value={onlyId ? `Yes — ${formatIntakeId(onlyId)}` : "Yes"}
+        value={onlyId ? `Yes, ${formatIntakeId(onlyId)}` : "Yes"}
       />
     );
   }
@@ -423,7 +423,7 @@ function IntakeRow({
     <div className="text-sm">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-slate-500">Can start on intake</span>
-        <span className="text-slate-900 font-medium">Yes — {sorted.length} dates</span>
+        <span className="text-slate-900 font-medium">Yes, {sorted.length} dates</span>
       </div>
       <ul className="mt-1 ml-3 space-y-0.5">
         {sorted.map((id) => {
@@ -467,7 +467,7 @@ function FastrackSection({ detail }: { detail: FastrackDetailRow }) {
       {detail.l3_mismatch_flag && (
         <div className="mb-3 bg-rose-100 border border-rose-300 rounded-md p-3 text-sm text-rose-900">
           <strong>L3 mismatch flagged.</strong> The learner's reconfirmed Level 3 status doesn't
-          match what we routed on. Confirm with them before enrolling — this routes via the
+          match what we routed on. Confirm with them before enrolling, or it routes via the
           waitlist if not resolved.
         </div>
       )}
@@ -539,7 +539,7 @@ function Row({ label, value }: { label: string; value: string | null | undefined
   return (
     <div className="flex items-baseline justify-between gap-3 text-sm">
       <span className="text-slate-500">{label}</span>
-      <span className="text-slate-900 text-right">{value || <span className="text-slate-400">—</span>}</span>
+      <span className="text-slate-900 text-right">{value || <span className="text-slate-400">-</span>}</span>
     </div>
   );
 }

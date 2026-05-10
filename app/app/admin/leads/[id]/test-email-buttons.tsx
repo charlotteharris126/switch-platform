@@ -50,7 +50,7 @@ export function TestEmailButtons({ submissionId, onTestRouting }: Props) {
         Re-fires the &ldquo;New enquiry&rdquo; routing email to the demo
         provider&apos;s contact_email so you can verify the format. The
         callback email can be tested by ticking &ldquo;Needs callback&rdquo;
-        in the Notes panel below — that fires its own email.
+        in the Notes panel below, which fires its own email.
       </p>
       <button
         type="button"

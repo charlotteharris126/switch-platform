@@ -1,10 +1,10 @@
-// /provider/leads — list of routed leads for the authenticated provider.
+// /provider/leads. list of routed leads for the authenticated provider.
 //
 // RLS is the trust boundary: the policies from migration 0096 scope
 // leads.submissions and crm.enrolments to the caller's provider_id via
 // the crm.provider_user_provider_id() helper. We query as the
 // authenticated role (cookie-based session) so those policies fire.
-// Service-role (admin) bypasses RLS and would leak cross-provider data —
+// Service-role (admin) bypasses RLS and would leak cross-provider data -
 // never use it on this page.
 //
 // Filtering and search happen client-side on already-loaded rows; the
@@ -124,7 +124,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     };
   });
 
-  // Sidebar derived data — all from already-loaded rows, no extra round-trips.
+  // Sidebar derived data. all from already-loaded rows, no extra round-trips.
   const now = Date.now();
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
   const weekStart = now - 7 * DAY;
@@ -241,5 +241,5 @@ function parseFilter(param: string | undefined): "all" | "callback" | "open" | "
 
 function fullName(s: SubmissionRow): string {
   const parts = [s.first_name, s.last_name].filter(Boolean);
-  return parts.length ? parts.join(" ") : (s.email ?? "—");
+  return parts.length ? parts.join(" ") : (s.email ?? "-");
 }

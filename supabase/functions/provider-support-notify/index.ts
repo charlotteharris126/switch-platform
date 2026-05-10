@@ -90,7 +90,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (!row) return json({ error: "request not found" }, 404);
 
   const categoryLabel = CATEGORY_LABEL[row.category] ?? row.category;
-  const subject = `[Support] ${row.company_name} — ${row.subject}`;
+  const subject = `[Support] ${row.company_name}. ${row.subject}`;
   const portalLink = `https://app.switchleads.co.uk/admin/leads/`;
   const html = composeHtml({
     requestId: row.id,
@@ -161,7 +161,7 @@ function composeHtml(args: {
 <!doctype html>
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; line-height: 1.5; padding: 16px; max-width: 640px;">
   <p style="font-size: 18px; font-weight: 600; margin: 0 0 4px 0;">
-    Support request — ${escapeHtml(args.company)}
+    Support request. ${escapeHtml(args.company)}
   </p>
   <p style="margin: 0 0 16px 0; color: #64748b; font-size: 13px;">
     Request #${args.requestId} · ${submittedAt}
@@ -187,7 +187,7 @@ function composeHtml(args: {
   </div>
 
   <p style="margin: 16px 0 0 0; font-size: 12px; color: #64748b;">
-    Reply directly to this email to respond — it goes back to ${escapeHtml(args.submitterEmail)}.
+    Reply directly to this email to respond. it goes back to ${escapeHtml(args.submitterEmail)}.
   </p>
 </body></html>
   `.trim();
