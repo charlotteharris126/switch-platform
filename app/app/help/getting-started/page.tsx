@@ -31,6 +31,19 @@ export default function GettingStartedPage() {
         </p>
       </header>
 
+      <Callout tone="slate" title="Prefer to do this with us on the line?">
+        While we&apos;re in pilot, we&apos;ll happily walk anyone through
+        first-time setup on a 5-minute call. No tech background needed,
+        no judgement. Email{" "}
+        <a
+          href="mailto:support@switchleads.co.uk"
+          className="font-semibold text-slate-900 underline-offset-2 hover:underline"
+        >
+          support@switchleads.co.uk
+        </a>{" "}
+        with a couple of times that suit and we&apos;ll book it in.
+      </Callout>
+
       <Section step="1" title="The invite email">
         <p>
           Once your account is set up on our side, you&apos;ll get an email
@@ -45,10 +58,18 @@ export default function GettingStartedPage() {
           ) with a subject line that mentions your SwitchLeads account.
         </p>
         <p>
-          The email contains a single sign-in link, valid for seven days. Open
-          it on the computer (or phone) you&apos;ll usually use to manage
-          leads. Modern Macs, Windows 10/11 PCs, iPhones, and Android phones
-          all work.
+          The email contains a single sign-in link, valid for seven days.
+        </p>
+        <p>
+          <span className="font-semibold text-slate-900">
+            Easiest path: open the link on your phone first.
+          </span>{" "}
+          Phones (iPhone or Android) handle this kind of sign-in automatically
+          and the prompt is the same one your banking app uses. Once your
+          phone knows you, signing in on a computer afterwards is a single
+          tap. If a phone isn&apos;t practical, the link works just as well
+          on a Mac or a Windows 10/11 PC; see step 2 for what to expect on
+          each.
         </p>
         <Callout tone="amber" title="Can&apos;t find the email?">
           Check your spam folder first. If it&apos;s not there, email{" "}
@@ -66,59 +87,68 @@ export default function GettingStartedPage() {
         <p>
           We don&apos;t use passwords. Instead, your account is protected by a{" "}
           <span className="font-semibold text-slate-900">passkey</span>, a
-          modern sign-in method built into every recent computer and phone.
+          modern sign-in method built into every recent phone and computer.
+          The standard is the same one Apple, Google, Microsoft, and most UK
+          banking apps use, so if you&apos;ve ever signed into your bank with
+          your face or fingerprint, this will feel familiar.
         </p>
-        <p>
-          When you click the link, your browser will prompt you to register.
-          What you tap to confirm depends on what you&apos;re on:
+        <p className="font-semibold text-slate-900">
+          What you&apos;ll see, by device:
         </p>
         <ul className="list-disc pl-5 space-y-1.5">
           <li>
-            <span className="font-semibold text-slate-900">Mac</span>: Touch ID
-            on a recent MacBook or Magic Keyboard. Older Macs prompt for your
-            macOS account password instead.
-          </li>
-          <li>
-            <span className="font-semibold text-slate-900">Windows 10 or 11</span>
-            : Windows Hello — fingerprint, face, or your Hello PIN. Any of
-            those works.
-          </li>
-          <li>
             <span className="font-semibold text-slate-900">iPhone or iPad</span>
-            : Face ID or Touch ID.
+            : a popup saying &quot;Save a passkey for app.switchleads.co.uk&quot;.
+            Tap Continue, confirm with Face ID or Touch ID. That&apos;s it.
           </li>
           <li>
-            <span className="font-semibold text-slate-900">Android</span>:
+            <span className="font-semibold text-slate-900">Android</span>: a
+            popup asking to save a passkey. Tap Continue, confirm with your
             fingerprint or screen unlock.
           </li>
           <li>
+            <span className="font-semibold text-slate-900">Mac</span>: a Touch
+            ID prompt on a recent MacBook or Magic Keyboard. Older Macs ask
+            for your macOS account password (the one you use to log into the
+            Mac) instead.
+          </li>
+          <li>
+            <span className="font-semibold text-slate-900">Windows 10 or 11</span>
+            : a Windows Hello prompt. Use whichever you have set up:
+            fingerprint, face, or the Hello PIN you use to sign into Windows.
+          </li>
+          <li>
             <span className="font-semibold text-slate-900">USB security key</span>{" "}
-            (e.g. YubiKey): plug it in, tap it.
+            (e.g. YubiKey): plug it in, tap it when the browser asks.
           </li>
         </ul>
         <p>
-          The whole step takes about ten seconds.
+          The whole step takes about ten seconds. There&apos;s nothing to
+          install, nothing to remember, no password to write down. Just tap
+          the prompt that comes up.
         </p>
+        <Callout tone="slate" title="If a popup looks unfamiliar, that&apos;s normal">
+          Modern browsers show their own passkey popup, sometimes with a logo
+          you don&apos;t recognise (Chrome, Edge, 1Password, iCloud Keychain).
+          They all do the same job. Tap the option you&apos;re happy with;
+          you can&apos;t pick a wrong one. If you&apos;re unsure, just close
+          the popup and we&apos;ll set it up with you on a call (see the
+          callout at the top of this page).
+        </Callout>
         <Callout tone="slate" title="No fingerprint reader on your computer?">
-          You&apos;re fine. On Windows, a Hello PIN is enough — set one in
-          Settings &gt; Accounts &gt; Sign-in options if you don&apos;t have
-          one yet. On older Macs, your account password unlocks the passkey
-          via Keychain. If neither applies, the browser will offer a QR code:
-          scan it with your phone, confirm there, and the computer signs you
-          in. Nothing else to install.
+          You&apos;re fine. On Windows, your Hello PIN works on its own; if
+          you don&apos;t have one, Settings &gt; Accounts &gt; Sign-in options
+          walks you through setting one up. On older Macs, your macOS account
+          password handles it. As a last resort, the browser offers a QR
+          code: scan it with your phone, confirm there, and the computer
+          signs you in. Nothing else to install.
         </Callout>
         <p>
           Your passkey lives on the device you registered on. If you want a
           second device (laptop at home, second computer, colleague&apos;s
           phone), it&apos;s a separate registration on that device, and we
-          can send a fresh link for it.
+          can send a fresh link for it. There&apos;s no limit.
         </p>
-        <Callout tone="slate" title="Why passkeys?">
-          They&apos;re harder to phish than passwords, you don&apos;t have to
-          remember anything, and they&apos;re built into modern devices. The
-          standard is the same one used by Apple, Google, Microsoft, and most
-          UK banks.
-        </Callout>
       </Section>
 
       <Section step="3" title="Signing in after that">
@@ -221,12 +251,26 @@ export default function GettingStartedPage() {
         </p>
       </Section>
 
-      <div className="pt-6 border-t border-slate-200">
+      <div className="pt-6 border-t border-slate-200 space-y-3">
         <p className="text-sm text-slate-700">
           Got your invite email? Click the link inside to register your
           passkey. Once you&apos;re signed in, everything else makes sense in
           about five minutes.
         </p>
+        <div className="bg-slate-900 text-white rounded-xl p-4 text-sm">
+          <p className="font-semibold mb-1">Stuck at any step?</p>
+          <p className="text-slate-200">
+            Email{" "}
+            <a
+              href="mailto:support@switchleads.co.uk"
+              className="font-semibold text-white underline-offset-2 hover:underline"
+            >
+              support@switchleads.co.uk
+            </a>{" "}
+            and we&apos;ll book a 5-minute screen-share to walk you through
+            it. Pilot providers get this as standard.
+          </p>
+        </div>
       </div>
     </div>
   );

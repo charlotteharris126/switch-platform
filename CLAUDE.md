@@ -57,6 +57,7 @@ All work in this folder is bound by:
 - Secrets never checked into iCloud-synced files in plaintext.
 - Every new consumer of the DB gets its own scoped Postgres role (`readonly_analytics` / `n8n_writer` / `ads_ingest` / owner).
 - `docs/data-architecture.md` is the design source of truth. Migrations implement what the doc says, not the other way round.
+- **Brevo attribute wiring changes require a same-session backfill plan.** Any change to a function in `_shared/route-lead.ts` that produces a Brevo contact attribute value (e.g. `buildReferralUrl`, `buildFastrackUrl`, the `SW_COURSE_*` resolution path, the enrol-status lookup) leaves existing Brevo contacts holding the old value until they happen to be re-upserted. That stale value gets rendered verbatim in any marketing broadcast that references the attribute. **Before merging the wiring change, queue a Brevo backfill ticket for Sasha** and flag the affected attribute(s) in `platform/docs/changelog.md`. The next marketing broadcast referencing the attribute is gated on that backfill being run (see `switchable/email/CLAUDE.md` Pre-broadcast gate). Bit Wren 2026-05-10 with `SW_REFERRAL_URL`.
 
 ### Key reference files
 

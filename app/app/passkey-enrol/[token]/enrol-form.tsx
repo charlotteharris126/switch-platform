@@ -68,7 +68,8 @@ export function EnrolForm({ token }: Props) {
       )}
       {status === "idle" && (
         <p className="text-xs text-slate-500 text-center">
-          Doesn&apos;t work? The link expires 15 minutes after it was sent. Ask the SwitchLeads team for a fresh one.
+          Doesn&apos;t work? The link expires after seven days. If you&apos;re
+          past that, email support@switchleads.co.uk for a fresh one.
         </p>
       )}
     </div>
