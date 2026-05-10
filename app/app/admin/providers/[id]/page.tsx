@@ -15,6 +15,7 @@ import { formatDate, formatDateTime } from "@/lib/format";
 import { EditProviderForm } from "./edit-provider-form";
 import { ProviderTabs } from "./tabs";
 import { SendPortalInvite } from "./send-portal-invite";
+import { ProviderUsersList, type ProviderUserRow } from "./provider-users-list";
 
 export default async function ProviderDetailPage({
   params,
@@ -38,8 +39,8 @@ export default async function ProviderDetailPage({
   }
   if (!provider) notFound();
 
-  // Parallel: recent leads routed + provider_courses + enrolments
-  const [routingRes, coursesRes, enrolmentsRes] = await Promise.all([
+  // Parallel: recent leads routed + provider_courses + enrolments + provider_users
+  const [routingRes, coursesRes, enrolmentsRes, providerUsersRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("routing_log")
@@ -59,7 +60,15 @@ export default async function ProviderDetailPage({
       .eq("provider_id", providerId)
       .order("created_at", { ascending: false })
       .limit(50),
+    supabase
+      .schema("crm")
+      .from("provider_users")
+      .select("id, contact_email, display_name, role, status, invited_at, enrolled_at, last_login_at")
+      .eq("provider_id", providerId)
+      .order("invited_at", { ascending: true }),
   ]);
+
+  const providerUsers = (providerUsersRes.data ?? []) as ProviderUserRow[];
 
   const routing = (routingRes.data ?? []) as Array<{
     id: number;
@@ -94,16 +103,28 @@ export default async function ProviderDetailPage({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Portal access</CardTitle>
+          <CardTitle className="text-sm">
+            Portal access ({providerUsers.length} {providerUsers.length === 1 ? "user" : "users"})
+          </CardTitle>
         </CardHeader>
-        <CardContent>
-          <SendPortalInvite
-            providerId={provider.provider_id}
-            defaultEmail={provider.contact_email ?? undefined}
-            defaultName={provider.contact_name ?? undefined}
-            isDemo={provider.is_demo === true}
-            portalEnabled={provider.portal_enabled === true}
-          />
+        <CardContent className="space-y-5">
+          <ProviderUsersList providerId={provider.provider_id} users={providerUsers} />
+          <div className="border-t border-[#dde3e6] pt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#5a6a72] mb-3">
+              {providerUsers.length === 0 ? "Invite the first user" : "Add another user"}
+            </p>
+            <SendPortalInvite
+              providerId={provider.provider_id}
+              defaultEmail={
+                providerUsers.length === 0 ? provider.contact_email ?? undefined : ""
+              }
+              defaultName={
+                providerUsers.length === 0 ? provider.contact_name ?? undefined : ""
+              }
+              isDemo={provider.is_demo === true}
+              portalEnabled={provider.portal_enabled === true}
+            />
+          </div>
         </CardContent>
       </Card>
 
