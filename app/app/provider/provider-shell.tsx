@@ -54,18 +54,25 @@ export async function ProviderShell({ active, children }: Props) {
 
 async function LeadsNavLink({ active }: { active: boolean }) {
   const supabase = await createClient();
-  const { count } = await supabase
-    .schema("crm")
-    .from("enrolments")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "open");
+  // Two counts in parallel: status='open' (no contact attempt yet) +
+  // callback_requested_at IS NOT NULL (admin nudge pending). A lead can
+  // be in BOTH groups (open + callback flag) so we OR them server-side.
+  const [openResult, callbackResult] = await Promise.all([
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open"),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id", { count: "exact", head: true })
+      .not("callback_requested_at", "is", null)
+      .neq("status", "open"),
+  ]);
+  const total = (openResult.count ?? 0) + (callbackResult.count ?? 0);
   return (
-    <NavLink
-      href="/provider/leads"
-      label="Leads"
-      active={active}
-      badge={count ?? 0}
-    />
+    <NavLink href="/provider/leads" label="Leads" active={active} badge={total} />
   );
 }
 

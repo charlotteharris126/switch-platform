@@ -24,18 +24,27 @@ interface Props {
   open: number;
   inProgress: number;
   enrolledThisMonth: number;
+  callbackPending: number;
   staleLeads: StaleLead[];
   weekStats: WeekStats;
 }
 
-export function LeadsSidebar({ open, inProgress, enrolledThisMonth, staleLeads, weekStats }: Props) {
+export function LeadsSidebar({ open, inProgress, enrolledThisMonth, callbackPending, staleLeads, weekStats }: Props) {
   return (
     <aside className="space-y-4">
       {/* Snapshot tile */}
       <Card>
         <CardTitle>At a glance</CardTitle>
         <dl className="mt-3 space-y-2">
-          <Stat label="New (no contact)" value={open} tone="rose" emphasis />
+          {callbackPending > 0 && (
+            <Stat label="Needs callback" value={callbackPending} tone="rose" emphasis />
+          )}
+          <Stat
+            label="New (no contact)"
+            value={open}
+            tone={callbackPending > 0 ? "slate" : "rose"}
+            emphasis={callbackPending === 0}
+          />
           <Stat label="In progress" value={inProgress} tone="amber" />
           <Stat label="Enrolled this month" value={enrolledThisMonth} tone="emerald" />
         </dl>

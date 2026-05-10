@@ -32,6 +32,7 @@ interface ProviderRow {
 interface EnrolmentCountRow {
   status: string;
   status_updated_at: string;
+  callback_requested_at: string | null;
 }
 
 interface RecentLeadRow {
@@ -85,7 +86,7 @@ export default async function ProviderHomePage() {
     supabase
       .schema("crm")
       .from("enrolments")
-      .select("status, status_updated_at"),
+      .select("status, status_updated_at, callback_requested_at"),
     supabase
       .schema("leads")
       .from("submissions")
@@ -128,6 +129,7 @@ export default async function ProviderHomePage() {
   const enrolments = (enrolmentsResult.data ?? []) as EnrolmentCountRow[];
   const counts = countByStatus(enrolments);
   const enrolledThisMonth = enrolledThisMonthCount(enrolments);
+  const callbackCount = enrolments.filter((r) => r.callback_requested_at != null).length;
 
   const recentEnrolBySub = new Map<number, RecentEnrolmentRow>();
   for (const e of (recentEnrolsResult.data ?? []) as RecentEnrolmentRow[]) {
@@ -145,6 +147,30 @@ export default async function ProviderHomePage() {
             Welcome back, {pu.display_name ?? pu.contact_email}
           </h1>
         </div>
+
+        {callbackCount > 0 && (
+          <Link
+            href="/provider/leads?status=callback"
+            className="block mb-6 bg-rose-50 border border-rose-200 hover:bg-rose-100 hover:border-rose-300 rounded-xl p-4 cursor-pointer transition-colors"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-rose-900">
+                  {callbackCount === 1
+                    ? "1 lead needs a callback"
+                    : `${callbackCount} leads need a callback`}
+                </p>
+                <p className="text-xs text-rose-700 mt-0.5">
+                  Switchable flagged {callbackCount === 1 ? "this lead" : "these leads"} for follow-up.
+                  Click through to see the note and call them back.
+                </p>
+              </div>
+              <span className="text-rose-700 text-sm font-semibold shrink-0">
+                Review &rarr;
+              </span>
+            </div>
+          </Link>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <Tile label="Open" value={counts.open} href="/provider/leads?status=open" tone="slate" />

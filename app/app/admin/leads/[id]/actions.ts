@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isAdmin } from "@/lib/auth/allowlist";
 
 // Tag (or untag) a submission as an owner test. Writes the same shape as the
 // auto-DQ path in _shared/ingest.ts so a manually-tagged row is indistinguishable
@@ -96,4 +98,184 @@ export async function markEnrolmentOutcome(
   revalidatePath(`/leads/${input.submissionId}`);
 
   return { ok: true, enrolmentId: data as number };
+}
+
+// ============================================================================
+// Admin notes on a routed lead — appears in the provider's notes log.
+// Optional callback flag pins the lead to the top of their list, fires a
+// utility email, and counts in their nav badge / sidebar tile until they
+// mark any new outcome on the lead (which clears the flag automatically).
+// ============================================================================
+
+const ADMIN_NOTE_MAX = 5000;
+
+export interface AddAdminLeadNoteInput {
+  submissionId: number;
+  body: string;
+  /** Raise the callback flag on the lead's enrolment + fire the utility email. */
+  raiseCallback?: boolean;
+}
+
+async function ensureAdminCaller(): Promise<
+  | { ok: true; user: { id: string; email: string }; displayName: string }
+  | { ok: false; error: string }
+> {
+  const supabase = await createClient();
+  const { data: sessionData } = await supabase.auth.getSession();
+  const user = sessionData.session?.user;
+  if (!user || !user.email) return { ok: false, error: "Not signed in" };
+  if (!isAdmin(user.email)) return { ok: false, error: "Admin only" };
+  const displayName = (user.user_metadata?.display_name as string | undefined)
+    ?? user.email.split("@")[0]
+    ?? "Switchable";
+  return { ok: true, user: { id: user.id, email: user.email }, displayName };
+}
+
+export async function addAdminLeadNoteAction(
+  input: AddAdminLeadNoteInput,
+): Promise<{ ok: boolean; noteId?: number; callbackRaised?: boolean; error?: string }> {
+  if (typeof input.body !== "string") return { ok: false, error: "Note must be text." };
+  const body = input.body.trim();
+  if (body.length === 0) return { ok: false, error: "Note can't be empty." };
+  if (body.length > ADMIN_NOTE_MAX) {
+    return { ok: false, error: `Note too long (max ${ADMIN_NOTE_MAX} characters).` };
+  }
+
+  const ctx = await ensureAdminCaller();
+  if (!ctx.ok) return ctx;
+
+  const admin = createAdminClient();
+
+  // Resolve the lead's primary_routed_to to set provider_id on the note row.
+  const { data: sub, error: subErr } = await admin
+    .schema("leads")
+    .from("submissions")
+    .select("id, first_name, last_name, primary_routed_to")
+    .eq("id", input.submissionId)
+    .maybeSingle<{ id: number; first_name: string | null; last_name: string | null; primary_routed_to: string | null }>();
+
+  if (subErr) return { ok: false, error: subErr.message };
+  if (!sub) return { ok: false, error: "Lead not found" };
+  if (!sub.primary_routed_to) {
+    return { ok: false, error: "Lead has no routed provider yet — admin notes only work on routed leads." };
+  }
+
+  const nowIso = new Date().toISOString();
+
+  // INSERT via admin client (admin_all_lead_notes RLS gates by admin.is_admin()
+  // which doesn't apply when running with service_role, so the policy isn't
+  // the gate — but service_role + 0109 functions_all policy + ensureAdminCaller
+  // server-side check is the trust boundary).
+  const { data: inserted, error: insErr } = await admin
+    .schema("crm")
+    .from("lead_notes")
+    .insert({
+      submission_id: input.submissionId,
+      provider_id: sub.primary_routed_to,
+      provider_user_id: null,
+      author_role: "admin",
+      author_user_id: ctx.user.id,
+      author_display_name: ctx.displayName,
+      body,
+    })
+    .select("id")
+    .maybeSingle<{ id: number }>();
+
+  if (insErr) return { ok: false, error: insErr.message };
+  if (!inserted) return { ok: false, error: "Insert returned no row" };
+
+  let callbackRaised = false;
+  if (input.raiseCallback) {
+    const { error: flagErr } = await admin
+      .schema("crm")
+      .from("enrolments")
+      .update({
+        callback_requested_at: nowIso,
+        callback_requested_by: ctx.user.id,
+        updated_at: nowIso,
+      })
+      .eq("submission_id", input.submissionId);
+    if (flagErr) return { ok: false, error: `Note saved but flag-raise failed: ${flagErr.message}` };
+    callbackRaised = true;
+
+    // Fire the utility email (dormant unless template id is set).
+    void fireProviderCallbackEmail({
+      providerId: sub.primary_routed_to,
+      submissionId: input.submissionId,
+      learnerFirstName: sub.first_name,
+    }).catch(() => {
+      // best-effort; failures land in leads.dead_letter via the helper itself.
+    });
+  }
+
+  revalidatePath(`/admin/leads/${input.submissionId}`);
+  revalidatePath(`/provider/leads/${input.submissionId}`);
+  revalidatePath("/provider/leads");
+  revalidatePath("/provider");
+
+  return { ok: true, noteId: inserted.id, callbackRaised };
+}
+
+export async function clearCallbackFlagAction(args: {
+  submissionId: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  const ctx = await ensureAdminCaller();
+  if (!ctx.ok) return ctx;
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .schema("crm")
+    .from("enrolments")
+    .update({
+      callback_requested_at: null,
+      callback_requested_by: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("submission_id", args.submissionId);
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/admin/leads/${args.submissionId}`);
+  revalidatePath(`/provider/leads/${args.submissionId}`);
+  revalidatePath("/provider/leads");
+  revalidatePath("/provider");
+  return { ok: true };
+}
+
+// Best-effort utility email to the provider when a callback flag is raised.
+// Dormant until BREVO_TEMPLATE_PROVIDER_CALLBACK env var is set (numeric
+// template id). Mirrors the existing dormant-template pattern from email-
+// stalled-cron / email-u4-cron / email-sunset-cron.
+async function fireProviderCallbackEmail(args: {
+  providerId: string;
+  submissionId: number;
+  learnerFirstName: string | null;
+}): Promise<void> {
+  const templateId = process.env.BREVO_TEMPLATE_PROVIDER_CALLBACK;
+  if (!templateId) return; // Dormant until configured.
+
+  const admin = createAdminClient();
+  const { data: providerUsers } = await admin
+    .schema("crm")
+    .from("provider_users")
+    .select("contact_email, display_name")
+    .eq("provider_id", args.providerId)
+    .eq("status", "active");
+
+  if (!providerUsers || providerUsers.length === 0) return;
+
+  // Lazy import to keep the action's bundle slim and avoid side effects on
+  // every Next.js compile.
+  const { sendTransactional } = await import("@/lib/email/send-transactional");
+  for (const pu of providerUsers as Array<{ contact_email: string; display_name: string | null }>) {
+    await sendTransactional({
+      to: { email: pu.contact_email, name: pu.display_name ?? pu.contact_email },
+      templateId: Number(templateId),
+      params: {
+        learner_first_name: args.learnerFirstName ?? "your lead",
+        submission_id: args.submissionId,
+        portal_url: `https://app.switchleads.co.uk/leads/${args.submissionId}`,
+      },
+    });
+  }
 }

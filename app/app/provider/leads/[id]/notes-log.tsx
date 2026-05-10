@@ -10,6 +10,7 @@ export interface NoteRow {
   body: string;
   created_at: string;
   author: string;
+  author_role: "provider" | "admin" | "system";
 }
 
 interface Props {
@@ -85,15 +86,30 @@ export function NotesLog({ submissionId, notes, onAdd }: Props) {
           </p>
         ) : (
           <ul className="space-y-3">
-            {notes.map((n) => (
-              <li key={n.id} className="bg-amber-50 border border-amber-200 rounded-md p-3">
-                <div className="flex items-baseline justify-between gap-2 text-xs text-amber-800 mb-1">
-                  <span className="font-semibold">{n.author}</span>
-                  <span className="text-amber-600 tabular-nums">{formatWhen(n.created_at)}</span>
-                </div>
-                <p className="text-sm text-amber-900 whitespace-pre-wrap break-words">{n.body}</p>
-              </li>
-            ))}
+            {notes.map((n) => {
+              const isAdmin = n.author_role === "admin";
+              const palette = isAdmin
+                ? "bg-blue-50 border-blue-200 text-blue-900"
+                : "bg-amber-50 border-amber-200 text-amber-900";
+              const headerPalette = isAdmin ? "text-blue-800" : "text-amber-800";
+              const stampPalette = isAdmin ? "text-blue-600" : "text-amber-600";
+              return (
+                <li key={n.id} className={`border rounded-md p-3 ${palette}`}>
+                  <div className={`flex items-baseline justify-between gap-2 text-xs ${headerPalette} mb-1`}>
+                    <span className="font-semibold flex items-center gap-1.5">
+                      {n.author}
+                      {isAdmin && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-blue-100 text-blue-800 border border-blue-300">
+                          Switchable
+                        </span>
+                      )}
+                    </span>
+                    <span className={`tabular-nums ${stampPalette}`}>{formatWhen(n.created_at)}</span>
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap break-words">{n.body}</p>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

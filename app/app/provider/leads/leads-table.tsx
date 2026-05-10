@@ -26,12 +26,14 @@ export interface LeadRow {
   routed_at: string | null;
   status: LeadStatus;
   has_fastrack: boolean;
+  callback_pending: boolean;
 }
 
-type Filter = "all" | "open" | "in_progress" | "settled" | LeadStatus;
+type Filter = "all" | "callback" | "open" | "in_progress" | "settled" | LeadStatus;
 
 const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
+  { value: "callback", label: "Needs callback" },
   { value: "open", label: "Open" },
   { value: "in_progress", label: "In progress" },
   { value: "settled", label: "Settled" },
@@ -58,12 +60,14 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
     let open = 0;
     let inProgress = 0;
     let settled = 0;
+    let callback = 0;
     for (const r of rows) {
+      if (r.callback_pending) callback += 1;
       if (r.status === "open") open += 1;
       if (IN_PROGRESS.has(r.status)) inProgress += 1;
       if (SETTLED.has(r.status)) settled += 1;
     }
-    return { all: rows.length, open, in_progress: inProgress, settled };
+    return { all: rows.length, callback, open, in_progress: inProgress, settled };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -71,6 +75,8 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
     const subset = rows.filter((r) => {
       if (filter === "all") {
         // pass
+      } else if (filter === "callback") {
+        if (!r.callback_pending) return false;
       } else if (filter === "open") {
         if (r.status !== "open") return false;
       } else if (filter === "in_progress") {
@@ -86,9 +92,11 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
       }
       return true;
     });
-    // Pin fastrack-submitted leads to the top, otherwise preserve the
-    // routed_at-desc order from the server query.
+    // Pin order: callback flag → fastrack → server's routed_at desc.
     return [...subset].sort((a, b) => {
+      const aCb = a.callback_pending ? 1 : 0;
+      const bCb = b.callback_pending ? 1 : 0;
+      if (aCb !== bCb) return bCb - aCb;
       const aFast = a.has_fastrack ? 1 : 0;
       const bFast = b.has_fastrack ? 1 : 0;
       if (aFast !== bFast) return bFast - aFast;
@@ -140,13 +148,27 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
               {filtered.map((r) => (
                 <tr
                   key={r.id}
-                  className={`hover:bg-slate-50 transition-colors ${r.has_fastrack ? "bg-violet-50/40" : ""}`}
+                  className={`hover:bg-slate-50 transition-colors ${
+                    r.callback_pending
+                      ? "bg-rose-50/50"
+                      : r.has_fastrack
+                        ? "bg-violet-50/40"
+                        : ""
+                  }`}
                 >
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2 flex-wrap">
+                      {r.callback_pending && (
+                        <span className="inline-block w-2 h-2 rounded-full bg-rose-500" aria-label="Callback requested" />
+                      )}
                       <Link href={`/provider/leads/${r.id}`} className="text-slate-900 font-medium hover:underline cursor-pointer">
                         {r.name}
                       </Link>
+                      {r.callback_pending && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-rose-100 text-rose-800 border border-rose-200">
+                          Callback
+                        </span>
+                      )}
                       {r.has_fastrack && (
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-800 border border-violet-200">
                           Fastrack

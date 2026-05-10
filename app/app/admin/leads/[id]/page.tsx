@@ -15,6 +15,8 @@ import { formatDateTime } from "@/lib/format";
 import { EnrolmentOutcomeForm } from "./enrolment-outcome-form";
 import { OwnerTestToggle } from "./owner-test-toggle";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
+import { AdminNotesPanel } from "./admin-notes-panel";
+import { addAdminLeadNoteAction, clearCallbackFlagAction } from "./actions";
 
 export default async function LeadDetailPage({
   params,
@@ -92,7 +94,7 @@ export default async function LeadDetailPage({
     supabase
       .schema("crm")
       .from("enrolments")
-      .select("id, status, notes, status_updated_at, provider_id, lost_reason, disputed_at, disputed_reason")
+      .select("id, status, notes, status_updated_at, provider_id, lost_reason, disputed_at, disputed_reason, callback_requested_at")
       .eq("submission_id", leadId)
       .order("status_updated_at", { ascending: false })
       .limit(1)
@@ -126,8 +128,31 @@ export default async function LeadDetailPage({
         lost_reason: string | null;
         disputed_at: string | null;
         disputed_reason: string | null;
+        callback_requested_at: string | null;
       }
     | null;
+
+  // Notes log — provider + admin notes inline. Newest first.
+  const { data: leadNotesRaw } = await supabase
+    .schema("crm")
+    .from("lead_notes")
+    .select("id, body, created_at, author_role, author_display_name")
+    .eq("submission_id", leadId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  const leadNotes = ((leadNotesRaw ?? []) as Array<{
+    id: number;
+    body: string;
+    created_at: string;
+    author_role: "provider" | "admin" | "system";
+    author_display_name: string | null;
+  }>).map((n) => ({
+    id: n.id,
+    body: n.body,
+    created_at: n.created_at,
+    author: n.author_display_name ?? "Someone",
+    author_role: n.author_role,
+  }));
 
   const routing = (routingRes.data ?? []) as Array<{
     id: number;
@@ -396,6 +421,18 @@ export default async function LeadDetailPage({
           currentDisputedAt={enrolment?.disputed_at ?? null}
           currentDisputedReason={enrolment?.disputed_reason ?? null}
           isRouted={Boolean(lead.primary_routed_to)}
+        />
+      )}
+
+      {/* Admin notes panel — visible for all leads. Note compose disabled for unrouted leads. */}
+      {!lead.is_dq && (
+        <AdminNotesPanel
+          submissionId={lead.id}
+          notes={leadNotes}
+          callbackPendingAt={enrolment?.callback_requested_at ?? null}
+          isRouted={Boolean(lead.primary_routed_to)}
+          onAdd={addAdminLeadNoteAction}
+          onClearCallback={clearCallbackFlagAction}
         />
       )}
 

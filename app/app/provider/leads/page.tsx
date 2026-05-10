@@ -54,6 +54,7 @@ interface EnrolmentRow {
   status: string;
   lost_reason: string | null;
   status_updated_at: string;
+  callback_requested_at: string | null;
 }
 
 interface Props {
@@ -99,7 +100,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     ? await supabase
         .schema("crm")
         .from("enrolments")
-        .select("submission_id,status,lost_reason,status_updated_at")
+        .select("submission_id,status,lost_reason,status_updated_at,callback_requested_at")
         .in("submission_id", ids)
     : { data: [] as EnrolmentRow[] };
 
@@ -119,6 +120,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       routed_at: s.routed_at,
       status: (enrol?.status ?? "open") as LeadStatus,
       has_fastrack: fastrackParentIds.has(s.id),
+      callback_pending: enrol?.callback_requested_at != null,
     };
   });
 
@@ -131,6 +133,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   let openCount = 0;
   let inProgressCount = 0;
   let enrolledThisMonth = 0;
+  let callbackPendingCount = 0;
   let weekContacted = 0;
   let weekEnrolled = 0;
   let weekLost = 0;
@@ -138,6 +141,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   for (const r of rows) {
     if (r.status === "open") openCount += 1;
     if (IN_PROGRESS_STATUSES.has(r.status)) inProgressCount += 1;
+    if (r.callback_pending) callbackPendingCount += 1;
     const enrol = enrolBySub.get(r.id);
     if (enrol) {
       const t = new Date(enrol.status_updated_at).getTime();
@@ -188,6 +192,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
                 open={openCount}
                 inProgress={inProgressCount}
                 enrolledThisMonth={enrolledThisMonth}
+                callbackPending={callbackPendingCount}
                 staleLeads={staleLeads}
                 weekStats={{
                   contacted: weekContacted,
@@ -204,11 +209,12 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   );
 }
 
-function parseFilter(param: string | undefined): "all" | "open" | "in_progress" | "settled" | LeadStatus {
+function parseFilter(param: string | undefined): "all" | "callback" | "open" | "in_progress" | "settled" | LeadStatus {
   if (!param) return "all";
   const normalised = param.toLowerCase();
   if (
     normalised === "all" ||
+    normalised === "callback" ||
     normalised === "open" ||
     normalised === "in_progress" ||
     normalised === "settled"

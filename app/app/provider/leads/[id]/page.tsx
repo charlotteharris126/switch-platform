@@ -13,7 +13,8 @@ import { ProviderShell } from "../../provider-shell";
 import { DurationTimer } from "../../duration-timer";
 import { OutcomeButtons } from "./outcome-buttons";
 import { NotesLog, type NoteRow } from "./notes-log";
-import { markOutcomeAction, addLeadNoteAction } from "./actions";
+import { MarkAdminNotesRead } from "./mark-admin-notes-read";
+import { markOutcomeAction, addLeadNoteAction, markAdminNotesReadAction } from "./actions";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
 import { formatIntakeId } from "@/lib/intake-format";
 import {
@@ -59,19 +60,17 @@ interface EnrolmentRow {
   status: string;
   lost_reason: string | null;
   status_updated_at: string;
+  callback_requested_at: string | null;
 }
 
-interface NoteAuthor {
-  display_name: string | null;
-  contact_email: string;
-}
-
-interface NoteJoinRow {
+interface NoteRowRaw {
   id: number;
   body: string;
   created_at: string;
-  // supabase-js types embedded relations as array even for many-to-one
-  provider_users: NoteAuthor | NoteAuthor[] | null;
+  author_role: "provider" | "admin" | "system";
+  author_display_name: string | null;
+  provider_user_id: number | null;
+  read_by_provider_at: string | null;
 }
 
 interface SiblingRow {
@@ -132,13 +131,13 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     supabase
       .schema("crm")
       .from("enrolments")
-      .select("id,status,lost_reason,status_updated_at")
+      .select("id,status,lost_reason,status_updated_at,callback_requested_at")
       .eq("submission_id", submissionId)
       .maybeSingle<EnrolmentRow>(),
     supabase
       .schema("crm")
       .from("lead_notes")
-      .select("id, body, created_at, provider_users:provider_user_id(display_name, contact_email)")
+      .select("id, body, created_at, author_role, author_display_name, provider_user_id, read_by_provider_at")
       .eq("submission_id", submissionId)
       .order("created_at", { ascending: false })
       .limit(200),
@@ -193,18 +192,18 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
   const prevId = idx > 0 ? siblings[idx - 1].id : null;
   const nextId = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1].id : null;
 
-  const noteRowsRaw = (notesResult.data ?? []) as unknown as NoteJoinRow[];
-  const notes: NoteRow[] = noteRowsRaw.map((n) => {
-    const author = Array.isArray(n.provider_users)
-      ? n.provider_users[0] ?? null
-      : n.provider_users;
-    return {
-      id: n.id,
-      body: n.body,
-      created_at: n.created_at,
-      author: author?.display_name ?? author?.contact_email ?? "Someone",
-    };
-  });
+  const noteRowsRaw = (notesResult.data ?? []) as unknown as NoteRowRaw[];
+  const notes: NoteRow[] = noteRowsRaw.map((n) => ({
+    id: n.id,
+    body: n.body,
+    created_at: n.created_at,
+    author: n.author_display_name ?? "Someone",
+    author_role: n.author_role,
+  }));
+  const hasUnreadAdminNote = noteRowsRaw.some(
+    (n) => n.author_role === "admin" && n.read_by_provider_at == null,
+  );
+  const callbackPending = enrol?.callback_requested_at != null;
 
   return (
     <ProviderShell active="leads">
@@ -233,6 +232,11 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
               submission.email ||
               `Lead ${submission.id}`}
           </h1>
+          {callbackPending && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200">
+              Callback requested
+            </span>
+          )}
           {hasFastrack && (
             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-violet-100 text-violet-800 border border-violet-200">
               Fastrack submitted
@@ -242,6 +246,11 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
         <p className="text-sm text-slate-500 mt-1">
           Current status: <strong className="text-slate-900">{STATUS_LABEL[status] ?? status}</strong>
         </p>
+
+        {/* Auto-mark unread admin notes as read on view */}
+        {hasUnreadAdminNote && (
+          <MarkAdminNotesRead submissionId={submission.id} onMark={markAdminNotesReadAction} />
+        )}
 
         {/* Two-column main */}
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">

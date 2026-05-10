@@ -98,6 +98,10 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
   }
 
   const nowIso = new Date().toISOString();
+  // Marking any new outcome clears the admin callback flag — "the
+  // provider acted, the nudge is resolved". The flag's audit trail
+  // lives in lead_notes (the original admin note that raised it
+  // stays in history regardless).
   const { error: updateError } = await supabase
     .schema("crm")
     .from("enrolments")
@@ -106,6 +110,8 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
       lost_reason: newLostReason,
       status_updated_at: nowIso,
       updated_at: nowIso,
+      callback_requested_at: null,
+      callback_requested_by: null,
     })
     .eq("id", existingRow.id);
 
@@ -157,10 +163,10 @@ export async function addLeadNoteAction(args: {
   const { data: pu, error: puErr } = await admin
     .schema("crm")
     .from("provider_users")
-    .select("id, provider_id")
+    .select("id, provider_id, display_name, contact_email")
     .eq("auth_user_id", user.id)
     .eq("status", "active")
-    .maybeSingle<{ id: number; provider_id: string }>();
+    .maybeSingle<{ id: number; provider_id: string; display_name: string | null; contact_email: string }>();
 
   if (puErr) return { ok: false, error: puErr.message };
   if (!pu) return { ok: false, error: "Active provider user not found" };
@@ -175,6 +181,9 @@ export async function addLeadNoteAction(args: {
       provider_id: pu.provider_id,
       provider_user_id: pu.id,
       body,
+      author_role: "provider",
+      author_user_id: user.id,
+      author_display_name: pu.display_name ?? pu.contact_email,
     })
     .select("id")
     .maybeSingle<{ id: number }>();
@@ -196,5 +205,27 @@ export async function addLeadNoteAction(args: {
   }
 
   revalidatePath(`/provider/leads/${args.submissionId}`);
+  return { ok: true };
+}
+
+// Called when the provider opens a lead detail page — marks any unread
+// admin notes on that lead as read. Idempotent: a no-op if there's
+// nothing unread. RLS scopes the UPDATE to the provider's own leads.
+export async function markAdminNotesReadAction(args: {
+  submissionId: number;
+}): Promise<Result> {
+  const supabase = await createClient();
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session?.user) return { ok: false, error: "Not signed in" };
+
+  const { error } = await supabase
+    .schema("crm")
+    .from("lead_notes")
+    .update({ read_by_provider_at: new Date().toISOString() })
+    .eq("submission_id", args.submissionId)
+    .eq("author_role", "admin")
+    .is("read_by_provider_at", null);
+
+  if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
