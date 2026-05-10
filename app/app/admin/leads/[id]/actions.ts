@@ -198,13 +198,13 @@ export async function addAdminLeadNoteAction(
     if (flagErr) return { ok: false, error: `Note saved but flag-raise failed: ${flagErr.message}` };
     callbackRaised = true;
 
-    // Fire the utility email (dormant unless template id is set).
+    // Fire the utility email — best-effort, no-ops if Brevo env missing.
     void fireProviderCallbackEmail({
       providerId: sub.primary_routed_to,
       submissionId: input.submissionId,
-      learnerFirstName: sub.first_name,
+      noteBody: body,
     }).catch(() => {
-      // best-effort; failures land in leads.dead_letter via the helper itself.
+      // swallowed; helper logs internally.
     });
   }
 
@@ -243,17 +243,16 @@ export async function clearCallbackFlagAction(args: {
 }
 
 // Best-effort utility email to the provider when a callback flag is raised.
-// Dormant until BREVO_TEMPLATE_PROVIDER_CALLBACK env var is set (numeric
-// template id). Mirrors the existing dormant-template pattern from email-
-// stalled-cron / email-u4-cron / email-sunset-cron.
+// Code-composed (no Brevo template needed), sent from "Switchable" so it
+// reads as account-based rather than personal mail. PII-free: lead id +
+// portal deep link only — full note text stays inside the portal.
+//
+// Best-effort: BREVO_API_KEY missing → silent no-op. Failures log + return.
 async function fireProviderCallbackEmail(args: {
   providerId: string;
   submissionId: number;
-  learnerFirstName: string | null;
+  noteBody: string;
 }): Promise<void> {
-  const templateId = process.env.BREVO_TEMPLATE_PROVIDER_CALLBACK;
-  if (!templateId) return; // Dormant until configured.
-
   const admin = createAdminClient();
   const { data: providerUsers } = await admin
     .schema("crm")
@@ -264,18 +263,53 @@ async function fireProviderCallbackEmail(args: {
 
   if (!providerUsers || providerUsers.length === 0) return;
 
-  // Lazy import to keep the action's bundle slim and avoid side effects on
-  // every Next.js compile.
+  const portalUrl = `https://app.switchleads.co.uk/leads/${args.submissionId}`;
+  const subject = `Lead #${args.submissionId} update from Switchable`;
+
+  // HTML-escape the note body — admin-typed, but treat as untrusted on the
+  // way out (defence-in-depth against future surfaces that render this).
+  const escapedNote = escapeHtml(args.noteBody).replace(/\n/g, "<br>");
+
+  // Inline-styled HTML so it renders consistently across mail clients.
+  const html = `
+<!doctype html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; line-height: 1.5; padding: 16px; max-width: 560px;">
+  <p>Hi,</p>
+  <p>Lead <strong>#${args.submissionId}</strong> has been in touch.</p>
+  <div style="margin: 16px 0; padding: 14px 16px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px;">
+    <p style="margin: 0 0 4px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #92400e;">Note from Switchable</p>
+    <p style="margin: 0; color: #78350f; white-space: pre-wrap;">${escapedNote}</p>
+  </div>
+  <p style="margin: 24px 0;">
+    <a href="${portalUrl}" style="display: inline-block; padding: 10px 18px; background: #0f172a; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">
+      Open the lead in your portal
+    </a>
+  </p>
+  <p>Open it to follow up.</p>
+  <p style="margin-top: 32px; color: #64748b;">Switchable</p>
+</body></html>
+  `.trim();
+
+  // Lazy import to keep the action's bundle slim.
   const { sendTransactional } = await import("@/lib/email/send-transactional");
   for (const pu of providerUsers as Array<{ contact_email: string; display_name: string | null }>) {
     await sendTransactional({
       to: { email: pu.contact_email, name: pu.display_name ?? pu.contact_email },
-      templateId: Number(templateId),
-      params: {
-        learner_first_name: args.learnerFirstName ?? "your lead",
-        submission_id: args.submissionId,
-        portal_url: `https://app.switchleads.co.uk/leads/${args.submissionId}`,
+      sender: {
+        email: process.env.BREVO_SENDER_EMAIL ?? "hello@switchable.org.uk",
+        name: "Switchable",
       },
+      subject,
+      htmlContent: html,
     });
   }
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
