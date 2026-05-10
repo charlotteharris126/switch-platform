@@ -190,18 +190,20 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
     <div>
       {/* Action-needed pill — elevated above the standard filter row.
           Dark red when there's anything waiting, emerald when all clear.
-          Compact pill (not full-width) so it sits as a callout, not a banner. */}
-      <div className="mb-3">
+          Compact pill (not full-width) with a clear active vs inactive
+          distinction (ring + darker fill when selected as the filter). */}
+      <div className="mb-3 flex items-center gap-2">
         <button
           type="button"
-          onClick={() => setFilter("action")}
+          onClick={() => setFilter(filter === "action" ? "all" : "action")}
+          aria-pressed={filter === "action"}
           className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border transition-colors cursor-pointer text-sm font-semibold ${
             counts.action > 0
               ? filter === "action"
-                ? "bg-rose-800 border-rose-800 text-white"
+                ? "bg-rose-900 border-rose-900 text-white ring-2 ring-rose-300 ring-offset-2"
                 : "bg-rose-700 border-rose-700 hover:bg-rose-800 hover:border-rose-800 text-white"
               : filter === "action"
-                ? "bg-emerald-700 border-emerald-700 text-white"
+                ? "bg-emerald-800 border-emerald-800 text-white ring-2 ring-emerald-300 ring-offset-2"
                 : "bg-emerald-50 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 text-emerald-800"
           }`}
         >
@@ -210,6 +212,11 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
             {counts.action > 0 ? counts.action : "✓"}
           </span>
         </button>
+        {filter === "action" && (
+          <span className="text-xs text-slate-500">
+            Filtered. Click again or pick another filter to clear.
+          </span>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
