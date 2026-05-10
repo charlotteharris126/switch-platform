@@ -490,3 +490,6 @@ verify_jwt = false
 
 [functions.provider-support-notify]
 verify_jwt = false
+
+[functions.backfill-referral-fastrack-urls]
+verify_jwt = false
