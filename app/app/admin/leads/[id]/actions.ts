@@ -242,74 +242,55 @@ export async function clearCallbackFlagAction(args: {
   return { ok: true };
 }
 
-// Best-effort utility email to the provider when a callback flag is raised.
-// Code-composed (no Brevo template needed), sent from "Switchable" so it
-// reads as account-based rather than personal mail. PII-free: lead id +
-// portal deep link only — full note text stays inside the portal.
+// Best-effort utility email when a callback flag is raised.
 //
-// Best-effort: BREVO_API_KEY missing → silent no-op. Failures log + return.
+// Architecture: Brevo creds (BREVO_API_KEY, BREVO_SENDER_EMAIL_SWITCHABLE)
+// already live in Edge Function env, so we POST to the admin-notify-callback
+// Edge Function which composes + sends. Avoids duplicating Brevo creds to
+// Netlify env. Auth via x-audit-key header read from vault using the
+// service-role client.
 async function fireProviderCallbackEmail(args: {
   providerId: string;
   submissionId: number;
   noteBody: string;
 }): Promise<void> {
-  const admin = createAdminClient();
-  const { data: providerUsers } = await admin
-    .schema("crm")
-    .from("provider_users")
-    .select("contact_email, display_name")
-    .eq("provider_id", args.providerId)
-    .eq("status", "active");
-
-  if (!providerUsers || providerUsers.length === 0) return;
-
-  const portalUrl = `https://app.switchleads.co.uk/leads/${args.submissionId}`;
-  const subject = `Lead #${args.submissionId} update from Switchable`;
-
-  // HTML-escape the note body — admin-typed, but treat as untrusted on the
-  // way out (defence-in-depth against future surfaces that render this).
-  const escapedNote = escapeHtml(args.noteBody).replace(/\n/g, "<br>");
-
-  // Inline-styled HTML so it renders consistently across mail clients.
-  const html = `
-<!doctype html>
-<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; line-height: 1.5; padding: 16px; max-width: 560px;">
-  <p>Hi,</p>
-  <p>Lead <strong>#${args.submissionId}</strong> has been in touch.</p>
-  <div style="margin: 16px 0; padding: 14px 16px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px;">
-    <p style="margin: 0 0 4px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #92400e;">Note from Switchable</p>
-    <p style="margin: 0; color: #78350f; white-space: pre-wrap;">${escapedNote}</p>
-  </div>
-  <p style="margin: 24px 0;">
-    <a href="${portalUrl}" style="display: inline-block; padding: 10px 18px; background: #0f172a; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">
-      Open the lead in your portal
-    </a>
-  </p>
-  <p>Open it to follow up.</p>
-  <p style="margin-top: 32px; color: #64748b;">Switchable</p>
-</body></html>
-  `.trim();
-
-  // Lazy import to keep the action's bundle slim.
-  const { sendTransactional } = await import("@/lib/email/send-transactional");
-  for (const pu of providerUsers as Array<{ contact_email: string; display_name: string | null }>) {
-    await sendTransactional({
-      to: { email: pu.contact_email, name: pu.display_name ?? pu.contact_email },
-      sender: {
-        email: process.env.BREVO_SENDER_EMAIL ?? "hello@switchable.org.uk",
-        name: "Switchable",
-      },
-      subject,
-      htmlContent: html,
-    });
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) {
+    console.warn("[fireProviderCallbackEmail] NEXT_PUBLIC_SUPABASE_URL missing");
+    return;
   }
-}
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  const admin = createAdminClient();
+  const { data: secret, error: secretErr } = await admin.rpc("get_shared_secret", {
+    p_name: "AUDIT_SHARED_SECRET",
+  });
+  if (secretErr || !secret) {
+    console.error(
+      `[fireProviderCallbackEmail] vault read failed: ${secretErr?.message ?? "no row"}`,
+    );
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/admin-notify-callback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-audit-key": String(secret),
+      },
+      body: JSON.stringify({
+        provider_id: args.providerId,
+        submission_id: args.submissionId,
+        note_body: args.noteBody,
+      }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      console.error(
+        `[fireProviderCallbackEmail] Edge Function ${resp.status}: ${text.slice(0, 200)}`,
+      );
+    }
+  } catch (err) {
+    console.error(`[fireProviderCallbackEmail] fetch failed: ${String(err)}`);
+  }
 }
