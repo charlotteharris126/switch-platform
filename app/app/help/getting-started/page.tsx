@@ -45,10 +45,10 @@ export default function GettingStartedPage() {
           ) with a subject line that mentions your SwitchLeads account.
         </p>
         <p>
-          The email contains a single sign-in link, valid for seven days. Click
-          it on the device you&apos;ll usually use to manage leads, ideally a
-          phone or laptop with biometric sign-in (Touch ID, Face ID, or Windows
-          Hello).
+          The email contains a single sign-in link, valid for seven days. Open
+          it on the computer (or phone) you&apos;ll usually use to manage
+          leads. Modern Macs, Windows 10/11 PCs, iPhones, and Android phones
+          all work.
         </p>
         <Callout tone="amber" title="Can&apos;t find the email?">
           Check your spam folder first. If it&apos;s not there, email{" "}
@@ -65,19 +65,53 @@ export default function GettingStartedPage() {
       <Section step="2" title="Setting up a passkey">
         <p>
           We don&apos;t use passwords. Instead, your account is protected by a{" "}
-          <span className="font-semibold text-slate-900">passkey</span>, the
-          same kind of biometric sign-in your phone or banking app uses.
+          <span className="font-semibold text-slate-900">passkey</span>, a
+          modern sign-in method built into every recent computer and phone.
         </p>
         <p>
-          When you click the link, your device will prompt you to register.
-          Confirm with your fingerprint, face, or device PIN. That&apos;s it.
+          When you click the link, your browser will prompt you to register.
+          What you tap to confirm depends on what you&apos;re on:
+        </p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li>
+            <span className="font-semibold text-slate-900">Mac</span>: Touch ID
+            on a recent MacBook or Magic Keyboard. Older Macs prompt for your
+            macOS account password instead.
+          </li>
+          <li>
+            <span className="font-semibold text-slate-900">Windows 10 or 11</span>
+            : Windows Hello — fingerprint, face, or your Hello PIN. Any of
+            those works.
+          </li>
+          <li>
+            <span className="font-semibold text-slate-900">iPhone or iPad</span>
+            : Face ID or Touch ID.
+          </li>
+          <li>
+            <span className="font-semibold text-slate-900">Android</span>:
+            fingerprint or screen unlock.
+          </li>
+          <li>
+            <span className="font-semibold text-slate-900">USB security key</span>{" "}
+            (e.g. YubiKey): plug it in, tap it.
+          </li>
+        </ul>
+        <p>
           The whole step takes about ten seconds.
         </p>
+        <Callout tone="slate" title="No fingerprint reader on your computer?">
+          You&apos;re fine. On Windows, a Hello PIN is enough — set one in
+          Settings &gt; Accounts &gt; Sign-in options if you don&apos;t have
+          one yet. On older Macs, your account password unlocks the passkey
+          via Keychain. If neither applies, the browser will offer a QR code:
+          scan it with your phone, confirm there, and the computer signs you
+          in. Nothing else to install.
+        </Callout>
         <p>
-          Your passkey lives on the device you registered on. If you want to
-          add another device later (a second laptop, a colleague&apos;s phone),
-          it&apos;s a separate ceremony on that device, and we can send a fresh
-          link for it.
+          Your passkey lives on the device you registered on. If you want a
+          second device (laptop at home, second computer, colleague&apos;s
+          phone), it&apos;s a separate registration on that device, and we
+          can send a fresh link for it.
         </p>
         <Callout tone="slate" title="Why passkeys?">
           They&apos;re harder to phish than passwords, you don&apos;t have to
@@ -89,9 +123,9 @@ export default function GettingStartedPage() {
 
       <Section step="3" title="Signing in after that">
         <p>
-          Next time you visit the portal, your device recognises the passkey
-          and signs you in with a single biometric tap. No emailed links, no
-          passwords.
+          Next time you visit the portal, your computer or phone recognises
+          the passkey and signs you in with a single tap or click. No emailed
+          links, no passwords.
         </p>
         <p>
           The portal lives at{" "}
