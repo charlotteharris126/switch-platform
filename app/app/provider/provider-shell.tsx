@@ -1,9 +1,12 @@
 // Layout shell shared across /provider/* pages: dark top nav with the
 // SwitchLeads logo + Home / Leads / Account / Sign out.
 //
-// Server Component. The sign-out form uses the same Server Action pattern
-// as /provider/page.tsx — useFormStatus on the button gives a pending state.
+// Server Component. The "new leads" count badge on the Leads link is
+// streamed via Suspense so its DB query doesn't block the page response.
+// The shell paints immediately, the badge fills in when the count
+// resolves.
 
+import { Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { redirect } from "next/navigation";
@@ -18,17 +21,6 @@ interface Props {
 }
 
 export async function ProviderShell({ active, children }: Props) {
-  // Count of "new" leads — never had a contact attempt yet (status='open').
-  // RLS-scoped to the caller's provider. Cheap COUNT, head:true so no rows
-  // come back over the wire. Auth-checked indirectly: if no session,
-  // count is null and we render the Leads link without a badge.
-  const supabase = await createClient();
-  const { count: openCount } = await supabase
-    .schema("crm")
-    .from("enrolments")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "open");
-
   return (
     <div className="min-h-screen bg-slate-50">
       <nav className="bg-slate-900 border-b border-slate-800">
@@ -45,12 +37,9 @@ export async function ProviderShell({ active, children }: Props) {
           </Link>
           <div className="flex items-center gap-1 text-sm">
             <NavLink href="/provider" label="Home" active={active === "home"} />
-            <NavLink
-              href="/provider/leads"
-              label="Leads"
-              active={active === "leads"}
-              badge={openCount ?? 0}
-            />
+            <Suspense fallback={<NavLink href="/provider/leads" label="Leads" active={active === "leads"} />}>
+              <LeadsNavLink active={active === "leads"} />
+            </Suspense>
             <NavLink href="/provider/account" label="Account" active={active === "account"} />
             <form action={signOutAction} className="ml-2">
               <SignOutButton />
@@ -60,6 +49,23 @@ export async function ProviderShell({ active, children }: Props) {
       </nav>
       {children}
     </div>
+  );
+}
+
+async function LeadsNavLink({ active }: { active: boolean }) {
+  const supabase = await createClient();
+  const { count } = await supabase
+    .schema("crm")
+    .from("enrolments")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "open");
+  return (
+    <NavLink
+      href="/provider/leads"
+      label="Leads"
+      active={active}
+      badge={count ?? 0}
+    />
   );
 }
 

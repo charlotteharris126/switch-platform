@@ -16,6 +16,14 @@ import { NotesLog, type NoteRow } from "./notes-log";
 import { markOutcomeAction, addLeadNoteAction } from "./actions";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
 import { formatIntakeId } from "@/lib/intake-format";
+import {
+  labelAgeBand,
+  labelCourse,
+  labelEmployment,
+  labelFunding,
+  labelOutcomeInterest,
+  labelStartTiming,
+} from "@/lib/lead-values";
 
 interface SubmissionRow {
   id: number;
@@ -260,15 +268,15 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
               </Section>
 
               <Section title="About the learner">
-                <Row label="Age band" value={submission.age_band} />
-                <Row label="Employment" value={submission.employment_status} />
-                <Row label="Has L3+" value={booleanLabel(submission.prior_level_3_or_higher)} />
-                <Row label="Outcome they want" value={submission.outcome_interest} />
+                <Row label="Age band" value={labelAgeBand(submission.age_band)} />
+                <Row label="Employment" value={labelEmployment(submission.employment_status)} />
+                <Row label="Has Level 3 or higher" value={booleanLabel(submission.prior_level_3_or_higher)} />
+                <Row label="What they're after" value={labelOutcomeInterest(submission.outcome_interest)} />
               </Section>
 
               <Section title="Course">
-                <Row label="Course" value={submission.course_id} />
-                <Row label="Funding" value={fundingLabel(submission.funding_category, submission.funding_route)} />
+                <Row label="Course" value={labelCourse(submission.course_id)} />
+                <Row label="Funding" value={labelFunding(submission.funding_category, submission.funding_route)} />
                 <IntakeRow
                   canStart={submission.can_start_on_intake_date}
                   preferredIntakeId={submission.preferred_intake_id}
@@ -351,8 +359,8 @@ function IntakeRow({
   startTiming: string | null;
 }) {
   if (canStart == null) {
-    if (startTiming) return <Row label="Wants to start" value={humanise(startTiming)} />;
-    if (startWhen) return <Row label="Wants to start" value={humanise(startWhen)} />;
+    if (startTiming) return <Row label="Wants to start" value={labelStartTiming(startTiming)} />;
+    if (startWhen) return <Row label="Wants to start" value={labelStartTiming(startWhen)} />;
     return <Row label="Can start on intake" value={null} />;
   }
 
@@ -402,10 +410,6 @@ function IntakeRow({
   );
 }
 
-function humanise(snake: string): string {
-  return snake.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-}
-
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -428,10 +432,4 @@ function booleanLabel(v: boolean | null): string | null {
   if (v === true) return "Yes";
   if (v === false) return "No";
   return null;
-}
-
-function fundingLabel(cat: string | null, route: string | null): string | null {
-  if (cat === "gov") return route ? `Funded (${route})` : "Funded";
-  if (cat === "self") return "Self-funded";
-  return cat ?? null;
 }

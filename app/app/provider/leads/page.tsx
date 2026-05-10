@@ -16,7 +16,27 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ProviderShell } from "../provider-shell";
 import { LeadsTable, type LeadRow } from "./leads-table";
+import { LeadsSidebar } from "./leads-sidebar";
 import type { LeadStatus } from "@/lib/lead-status";
+
+const IN_PROGRESS_STATUSES = new Set<LeadStatus>([
+  "attempt_1_no_answer",
+  "attempt_2_no_answer",
+  "attempt_3_no_answer",
+  "enrolment_meeting_booked",
+]);
+const CONTACTED_STATUSES = new Set<LeadStatus>([
+  "attempt_1_no_answer",
+  "attempt_2_no_answer",
+  "attempt_3_no_answer",
+  "enrolment_meeting_booked",
+  "enrolled",
+  "presumed_enrolled",
+  "lost",
+  "cannot_reach",
+]);
+
+const DAY = 24 * 60 * 60 * 1000;
 
 interface SubmissionRow {
   id: number;
@@ -102,6 +122,44 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     };
   });
 
+  // Sidebar derived data — all from already-loaded rows, no extra round-trips.
+  const now = Date.now();
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+  const weekStart = now - 7 * DAY;
+  const sevenDaysAgo = now - 7 * DAY;
+
+  let openCount = 0;
+  let inProgressCount = 0;
+  let enrolledThisMonth = 0;
+  let weekContacted = 0;
+  let weekEnrolled = 0;
+  let weekLost = 0;
+  let weekMeetingsBooked = 0;
+  for (const r of rows) {
+    if (r.status === "open") openCount += 1;
+    if (IN_PROGRESS_STATUSES.has(r.status)) inProgressCount += 1;
+    const enrol = enrolBySub.get(r.id);
+    if (enrol) {
+      const t = new Date(enrol.status_updated_at).getTime();
+      if ((enrol.status === "enrolled" || enrol.status === "presumed_enrolled") && t >= monthStart) {
+        enrolledThisMonth += 1;
+      }
+      if (t >= weekStart) {
+        if (CONTACTED_STATUSES.has(enrol.status as LeadStatus)) weekContacted += 1;
+        if (enrol.status === "enrolled") weekEnrolled += 1;
+        if (enrol.status === "lost") weekLost += 1;
+        if (enrol.status === "enrolment_meeting_booked") weekMeetingsBooked += 1;
+      }
+    }
+  }
+
+  // Stale leads = open + routed_at older than 7 days. Top 5 by oldest first.
+  const staleLeads = rows
+    .filter((r) => r.status === "open" && r.routed_at && new Date(r.routed_at).getTime() < sevenDaysAgo)
+    .sort((a, b) => new Date(a.routed_at!).getTime() - new Date(b.routed_at!).getTime())
+    .slice(0, 5)
+    .map((r) => ({ id: r.id, name: r.name, routed_at: r.routed_at, status: r.status }));
+
   return (
     <ProviderShell active="leads">
       <div className="max-w-7xl mx-auto p-6">
@@ -121,7 +179,25 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
             No leads routed to you yet. New leads will appear here as they come in.
           </div>
         ) : (
-          <LeadsTable rows={rows} initialFilter={initialFilter} />
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+            <div className="lg:col-span-3">
+              <LeadsTable rows={rows} initialFilter={initialFilter} />
+            </div>
+            <div className="lg:col-span-1 lg:sticky lg:top-6">
+              <LeadsSidebar
+                open={openCount}
+                inProgress={inProgressCount}
+                enrolledThisMonth={enrolledThisMonth}
+                staleLeads={staleLeads}
+                weekStats={{
+                  contacted: weekContacted,
+                  enrolled: weekEnrolled,
+                  lost: weekLost,
+                  meetings_booked: weekMeetingsBooked,
+                }}
+              />
+            </div>
+          </div>
         )}
       </div>
     </ProviderShell>
