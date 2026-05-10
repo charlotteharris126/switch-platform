@@ -32,21 +32,38 @@ interface Props {
 export function LeadsSidebar({ open, inProgress, enrolledThisMonth, callbackPending, staleLeads, weekStats }: Props) {
   return (
     <aside className="space-y-4">
-      {/* Snapshot tile */}
+      {/* Snapshot tile — every row clicks through to the matching filter */}
       <Card>
         <CardTitle>At a glance</CardTitle>
-        <dl className="mt-3 space-y-2">
+        <dl className="mt-3 space-y-1">
           {callbackPending > 0 && (
-            <Stat label="Needs callback" value={callbackPending} tone="rose" emphasis />
+            <StatLink
+              href="/provider/leads?status=callback"
+              label="Needs callback"
+              value={callbackPending}
+              tone="rose"
+              emphasis
+            />
           )}
-          <Stat
+          <StatLink
+            href="/provider/leads?status=open"
             label="New (no contact)"
             value={open}
             tone={callbackPending > 0 ? "slate" : "rose"}
             emphasis={callbackPending === 0}
           />
-          <Stat label="In progress" value={inProgress} tone="amber" />
-          <Stat label="Enrolled this month" value={enrolledThisMonth} tone="emerald" />
+          <StatLink
+            href="/provider/leads?status=calling"
+            label="In progress"
+            value={inProgress}
+            tone="amber"
+          />
+          <StatLink
+            href="/provider/leads?status=enrolled"
+            label="Enrolled this month"
+            value={enrolledThisMonth}
+            tone="emerald"
+          />
         </dl>
       </Card>
 
@@ -148,5 +165,40 @@ function Stat({
         {value}
       </dd>
     </div>
+  );
+}
+
+function StatLink({
+  href,
+  label,
+  value,
+  tone,
+  emphasis,
+}: {
+  href: string;
+  label: string;
+  value: number;
+  tone: "slate" | "amber" | "emerald" | "rose" | "blue";
+  emphasis?: boolean;
+}) {
+  const valueClass: Record<string, string> = {
+    slate: "text-slate-900",
+    amber: "text-amber-700",
+    emerald: "text-emerald-700",
+    rose: "text-rose-700",
+    blue: "text-blue-700",
+  };
+  return (
+    <Link
+      href={href}
+      className="flex items-baseline justify-between gap-2 px-2 -mx-2 py-1 rounded-md hover:bg-slate-50 cursor-pointer transition-colors group"
+    >
+      <dt className="text-xs text-slate-600 group-hover:text-slate-900 transition-colors">
+        {label}
+      </dt>
+      <dd className={`tabular-nums ${emphasis ? "text-2xl font-semibold" : "text-sm font-semibold"} ${valueClass[tone]}`}>
+        {value}
+      </dd>
+    </Link>
   );
 }

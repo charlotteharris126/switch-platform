@@ -15,7 +15,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ProviderShell } from "../provider-shell";
-import { LeadsTable, type LeadRow } from "./leads-table";
+import { LeadsTable, type LeadRow, type Filter } from "./leads-table";
 import { LeadsSidebar } from "./leads-sidebar";
 import type { LeadStatus } from "@/lib/lead-status";
 
@@ -209,32 +209,24 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   );
 }
 
-function parseFilter(param: string | undefined): "all" | "callback" | "open" | "in_progress" | "settled" | LeadStatus {
+function parseFilter(param: string | undefined): Filter {
   if (!param) return "all";
   const normalised = param.toLowerCase();
+  // Map old aliases that may still be on home-page tile links into the new shape.
+  if (normalised === "in_progress") return "calling";
+  if (normalised === "settled") return "enrolled";
+  if (normalised === "enrolment_meeting_booked") return "meeting";
   if (
     normalised === "all" ||
     normalised === "callback" ||
+    normalised === "fastrack" ||
     normalised === "open" ||
-    normalised === "in_progress" ||
-    normalised === "settled"
+    normalised === "calling" ||
+    normalised === "meeting" ||
+    normalised === "enrolled" ||
+    normalised === "cold"
   ) {
     return normalised;
-  }
-  // Direct status filter (e.g. ?status=enrolled)
-  if (
-    [
-      "attempt_1_no_answer",
-      "attempt_2_no_answer",
-      "attempt_3_no_answer",
-      "enrolment_meeting_booked",
-      "enrolled",
-      "presumed_enrolled",
-      "lost",
-      "cannot_reach",
-    ].includes(normalised)
-  ) {
-    return normalised as LeadStatus;
   }
   return "all";
 }

@@ -296,7 +296,7 @@ export default async function ProviderHomePage() {
               doneHint="Every open lead's been tried"
             />
             <ActionCard
-              href="/provider/leads?status=in_progress"
+              href="/provider/leads?status=calling"
               tone="orange"
               count={staleAttemptCount}
               label="call attempts need retrying"
@@ -320,8 +320,8 @@ export default async function ProviderHomePage() {
           </div>
           <div className="grid grid-cols-3 gap-3">
             <PipelinePill label="Open" value={counts.open} tone="slate" href="/provider/leads?status=open" />
-            <PipelinePill label="Calling" value={counts.attempts} tone="amber" href="/provider/leads?status=in_progress" />
-            <PipelinePill label="Meeting booked" value={counts.meeting_booked} tone="blue" href="/provider/leads?status=enrolment_meeting_booked" />
+            <PipelinePill label="Calling" value={counts.attempts} tone="amber" href="/provider/leads?status=calling" />
+            <PipelinePill label="Meeting booked" value={counts.meeting_booked} tone="blue" href="/provider/leads?status=meeting" />
           </div>
         </section>
 

@@ -29,23 +29,34 @@ export interface LeadRow {
   callback_pending: boolean;
 }
 
-type Filter = "all" | "callback" | "open" | "in_progress" | "settled" | LeadStatus;
+export type Filter =
+  | "all"
+  | "callback"
+  | "fastrack"
+  | "open"
+  | "calling"
+  | "meeting"
+  | "enrolled"
+  | "cold";
 
 const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
   { value: "callback", label: "Needs callback" },
+  { value: "fastrack", label: "Fastrack" },
   { value: "open", label: "Open" },
-  { value: "in_progress", label: "In progress" },
-  { value: "settled", label: "Settled" },
+  { value: "calling", label: "Calling" },
+  { value: "meeting", label: "Meeting booked" },
+  { value: "enrolled", label: "Enrolled" },
+  { value: "cold", label: "Cold" },
 ];
 
-const IN_PROGRESS = new Set<LeadStatus>([
+const CALLING = new Set<LeadStatus>([
   "attempt_1_no_answer",
   "attempt_2_no_answer",
   "attempt_3_no_answer",
-  "enrolment_meeting_booked",
 ]);
-const SETTLED = new Set<LeadStatus>(["enrolled", "presumed_enrolled", "lost", "cannot_reach"]);
+const ENROLLED = new Set<LeadStatus>(["enrolled", "presumed_enrolled"]);
+const COLD = new Set<LeadStatus>(["lost", "cannot_reach"]);
 
 interface Props {
   rows: LeadRow[];
@@ -58,16 +69,22 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
 
   const counts = useMemo(() => {
     let open = 0;
-    let inProgress = 0;
-    let settled = 0;
+    let calling = 0;
+    let meeting = 0;
+    let enrolled = 0;
+    let cold = 0;
     let callback = 0;
+    let fastrack = 0;
     for (const r of rows) {
       if (r.callback_pending) callback += 1;
+      if (r.has_fastrack) fastrack += 1;
       if (r.status === "open") open += 1;
-      if (IN_PROGRESS.has(r.status)) inProgress += 1;
-      if (SETTLED.has(r.status)) settled += 1;
+      if (CALLING.has(r.status)) calling += 1;
+      if (r.status === "enrolment_meeting_booked") meeting += 1;
+      if (ENROLLED.has(r.status)) enrolled += 1;
+      if (COLD.has(r.status)) cold += 1;
     }
-    return { all: rows.length, callback, open, in_progress: inProgress, settled };
+    return { all: rows.length, callback, fastrack, open, calling, meeting, enrolled, cold };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -77,14 +94,18 @@ export function LeadsTable({ rows, initialFilter = "all" }: Props) {
         // pass
       } else if (filter === "callback") {
         if (!r.callback_pending) return false;
+      } else if (filter === "fastrack") {
+        if (!r.has_fastrack) return false;
       } else if (filter === "open") {
         if (r.status !== "open") return false;
-      } else if (filter === "in_progress") {
-        if (!IN_PROGRESS.has(r.status)) return false;
-      } else if (filter === "settled") {
-        if (!SETTLED.has(r.status)) return false;
-      } else {
-        if (r.status !== filter) return false;
+      } else if (filter === "calling") {
+        if (!CALLING.has(r.status)) return false;
+      } else if (filter === "meeting") {
+        if (r.status !== "enrolment_meeting_booked") return false;
+      } else if (filter === "enrolled") {
+        if (!ENROLLED.has(r.status)) return false;
+      } else if (filter === "cold") {
+        if (!COLD.has(r.status)) return false;
       }
       if (q.length > 0) {
         const haystack = `${r.name} ${r.email ?? ""} ${r.course_id ?? ""}`.toLowerCase();
