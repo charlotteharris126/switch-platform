@@ -45,8 +45,10 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   const initialFilter = parseFilter(statusParam);
 
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) redirect("/passkey-login");
+  // Cookie-only session check; the proxy already validated against the
+  // Supabase Auth API, RLS gates every query.
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session?.user) redirect("/passkey-login");
 
   const { data: submissions, error: submissionsErr } = await supabase
     .schema("leads")

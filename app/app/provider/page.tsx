@@ -63,63 +63,74 @@ const STATUS_TONE: Record<LeadStatus, string> = {
 
 export default async function ProviderHomePage() {
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData.user;
+  // getSession reads the cookie locally — getUser would re-validate against
+  // the Supabase Auth API (~100-200ms network call). The proxy already
+  // re-validated on this request, and RLS gates every DB call we make
+  // below, so the security boundary doesn't move.
+  const { data: sessionData } = await supabase.auth.getSession();
+  const user = sessionData.session?.user;
   if (!user) redirect("/passkey-login");
 
   const admin = createAdminClient();
-  const { data: pu } = await admin
-    .schema("crm")
-    .from("provider_users")
-    .select("id, provider_id, contact_email, display_name, role, enrolled_at, status")
-    .eq("auth_user_id", user.id)
-    .eq("status", "active")
-    .maybeSingle<ProviderUserRow>();
 
+  // Fan out everything that doesn't depend on the provider lookup.
+  const [puResult, enrolmentsResult, recentSubsResult] = await Promise.all([
+    admin
+      .schema("crm")
+      .from("provider_users")
+      .select("id, provider_id, contact_email, display_name, role, enrolled_at, status")
+      .eq("auth_user_id", user.id)
+      .eq("status", "active")
+      .maybeSingle<ProviderUserRow>(),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("status, status_updated_at"),
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id, first_name, last_name, email, course_id, routed_at")
+      .not("routed_at", "is", null)
+      .is("archived_at", null)
+      .is("parent_submission_id", null)
+      .order("routed_at", { ascending: false })
+      .limit(5),
+  ]);
+
+  const pu = puResult.data;
   if (!pu) {
     await supabase.auth.signOut();
     redirect("/passkey-login?error=no_active_account");
   }
 
-  const { data: provider } = await admin
-    .schema("crm")
-    .from("providers")
-    .select("company_name")
-    .eq("provider_id", pu.provider_id)
-    .maybeSingle<ProviderRow>();
+  const recentSubs = (recentSubsResult.data ?? []) as RecentLeadRow[];
+  const recentIds = recentSubs.map((s) => s.id);
 
-  // Counts via authenticated client so RLS scopes to this provider.
-  const { data: enrolmentRows } = await supabase
-    .schema("crm")
-    .from("enrolments")
-    .select("status, status_updated_at");
+  // Second wave: provider lookup (depends on pu.provider_id) +
+  // enrolment-status by recent submission ids (depends on recentIds).
+  const [providerResult, recentEnrolsResult] = await Promise.all([
+    admin
+      .schema("crm")
+      .from("providers")
+      .select("company_name")
+      .eq("provider_id", pu.provider_id)
+      .maybeSingle<ProviderRow>(),
+    recentIds.length
+      ? supabase
+          .schema("crm")
+          .from("enrolments")
+          .select("submission_id, status, status_updated_at")
+          .in("submission_id", recentIds)
+      : Promise.resolve({ data: [] as RecentEnrolmentRow[] }),
+  ]);
 
-  const enrolments = (enrolmentRows ?? []) as EnrolmentCountRow[];
+  const provider = providerResult.data;
+  const enrolments = (enrolmentsResult.data ?? []) as EnrolmentCountRow[];
   const counts = countByStatus(enrolments);
   const enrolledThisMonth = enrolledThisMonthCount(enrolments);
 
-  // Recent leads (last 5 routed) — authenticated client, RLS-scoped.
-  const { data: recentSubsRaw } = await supabase
-    .schema("leads")
-    .from("submissions")
-    .select("id, first_name, last_name, email, course_id, routed_at")
-    .not("routed_at", "is", null)
-    .is("archived_at", null)
-    .is("parent_submission_id", null)
-    .order("routed_at", { ascending: false })
-    .limit(5);
-
-  const recentSubs = (recentSubsRaw ?? []) as RecentLeadRow[];
-  const recentIds = recentSubs.map((s) => s.id);
-  const { data: recentEnrolsRaw } = recentIds.length
-    ? await supabase
-        .schema("crm")
-        .from("enrolments")
-        .select("submission_id, status, status_updated_at")
-        .in("submission_id", recentIds)
-    : { data: [] as RecentEnrolmentRow[] };
   const recentEnrolBySub = new Map<number, RecentEnrolmentRow>();
-  for (const e of (recentEnrolsRaw ?? []) as RecentEnrolmentRow[]) {
+  for (const e of (recentEnrolsResult.data ?? []) as RecentEnrolmentRow[]) {
     recentEnrolBySub.set(e.submission_id, e);
   }
 

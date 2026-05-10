@@ -64,27 +64,31 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
   if (Number.isNaN(submissionId)) notFound();
 
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) redirect("/passkey-login");
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session?.user) redirect("/passkey-login");
 
-  // RLS scopes by primary_routed_to. If the lead isn't theirs, this returns null.
-  const { data: submission } = await supabase
-    .schema("leads")
-    .from("submissions")
-    .select(
-      "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
-    )
-    .eq("id", submissionId)
-    .maybeSingle<SubmissionRow>();
+  // Submission + enrolment fetched in parallel — they only share the
+  // submissionId from the URL, no inter-query dependency. RLS scopes both.
+  const [submissionResult, enrolResult] = await Promise.all([
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select(
+        "id,submitted_at,routed_at,primary_routed_to,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,why_this_course,la,postcode,region,is_dq,dq_reason",
+      )
+      .eq("id", submissionId)
+      .maybeSingle<SubmissionRow>(),
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("id,status,lost_reason,status_updated_at,notes")
+      .eq("submission_id", submissionId)
+      .maybeSingle<EnrolmentRow>(),
+  ]);
 
+  const submission = submissionResult.data;
   if (!submission) notFound();
-
-  const { data: enrol } = await supabase
-    .schema("crm")
-    .from("enrolments")
-    .select("id,status,lost_reason,status_updated_at,notes")
-    .eq("submission_id", submissionId)
-    .maybeSingle<EnrolmentRow>();
+  const enrol = enrolResult.data;
 
   const status = (enrol?.status ?? "open") as LeadStatus;
 

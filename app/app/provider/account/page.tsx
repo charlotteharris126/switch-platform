@@ -60,8 +60,8 @@ const ROLE_LABEL: Record<string, string> = {
 
 export default async function ProviderAccountPage() {
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData.user;
+  const { data: sessionData } = await supabase.auth.getSession();
+  const user = sessionData.session?.user;
   if (!user) redirect("/passkey-login");
 
   const admin = createAdminClient();
@@ -79,20 +79,25 @@ export default async function ProviderAccountPage() {
     redirect("/passkey-login?error=no_active_account");
   }
 
-  const { data: provider } = await admin
-    .schema("crm")
-    .from("providers")
-    .select("company_name, contact_email, contact_phone, pilot_status, billing_model, pricing_model, per_enrolment_fee, percent_rate, min_fee, max_fee, free_enrolments_remaining, is_demo")
-    .eq("provider_id", pu.provider_id)
-    .maybeSingle<ProviderRow>();
+  // provider + passkeys in parallel — both depend on pu but not on each other.
+  const [providerResult, passkeyResult] = await Promise.all([
+    admin
+      .schema("crm")
+      .from("providers")
+      .select("company_name, contact_email, contact_phone, pilot_status, billing_model, pricing_model, per_enrolment_fee, percent_rate, min_fee, max_fee, free_enrolments_remaining, is_demo")
+      .eq("provider_id", pu.provider_id)
+      .maybeSingle<ProviderRow>(),
+    admin
+      .schema("crm")
+      .from("provider_passkeys")
+      .select("id, nickname, device_type, created_at, last_used_at, disabled_at")
+      .eq("provider_user_id", pu.id)
+      .is("disabled_at", null)
+      .order("created_at", { ascending: true }),
+  ]);
 
-  const { data: passkeyRowsRaw } = await admin
-    .schema("crm")
-    .from("provider_passkeys")
-    .select("id, nickname, device_type, created_at, last_used_at, disabled_at")
-    .eq("provider_user_id", pu.id)
-    .is("disabled_at", null)
-    .order("created_at", { ascending: true });
+  const provider = providerResult.data;
+  const passkeyRowsRaw = passkeyResult.data;
 
   const passkeyRows = (passkeyRowsRaw ?? []) as PasskeyRow[];
 
