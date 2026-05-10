@@ -156,8 +156,7 @@ export default async function ProviderHomePage() {
   const provider = providerResult.data;
   const enrolments = (enrolmentsResult.data ?? []) as EnrolmentCountRow[];
   const counts = countByStatus(enrolments);
-  const enrolledThisMonth = enrolledThisMonthCount(enrolments);
-  const enrolledLastMonth = enrolledLastMonthCount(enrolments);
+  const enrolledLast30d = enrolledLast30DaysCount(enrolments);
   const callbackCount = enrolments.filter((r) => r.callback_requested_at != null).length;
 
   // Build routed-id → routed_at lookup so we can find the oldest lead in
@@ -214,11 +213,6 @@ export default async function ProviderHomePage() {
     recentEnrolBySub.set(e.submission_id, e);
   }
 
-  const monthDelta = enrolledThisMonth - enrolledLastMonth;
-  const monthDeltaArrow = monthDelta > 0 ? "↑" : monthDelta < 0 ? "↓" : "→";
-  const monthDeltaTone =
-    monthDelta > 0 ? "text-emerald-700" : monthDelta < 0 ? "text-rose-700" : "text-slate-500";
-
   return (
     <ProviderShell active="home">
       <RealtimeRefresh
@@ -230,49 +224,25 @@ export default async function ProviderHomePage() {
         channel="rt-provider-home"
       />
       <div className="max-w-7xl mx-auto p-6 space-y-6">
-        {/* Greeting */}
-        <div>
-          <p className="text-xs uppercase tracking-widest text-slate-500 font-semibold">
-            {provider?.company_name ?? pu.provider_id}
-          </p>
-          <h1 className="text-2xl font-semibold text-slate-900 mt-1">
-            Welcome back, {pu.display_name ?? pu.contact_email}
-          </h1>
-        </div>
-
-        {/* Hero stat strip. Billing-side stats (estimated fees) live with
-            the admin/billing surface for now and come back here in Phase 2
-            once invoicing is in. */}
-        <section className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-2xl p-6 md:p-8 shadow-sm">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <p className="text-xs uppercase tracking-widest text-slate-300 font-semibold">
-                Enrolments this month
-              </p>
-              <p className="text-5xl md:text-6xl font-semibold tabular-nums mt-2 leading-none">
-                {enrolledThisMonth}
-              </p>
-              <p className={`text-xs mt-3 font-medium ${monthDelta === 0 ? "text-slate-400" : monthDelta > 0 ? "text-emerald-300" : "text-rose-300"} tabular-nums`}>
-                <span className={monthDeltaTone}>{monthDeltaArrow}</span>{" "}
-                {monthDelta === 0
-                  ? `same as last month (${enrolledLastMonth})`
-                  : `${Math.abs(monthDelta)} ${monthDelta > 0 ? "more" : "fewer"} than last month (${enrolledLastMonth})`}
-              </p>
-            </div>
-
-            <div className="border-t md:border-t-0 md:border-l border-slate-700 pt-4 md:pt-0 md:pl-6">
-              <p className="text-xs uppercase tracking-widest text-slate-300 font-semibold">
-                In your queue
-              </p>
-              <p className="text-3xl md:text-4xl font-semibold tabular-nums mt-2 leading-none">
-                {counts.open + counts.in_progress}
-              </p>
-              <p className="text-xs mt-3 text-slate-400">
-                {counts.open} open · {counts.in_progress} in progress
-              </p>
-            </div>
+        {/* Greeting + 30-day enrol badge */}
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-xs uppercase tracking-widest text-slate-500 font-semibold">
+              {provider?.company_name ?? pu.provider_id}
+            </p>
+            <h1 className="text-2xl font-semibold text-slate-900 mt-1">
+              Welcome back, {pu.display_name ?? pu.contact_email}
+            </h1>
           </div>
-        </section>
+          <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shrink-0">
+            <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
+              Enrolments, past 30 days
+            </p>
+            <p className="text-3xl font-semibold tabular-nums text-slate-900 leading-none mt-1">
+              {enrolledLast30d}
+            </p>
+          </div>
+        </div>
 
         {/* Action queue. four uniform cards, always rendered. When the
             count is 0 the card flips to a calm emerald "all clear" state
@@ -543,23 +513,11 @@ function countByStatus(rows: EnrolmentCountRow[]) {
   return { open, in_progress: inProgress, attempts, meeting_booked: meetingBooked, awaiting_long: awaitingLong };
 }
 
-function enrolledThisMonthCount(rows: EnrolmentCountRow[]): number {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+function enrolledLast30DaysCount(rows: EnrolmentCountRow[]): number {
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   return rows.filter(
     (r) =>
       (r.status === "enrolled" || r.status === "presumed_enrolled") &&
-      new Date(r.status_updated_at).getTime() >= monthStart,
+      new Date(r.status_updated_at).getTime() >= cutoff,
   ).length;
-}
-
-function enrolledLastMonthCount(rows: EnrolmentCountRow[]): number {
-  const now = new Date();
-  const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
-  return rows.filter((r) => {
-    if (r.status !== "enrolled" && r.status !== "presumed_enrolled") return false;
-    const t = new Date(r.status_updated_at).getTime();
-    return t >= lastMonthStart && t < thisMonthStart;
-  }).length;
 }

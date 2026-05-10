@@ -189,38 +189,28 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
   return (
     <div>
       {/* Action-needed pill — elevated above the standard filter row.
-          Rose when there's anything waiting, emerald when all clear. */}
-      <button
-        type="button"
-        onClick={() => setFilter("action")}
-        className={`mb-3 w-full text-left px-4 py-3 rounded-xl border transition-colors cursor-pointer flex items-baseline justify-between gap-3 ${
-          counts.action > 0
-            ? filter === "action"
-              ? "bg-rose-600 border-rose-600 text-white"
-              : "bg-rose-50 border-rose-200 hover:bg-rose-100 hover:border-rose-300 text-rose-900"
-            : filter === "action"
-              ? "bg-emerald-600 border-emerald-600 text-white"
-              : "bg-emerald-50 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 text-emerald-900"
-        }`}
-      >
-        <span className="flex items-baseline gap-3">
-          <span className="text-sm font-semibold uppercase tracking-wide">
-            Action needed
-          </span>
-          <span className="text-xs opacity-80">
-            {counts.action > 0
-              ? "Callbacks, fastrack, open leads, and stale attempts"
-              : "All clear — nothing waiting on you"}
-          </span>
-        </span>
-        <span
-          className={`text-2xl font-semibold tabular-nums leading-none ${
-            counts.action === 0 && filter !== "action" ? "" : ""
+          Dark red when there's anything waiting, emerald when all clear.
+          Compact pill (not full-width) so it sits as a callout, not a banner. */}
+      <div className="mb-3">
+        <button
+          type="button"
+          onClick={() => setFilter("action")}
+          className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border transition-colors cursor-pointer text-sm font-semibold ${
+            counts.action > 0
+              ? filter === "action"
+                ? "bg-rose-800 border-rose-800 text-white"
+                : "bg-rose-700 border-rose-700 hover:bg-rose-800 hover:border-rose-800 text-white"
+              : filter === "action"
+                ? "bg-emerald-700 border-emerald-700 text-white"
+                : "bg-emerald-50 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 text-emerald-800"
           }`}
         >
-          {counts.action > 0 ? counts.action : "✓"}
-        </span>
-      </button>
+          <span>Action needed</span>
+          <span className="tabular-nums leading-none">
+            {counts.action > 0 ? counts.action : "✓"}
+          </span>
+        </button>
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex flex-wrap gap-1">
