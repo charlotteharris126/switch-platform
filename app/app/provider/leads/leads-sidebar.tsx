@@ -1,17 +1,12 @@
-// Right-hand sidebar on /provider/leads. quick stats + actionable
-// "needs attention" list. Pure presentational; data is computed in
-// the page from already-loaded rows so no extra round-trip.
+// Right-hand sidebar on /provider/leads.
+//
+// Categories now mirror the filter pills above the table 1:1, so a click
+// in the sidebar lands on a list view with the same count. Old "Needs
+// attention" widget retired since the elevated Action banner above the
+// table covers stale-lead surfacing.
 
 import Link from "next/link";
-import { DurationTimer } from "../duration-timer";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
-
-interface StaleLead {
-  id: number;
-  name: string;
-  routed_at: string | null;
-  status: LeadStatus;
-}
 
 interface WeekStats {
   contacted: number;
@@ -22,20 +17,27 @@ interface WeekStats {
 
 interface Props {
   open: number;
-  inProgress: number;
+  calling: number;
+  meetingBooked: number;
   enrolledThisMonth: number;
   callbackPending: number;
-  staleLeads: StaleLead[];
   weekStats: WeekStats;
 }
 
-export function LeadsSidebar({ open, inProgress, enrolledThisMonth, callbackPending, staleLeads, weekStats }: Props) {
+export function LeadsSidebar({
+  open,
+  calling,
+  meetingBooked,
+  enrolledThisMonth,
+  callbackPending,
+  weekStats,
+}: Props) {
   return (
     <aside className="space-y-4">
-      {/* Snapshot tile — every row clicks through to the matching filter */}
+      {/* Snapshot — every row clicks through to the matching filter */}
       <Card>
         <CardTitle>At a glance</CardTitle>
-        <dl className="mt-3 space-y-1">
+        <div className="mt-3 space-y-0.5">
           {callbackPending > 0 && (
             <StatLink
               href="/provider/leads?status=callback"
@@ -47,16 +49,22 @@ export function LeadsSidebar({ open, inProgress, enrolledThisMonth, callbackPend
           )}
           <StatLink
             href="/provider/leads?status=open"
-            label="New (no contact)"
+            label="Open"
             value={open}
             tone={callbackPending > 0 ? "slate" : "rose"}
             emphasis={callbackPending === 0}
           />
           <StatLink
             href="/provider/leads?status=calling"
-            label="In progress"
-            value={inProgress}
+            label="Calling"
+            value={calling}
             tone="amber"
+          />
+          <StatLink
+            href="/provider/leads?status=meeting"
+            label="Meeting booked"
+            value={meetingBooked}
+            tone="blue"
           />
           <StatLink
             href="/provider/leads?status=enrolled"
@@ -64,43 +72,18 @@ export function LeadsSidebar({ open, inProgress, enrolledThisMonth, callbackPend
             value={enrolledThisMonth}
             tone="emerald"
           />
-        </dl>
+        </div>
       </Card>
 
-      {/* Needs attention */}
-      <Card>
-        <CardTitle>Needs attention</CardTitle>
-        <p className="text-xs text-slate-500 mt-1">Open leads with no contact attempt for over 7 days.</p>
-        {staleLeads.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-400 italic">Nothing to chase. Nice.</p>
-        ) : (
-          <ul className="mt-3 space-y-2">
-            {staleLeads.map((l) => (
-              <li key={l.id}>
-                <Link
-                  href={`/provider/leads/${l.id}`}
-                  className="block p-2 -mx-2 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
-                >
-                  <p className="text-sm font-medium text-slate-900 truncate">{l.name}</p>
-                  <p className="text-xs text-rose-700 mt-0.5 tabular-nums">
-                    Sat for <DurationTimer since={l.routed_at} />
-                  </p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      {/* This week */}
+      {/* This week — time-based, complements the status snapshot above */}
       <Card>
         <CardTitle>This week</CardTitle>
-        <dl className="mt-3 space-y-2">
+        <div className="mt-3 space-y-1">
           <Stat label="Contacted" value={weekStats.contacted} tone="slate" />
           <Stat label="Meetings booked" value={weekStats.meetings_booked} tone="blue" />
           <Stat label="Enrolled" value={weekStats.enrolled} tone="emerald" />
           <Stat label="Lost" value={weekStats.lost} tone="rose" />
-        </dl>
+        </div>
       </Card>
 
       {/* Status legend */}
@@ -140,6 +123,14 @@ function CardTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+const TONE_TEXT: Record<string, string> = {
+  slate: "text-slate-900",
+  amber: "text-amber-700",
+  emerald: "text-emerald-700",
+  rose: "text-rose-700",
+  blue: "text-blue-700",
+};
+
 function Stat({
   label,
   value,
@@ -151,19 +142,16 @@ function Stat({
   tone: "slate" | "amber" | "emerald" | "rose" | "blue";
   emphasis?: boolean;
 }) {
-  const valueClass: Record<string, string> = {
-    slate: "text-slate-900",
-    amber: "text-amber-700",
-    emerald: "text-emerald-700",
-    rose: "text-rose-700",
-    blue: "text-blue-700",
-  };
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <dt className="text-xs text-slate-600">{label}</dt>
-      <dd className={`tabular-nums ${emphasis ? "text-2xl font-semibold" : "text-sm font-semibold"} ${valueClass[tone]}`}>
+    <div className="flex items-baseline justify-between gap-2 px-1 py-1">
+      <span className="text-xs text-slate-600">{label}</span>
+      <span
+        className={`tabular-nums ${
+          emphasis ? "text-2xl font-semibold" : "text-sm font-semibold"
+        } ${TONE_TEXT[tone]}`}
+      >
         {value}
-      </dd>
+      </span>
     </div>
   );
 }
@@ -181,24 +169,21 @@ function StatLink({
   tone: "slate" | "amber" | "emerald" | "rose" | "blue";
   emphasis?: boolean;
 }) {
-  const valueClass: Record<string, string> = {
-    slate: "text-slate-900",
-    amber: "text-amber-700",
-    emerald: "text-emerald-700",
-    rose: "text-rose-700",
-    blue: "text-blue-700",
-  };
   return (
     <Link
       href={href}
-      className="flex items-baseline justify-between gap-2 px-2 -mx-2 py-1 rounded-md hover:bg-slate-50 cursor-pointer transition-colors group"
+      className="flex items-baseline justify-between gap-2 px-2 -mx-2 py-1.5 rounded-md hover:bg-slate-50 cursor-pointer transition-colors group"
     >
-      <dt className="text-xs text-slate-600 group-hover:text-slate-900 transition-colors">
+      <span className="text-xs text-slate-600 group-hover:text-slate-900 transition-colors">
         {label}
-      </dt>
-      <dd className={`tabular-nums ${emphasis ? "text-2xl font-semibold" : "text-sm font-semibold"} ${valueClass[tone]}`}>
+      </span>
+      <span
+        className={`tabular-nums ${
+          emphasis ? "text-2xl font-semibold" : "text-sm font-semibold"
+        } ${TONE_TEXT[tone]}`}
+      >
         {value}
-      </dd>
+      </span>
     </Link>
   );
 }

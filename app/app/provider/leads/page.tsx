@@ -21,12 +21,6 @@ import type { LeadStatus } from "@/lib/lead-status";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { bulkMarkOutcomeAction } from "./[id]/actions";
 
-const IN_PROGRESS_STATUSES = new Set<LeadStatus>([
-  "attempt_1_no_answer",
-  "attempt_2_no_answer",
-  "attempt_3_no_answer",
-  "enrolment_meeting_booked",
-]);
 const CONTACTED_STATUSES = new Set<LeadStatus>([
   "attempt_1_no_answer",
   "attempt_2_no_answer",
@@ -127,14 +121,22 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     };
   });
 
-  // Sidebar derived data. all from already-loaded rows, no extra round-trips.
+  // Sidebar derived data — all from already-loaded rows, no extra round-trips.
+  // Categories mirror the filter pills 1:1 so a click in the sidebar lands on
+  // a list view with the same count.
   const now = Date.now();
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
   const weekStart = now - 7 * DAY;
-  const sevenDaysAgo = now - 7 * DAY;
+
+  const CALLING_STATUSES = new Set<LeadStatus>([
+    "attempt_1_no_answer",
+    "attempt_2_no_answer",
+    "attempt_3_no_answer",
+  ]);
 
   let openCount = 0;
-  let inProgressCount = 0;
+  let callingCount = 0;
+  let meetingBookedCount = 0;
   let enrolledThisMonth = 0;
   let callbackPendingCount = 0;
   let weekContacted = 0;
@@ -143,7 +145,8 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   let weekMeetingsBooked = 0;
   for (const r of rows) {
     if (r.status === "open") openCount += 1;
-    if (IN_PROGRESS_STATUSES.has(r.status)) inProgressCount += 1;
+    if (CALLING_STATUSES.has(r.status)) callingCount += 1;
+    if (r.status === "enrolment_meeting_booked") meetingBookedCount += 1;
     if (r.callback_pending) callbackPendingCount += 1;
     const enrol = enrolBySub.get(r.id);
     if (enrol) {
@@ -159,13 +162,6 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       }
     }
   }
-
-  // Stale leads = open + routed_at older than 7 days. Top 5 by oldest first.
-  const staleLeads = rows
-    .filter((r) => r.status === "open" && r.routed_at && new Date(r.routed_at).getTime() < sevenDaysAgo)
-    .sort((a, b) => new Date(a.routed_at!).getTime() - new Date(b.routed_at!).getTime())
-    .slice(0, 5)
-    .map((r) => ({ id: r.id, name: r.name, routed_at: r.routed_at, status: r.status }));
 
   return (
     <ProviderShell active="leads">
@@ -201,10 +197,10 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
             <div className="lg:col-span-1 lg:sticky lg:top-6">
               <LeadsSidebar
                 open={openCount}
-                inProgress={inProgressCount}
+                calling={callingCount}
+                meetingBooked={meetingBookedCount}
                 enrolledThisMonth={enrolledThisMonth}
                 callbackPending={callbackPendingCount}
-                staleLeads={staleLeads}
                 weekStats={{
                   contacted: weekContacted,
                   enrolled: weekEnrolled,
