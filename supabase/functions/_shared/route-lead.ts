@@ -1151,7 +1151,7 @@ async function pushToProviderCrm(
 
 // -------- Emails --------
 
-async function sendProviderNotification(
+export async function sendProviderNotification(
   provider: ProviderRow,
   submission: SubmissionRow,
   trigger: RouteTrigger,

@@ -16,7 +16,12 @@ import { EnrolmentOutcomeForm } from "./enrolment-outcome-form";
 import { OwnerTestToggle } from "./owner-test-toggle";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { AdminNotesPanel } from "./admin-notes-panel";
-import { addAdminLeadNoteAction, clearCallbackFlagAction } from "./actions";
+import {
+  addAdminLeadNoteAction,
+  clearCallbackFlagAction,
+  testRoutingEmailAction,
+} from "./actions";
+import { TestEmailButtons } from "./test-email-buttons";
 import { getDemoProviderIds } from "@/lib/demo";
 
 export default async function LeadDetailPage({
@@ -445,6 +450,14 @@ export default async function LeadDetailPage({
           isRouted={Boolean(lead.primary_routed_to)}
           onAdd={addAdminLeadNoteAction}
           onClearCallback={clearCallbackFlagAction}
+        />
+      )}
+
+      {/* Demo-only test-send buttons for provider-facing emails */}
+      {!lead.is_dq && lead.primary_routed_to && isDemoLead && (
+        <TestEmailButtons
+          submissionId={lead.id}
+          onTestRouting={testRoutingEmailAction}
         />
       )}
 

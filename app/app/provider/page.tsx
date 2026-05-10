@@ -240,7 +240,7 @@ export default async function ProviderHomePage() {
               <p className="text-xs mt-3 text-slate-400">
                 {provider?.per_enrolment_fee != null
                   ? `£${provider.per_enrolment_fee} per enrolment`
-                  : "Pricing on file unclear — message Charlotte"}
+                  : "Pricing on file unclear — email support@switchleads.co.uk"}
               </p>
             </div>
 

@@ -6,7 +6,7 @@
 // caller's row) is the trust boundary for the passkey list.
 //
 // Self-service "add another passkey" is a separate WebAuthn ceremony with
-// new API routes — not in this initial pass. For now Charlotte issues a
+// new API routes — not in this initial pass. For now support issues a
 // fresh invite via /admin/providers/[id] when a provider needs an extra
 // device.
 
@@ -145,13 +145,16 @@ export default async function ProviderAccountPage() {
         <Card title="Sign-in & security" subtitle="Your registered passkeys.">
           <PasskeyList passkeys={passkeys} onRemove={removePasskeyAction} />
           <p className="text-xs text-slate-500 mt-4">
-            Need another device? Charlotte can issue a fresh invite link from her admin
-            panel — that&apos;s the safe path until self-service add-a-passkey ships.
+            Need another device? Email{" "}
+            <a href="mailto:support@switchleads.co.uk" className="font-medium text-slate-700 hover:text-slate-900 underline-offset-2 hover:underline">
+              support@switchleads.co.uk
+            </a>{" "}
+            and we&apos;ll send a fresh invite link.
           </p>
         </Card>
 
         {/* Provider info */}
-        <Card title="Your business" subtitle="What we have on file. Email Charlotte to change anything here.">
+        <Card title="Your business" subtitle="What we have on file. Email support@switchleads.co.uk to change anything here.">
           <Row label="Company" value={provider?.company_name ?? "—"} />
           <Row label="Business email" value={provider?.contact_email ?? "—"} />
           <Row label="Business phone" value={provider?.contact_phone ?? "—"} />
@@ -167,6 +170,22 @@ export default async function ProviderAccountPage() {
         {/* Billing */}
         <Card title="Pricing">
           <BillingSummary provider={provider} />
+        </Card>
+
+        {/* Support */}
+        <Card title="Need help?">
+          <p className="text-sm text-slate-700">
+            Email{" "}
+            <a
+              href="mailto:support@switchleads.co.uk"
+              className="font-semibold text-slate-900 hover:underline underline-offset-2"
+            >
+              support@switchleads.co.uk
+            </a>{" "}
+            for anything you can&apos;t do from the portal — billing queries, business
+            details to update, lost device, anything else. We aim to get back to you
+            within one working day.
+          </p>
         </Card>
       </div>
     </ProviderShell>

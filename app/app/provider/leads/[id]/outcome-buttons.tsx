@@ -87,7 +87,7 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
     return (
       <div className="mt-4 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-md p-3">
         This lead is settled at <strong>{STATUS_LABEL[currentStatus]}</strong>.
-        No further outcomes can be set from the portal — message Charlotte if
+        No further outcomes can be set from the portal — email support@switchleads.co.uk if
         anything needs unwinding.
       </div>
     );
@@ -236,7 +236,7 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
           })}
         </div>
         <p className="text-xs text-slate-500 mt-3">
-          Click a future step to mark it. Past steps are locked — message Charlotte if
+          Click a future step to mark it. Past steps are locked — email support@switchleads.co.uk if
           something needs unwinding.
         </p>
       </div>

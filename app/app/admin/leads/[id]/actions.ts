@@ -216,6 +216,55 @@ export async function addAdminLeadNoteAction(
   return { ok: true, noteId: inserted.id, callbackRaised };
 }
 
+// Test-fire the routing notification email for a given submission.
+// Admin-gated, intended for demo leads — the underlying Edge Function
+// has no demo-only gate (it'll fire for any submission), but the UI
+// button is rendered demo-only.
+export async function testRoutingEmailAction(args: {
+  submissionId: number;
+}): Promise<{ ok: boolean; sentTo?: string; portalLinkUsed?: boolean; error?: string }> {
+  const ctx = await ensureAdminCaller();
+  if (!ctx.ok) return ctx;
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) return { ok: false, error: "NEXT_PUBLIC_SUPABASE_URL not set" };
+
+  const admin = createAdminClient();
+  const { data: secret, error: secretErr } = await admin.rpc("get_shared_secret", {
+    p_name: "AUDIT_SHARED_SECRET",
+  });
+  if (secretErr || !secret) {
+    return { ok: false, error: `vault read failed: ${secretErr?.message ?? "no row"}` };
+  }
+
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/admin-test-email`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-audit-key": String(secret),
+      },
+      body: JSON.stringify({ kind: "routing", submission_id: args.submissionId }),
+    });
+    const body = (await resp.json().catch(() => ({}))) as {
+      ok?: boolean;
+      sent_to?: string;
+      portal_link_used?: boolean;
+      error?: string;
+    };
+    if (!resp.ok || !body.ok) {
+      return { ok: false, error: body.error ?? `Edge Function ${resp.status}` };
+    }
+    return {
+      ok: true,
+      sentTo: body.sent_to,
+      portalLinkUsed: body.portal_link_used,
+    };
+  } catch (err) {
+    return { ok: false, error: `fetch failed: ${String(err)}` };
+  }
+}
+
 export async function clearCallbackFlagAction(args: {
   submissionId: number;
 }): Promise<{ ok: boolean; error?: string }> {

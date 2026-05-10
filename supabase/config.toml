@@ -484,3 +484,6 @@ verify_jwt = false
 
 [functions.admin-notify-callback]
 verify_jwt = false
+
+[functions.admin-test-email]
+verify_jwt = false
