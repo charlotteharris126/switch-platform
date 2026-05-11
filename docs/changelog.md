@@ -4,26 +4,24 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
-## 2026-05-10 — Brevo backfill: SW_REFERRAL_URL + SW_FASTRACK_URL (Wren ask)
+## 2026-05-11 — Brevo backfill: SW_REFERRAL_URL + SW_FASTRACK_URL (Wren ask, completed)
 
-**Type:** 1 data-ops script (`024_backfill_referral_and_fastrack_urls_2026_05_10.ts`). Pre-broadcast data hygiene.
+**Type:** 1 data-ops local script + 1 Edge Function + 1 admin UI panel. Pre-broadcast data hygiene.
 
-- **Why:** `_shared/route-lead.ts buildReferralUrl()` was rewired on 2026-05-04 (commit aadf5ad → 30e62e0) from per-funding-category referral paths to a single `/refer/?ref=`. No Brevo backfill ran when the wiring changed; existing contacts still hold stale URLs. Tonight's referral launch broadcast to EMS-matched contacts shipped with broken referral links (site redirect commit `e99fd6d` on switchable-site is rescuing clicks). Backfill is the precondition for the next clean broadcast referencing SW_REFERRAL_URL.
-- **Same pass also backfills `SW_FASTRACK_URL`** (introduced 2026-05-09 with the fastrack feature). Pre-2026-05-09 contacts won't have it set; the new U1 funded transactional template + future marketing both depend on it.
-- **Audience:** every Brevo contact whose latest `leads.submissions` row has `marketing_opt_in=true` (regardless of provider). Source of truth is the latest submission, not the Brevo Marketing list filter.
-- **Pattern:** clones the 013 backfill structure — paginated walk of Brevo contacts (100/page, 250ms inter-call delay), 0.5% halt threshold, resumable via `.024-checkpoint.json`, dry-run by default. URL helpers (`buildReferralUrl`, `buildFastrackUrl`) duplicated from `_shared/route-lead.ts` so the script and runtime emit byte-identical values.
-- **Spot-check:** 3 deterministic emails picked from the first batch + audience intersection, before/after dump printed by the script.
-- **Run log (to be filled in after `--apply`):**
-  - Audience size: TBD
-  - Mutated: TBD
-  - Skipped (not in audience): TBD
-  - Skipped (already matching): TBD
-  - Errors: TBD
-  - Spot-check 1: TBD before / TBD after
-  - Spot-check 2: TBD before / TBD after
-  - Spot-check 3: TBD before / TBD after
-- **Sign-off:** owner runs dry-run first, reviews output, approves `--apply`. Wren framed as "tomorrow morning is fine" — site redirect catches misdirected clicks in the meantime.
-- **Process lock:** memory entry `feedback_brevo_attribute_wiring_requires_backfill.md` and the `Core discipline` block in `platform/CLAUDE.md`. Any future change to a `_shared/route-lead.ts` function producing a Brevo attribute MUST queue a same-session backfill ticket before merge.
+- **Why:** `_shared/route-lead.ts buildReferralUrl()` was rewired on 2026-05-04 (commit aadf5ad → 30e62e0) from per-funding-category referral paths to a single `/refer/?ref=`. No Brevo backfill ran when the wiring changed; 160 existing contacts on the marketing list held stale URLs. The earlier-2026-05-10 referral launch broadcast to EMS-matched contacts shipped with the broken old URLs (site redirect commit `e99fd6d` on switchable-site rescued clicks in the meantime).
+- **Same pass also backfilled `SW_FASTRACK_URL`** (introduced 2026-05-09). Pre-cutover contacts had no value set; the U1 funded transactional template + future marketing depend on it.
+- **Audience:** every Brevo contact whose latest `leads.submissions` row has `marketing_opt_in=true` (regardless of provider).
+- **Path:** started as a local Deno script (`supabase/data-ops/024_backfill_referral_and_fastrack_urls_2026_05_10.ts`), pivoted to an Edge Function (`backfill-referral-fastrack-urls`) + admin button at `/admin/data-ops` after local execution hit two friction points: Brevo's API key UI doesn't reveal existing keys, and the project's direct DB host (`db.<ref>.supabase.co`) is IPv6-only and unreachable from local laptops. Edge Function reads both creds from Supabase env, sidesteps both.
+- **Run log:**
+  - Audience size: 174 (latest `leads.submissions` per email with `marketing_opt_in=true`)
+  - Brevo contacts processed: 250
+  - Mutated: 160 (stale → current)
+  - Skipped (not in audience, e.g. internal/admin emails or non-opt-in contacts): 90
+  - Skipped (already matching): 0 (dry-run after the apply: every audience contact in Brevo is now current)
+  - Errors: 0
+  - 14 of the 174 audience emails have no Brevo record yet — those will be created the next time `route-lead.ts` upserts on a submission. Not a backfill concern.
+- **Sign-off:** owner-approved apply, executed via `/admin/data-ops`. Post-apply dry-run (174 audience / 0 would-mutate / 160 already-matching) confirms the wiring is clean. Page crashed cosmetically during apply (Server Action timed out on Netlify's ~26s function-call cap while the Edge Function kept writing to completion); subsequent commit `5fff3f5` cuts the inter-write delay 250→100ms and adds a client-side error boundary so future retries don't crash.
+- **Process lock:** memory entry `feedback_brevo_attribute_wiring_requires_backfill.md` + `Core discipline` block in `platform/CLAUDE.md`. Any future change to a `_shared/route-lead.ts` function producing a Brevo attribute MUST queue a same-session backfill ticket before merge.
 
 ---
 
