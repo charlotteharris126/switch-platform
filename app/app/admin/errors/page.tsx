@@ -16,6 +16,12 @@ import { PageHeader } from "@/components/page-header";
 import { ResolveButton } from "./resolve-button";
 import { BulkResolveButton } from "./bulk-resolve";
 import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
+// Data ops panels moved here from /admin/data-ops in the consolidation
+// pass — single page for any data-layer attention. Old /data-ops route
+// redirects here.
+import { Run024Panel } from "../data-ops/run-024-panel";
+import { RunClientNoncePanel } from "../data-ops/run-client-nonce-panel";
+import { RunSheetIdBackfillPanel } from "../data-ops/run-sheet-id-backfill-panel";
 
 interface DeadLetterRow {
   id: number;
@@ -443,19 +449,11 @@ export default async function ErrorsPage({
       />
 
       {noncePending > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
-          <div className="text-xs text-amber-900">
-            <span className="font-semibold">Data ops: {noncePending} pending</span>
-            {" — "}
-            {noncePending === 1 ? "1 funded lead needs" : `${noncePending} funded leads need`}{" "}
-            a fastrack URL stamped via the 025 backfill.
-          </div>
-          <Link
-            href="/data-ops"
-            className="px-3 py-1.5 bg-amber-700 text-white text-xs font-semibold rounded hover:bg-amber-800 cursor-pointer shrink-0"
-          >
-            Open Data ops →
-          </Link>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
+          <span className="font-semibold">Data ops: {noncePending} pending</span>
+          {" — "}
+          {noncePending === 1 ? "1 funded lead needs" : `${noncePending} funded leads need`}{" "}
+          a fastrack URL stamped. Run the <strong>025</strong> backfill panel below to fix.
         </div>
       )}
 
@@ -494,6 +492,68 @@ export default async function ErrorsPage({
           </CardContent>
         </Card>
       )}
+
+      {/* Data ops — one-shot panels for backfills that can't (yet) be
+          auto-resolved by the live infrastructure. Each panel triggers a
+          Supabase Edge Function with dry-run + apply gates. Panels with
+          a pending-count check auto-hide when complete; others (Brevo-
+          side state) stay visible. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Data ops — one-shot fixes</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <p className="text-xs text-[#5a6a72] leading-relaxed">
+            Manual backfills that aren&apos;t (yet) automated. Dry-run first,
+            review, then apply. Panels with a pending-count check hide
+            themselves when nothing&apos;s left to do.
+          </p>
+
+          {sheetProviders.length > 0 && (
+            <section className="border-t border-[#dde3e6] pt-4">
+              <h3 className="text-sm font-semibold text-[#11242e]">Legacy sheet Submission IDs</h3>
+              <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
+                One-time fix for provider sheets that pre-date 2026-05-07 (when the
+                <code className="text-[11px] bg-[#f4f1ed] mx-1 px-1 py-0.5 rounded">Submission ID</code>
+                column was added). Matches each blank-ID sheet row to a DB lead by
+                email + course + submitted_at proximity. Safety: only writes
+                Submission ID cells, only to currently-blank cells.
+              </p>
+              <RunSheetIdBackfillPanel
+                providers={sheetProviders}
+                initialProviderId={initialRepublishProvider || sheetProviders[0].provider_id}
+              />
+            </section>
+          )}
+
+          {noncePending !== 0 && (
+            <section className="border-t border-[#dde3e6] pt-4">
+              <h3 className="text-sm font-semibold text-[#11242e]">025: client_nonce backfill</h3>
+              <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
+                Stamps a fresh nonce into funded in-funnel leads that pre-date
+                the per-lead fastrack URL. Auto-hides when the pending count
+                hits zero.
+              </p>
+              <RunClientNoncePanel />
+            </section>
+          )}
+
+          <section className="border-t border-[#dde3e6] pt-4">
+            <h3 className="text-sm font-semibold text-[#11242e]">024: Brevo URL backfill</h3>
+            <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
+              Re-pushes <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">SW_REFERRAL_URL</code>
+              {" "}+ <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">SW_FASTRACK_URL</code>
+              {" "}to every opted-in Brevo contact. Run after any change to
+              {" "}<code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildReferralUrl</code>
+              {" "}or <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildFastrackUrl</code>
+              {" "}in <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">_shared/route-lead.ts</code>.
+              Doesn&apos;t auto-hide (Brevo-side state not cheaply checkable from DB).
+              Last applied 2026-05-11 (174 audience / 160 mutated / 0 errors).
+            </p>
+            <Run024Panel />
+          </section>
+        </CardContent>
+      </Card>
 
       <ReconciliationCard
         data={reconciliation}
