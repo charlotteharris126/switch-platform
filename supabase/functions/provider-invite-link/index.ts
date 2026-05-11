@@ -303,14 +303,39 @@ function renderInviteEmail(args: {
   });
   return `<!DOCTYPE html>
 <html>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #0f172a;">
+<head>
+  <meta charset="utf-8">
+  <style>
+    /* Hover + transition on the CTA. Inline-style on the <a> is the
+       fallback (every email client honours that); :hover only fires in
+       clients that allow stylesheet rules (Apple Mail, Gmail web,
+       Thunderbird, most others — Outlook desktop doesn't). */
+    .sl-button {
+      transition: background-color 120ms ease, transform 120ms ease, box-shadow 120ms ease !important;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18) !important;
+    }
+    .sl-button:hover {
+      background-color: #cd8b76 !important;
+      transform: translateY(-1px) !important;
+      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.22) !important;
+    }
+    .sl-link {
+      transition: color 120ms ease !important;
+    }
+    .sl-link:hover {
+      color: #b3412e !important;
+      text-decoration: underline !important;
+    }
+  </style>
+</head>
+<body style="font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #0f172a;">
   <p style="margin: 0 0 16px;">Hi,</p>
   <p style="margin: 0 0 16px;">You've been invited to set up portal access for <strong>${escapeHtml(args.company)}</strong> on SwitchLeads.</p>
   <p style="margin: 0 0 16px;">Click the button below to choose a password. From then on, you'll sign in with your email + that password, and we'll email you a short sign-in code on fresh devices to confirm it's you.</p>
   <p style="margin: 24px 0;">
-    <a href="${escapeHtml(args.inviteUrl)}" style="display: inline-block; background: #0f172a; color: #ffffff; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600;">Set up your password</a>
+    <a href="${escapeHtml(args.inviteUrl)}" class="sl-button" style="display: inline-block; background-color: #0f172a; color: #ffffff; padding: 14px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);">Set up your password &rarr;</a>
   </p>
-  <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">Want to know what to expect once you're in? Read the <a href="${escapeHtml(args.helpUrl)}" style="color: #0f172a; font-weight: 600;">getting-started guide</a> (4-min read).</p>
+  <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">Want to know what to expect once you're in? Read the <a class="sl-link" href="${escapeHtml(args.helpUrl)}" style="color: #0f172a; font-weight: 600;">getting-started guide</a> (4-min read).</p>
   <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">This link expires at <strong>${escapeHtml(expiresText)}</strong> and only works once. If it expires before you use it, ask the SwitchLeads team for a new one.</p>
   <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">If you weren't expecting this invite, you can ignore the email. The link does nothing on its own and dies after the time above.</p>
   <p style="margin: 24px 0 0; color: #94a3b8; font-size: 12px;">SwitchLeads, provider portal access.</p>
