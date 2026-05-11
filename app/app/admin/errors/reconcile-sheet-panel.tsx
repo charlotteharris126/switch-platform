@@ -65,6 +65,14 @@ export function ReconcileSheetPanel({
     setConfirmApply(null);
   }
 
+  // Server Actions that wrap a long-running Edge Function (republish over
+  // many rows, or reconcile over a big drift list) can blow past Netlify's
+  // ~26s Server Action cap. The Edge Function keeps writing in the
+  // background up to ~150s; only the HTTP round-trip to the browser dies.
+  // Catch the throw, show a friendly message, tell the operator to re-run
+  // the dry-run to see the actual landed state.
+  const TIMEOUT_HINT = " — the underlying job may still be running in the background. Re-run Check drift in a minute to see current state.";
+
   function fireDryRun() {
     if (!providerId) return;
     resetResults();
@@ -77,6 +85,11 @@ export function ReconcileSheetPanel({
           // Pre-select all eligible by default
           setSelectedIds(new Set(r.proposed_changes.map((c) => c.submission_id)));
         }
+      } catch (err) {
+        setDryRunResult({
+          ok: false,
+          error: (err instanceof Error ? err.message : String(err)) + TIMEOUT_HINT,
+        });
       } finally {
         setPendingMode(null);
       }
@@ -97,12 +110,21 @@ export function ReconcileSheetPanel({
         setApplyResult(r);
         // Refresh the dry-run view so the operator can see drift = 0
         if (r.ok) {
-          const refreshed = await reconcileSheetToDbAction({ provider_id: providerId, apply: false });
-          setDryRunResult(refreshed);
-          if (refreshed.ok) {
-            setSelectedIds(new Set(refreshed.proposed_changes.map((c) => c.submission_id)));
+          try {
+            const refreshed = await reconcileSheetToDbAction({ provider_id: providerId, apply: false });
+            setDryRunResult(refreshed);
+            if (refreshed.ok) {
+              setSelectedIds(new Set(refreshed.proposed_changes.map((c) => c.submission_id)));
+            }
+          } catch {
+            // Refresh failed — surface the apply result, operator can manually re-check.
           }
         }
+      } catch (err) {
+        setApplyResult({
+          ok: false,
+          error: (err instanceof Error ? err.message : String(err)) + TIMEOUT_HINT,
+        });
       } finally {
         setPendingMode(null);
         setConfirmApply(null);
@@ -118,6 +140,11 @@ export function ReconcileSheetPanel({
       try {
         const r = await republishSheetAction({ provider_id: providerId, apply });
         setRepublishResult(r);
+      } catch (err) {
+        setRepublishResult({
+          ok: false,
+          error: (err instanceof Error ? err.message : String(err)) + TIMEOUT_HINT,
+        });
       } finally {
         setPendingMode(null);
         if (apply) setConfirmApply(null);
