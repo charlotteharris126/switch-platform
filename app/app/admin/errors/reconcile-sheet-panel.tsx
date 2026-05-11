@@ -136,9 +136,18 @@ export function ReconcileSheetPanel({
     if (!providerId) return;
     setRepublishResult(null);
     setPendingMode(apply ? "republish_apply" : "republish_dry_run");
+    // Scope the republish to just the drifting (db_fresher) IDs from the
+    // last dry-run, when we have them. Avoids re-writing 60 rows that are
+    // already in sync just to fix 14 that aren't (the original cause of
+    // the 26s Netlify Server Action timeout on EMS).
+    const driftIds = dryRunResult?.ok ? dryRunResult.drift_db_fresher_submission_ids : null;
     startTransition(async () => {
       try {
-        const r = await republishSheetAction({ provider_id: providerId, apply });
+        const r = await republishSheetAction({
+          provider_id: providerId,
+          apply,
+          ...(driftIds && driftIds.length > 0 ? { submission_ids: driftIds } : {}),
+        });
         setRepublishResult(r);
       } catch (err) {
         setRepublishResult({

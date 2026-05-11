@@ -30,6 +30,7 @@ export interface ReconcileSheetToDbSummary {
   drift_skipped_no_signal: number;
   drift_skipped_db_fresher: number;
   drift_skipped_target_disallowed: number;
+  drift_db_fresher_submission_ids: number[];
   proposed_changes: ReconcileProposedChange[];
   applied_count: number;
   errors: string[];
@@ -75,10 +76,12 @@ export type RepublishSheetResult = RepublishSheetSummary | { ok: false; error: s
 export async function republishSheetAction(args: {
   provider_id: string;
   apply: boolean;
+  submission_ids?: number[];
 }): Promise<RepublishSheetResult> {
   return callEdgeFunction("republish-provider-sheet", {
     provider_id: args.provider_id,
     apply: args.apply,
+    ...(args.submission_ids ? { submission_ids: args.submission_ids } : {}),
   }) as Promise<RepublishSheetResult>;
 }
 

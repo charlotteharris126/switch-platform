@@ -123,6 +123,10 @@ interface RunSummary {
   drift_skipped_no_signal: number;
   drift_skipped_db_fresher: number;
   drift_skipped_target_disallowed: number;
+  // Submission IDs in each skipped bucket, so the panel can pass the
+  // db_fresher subset to republish-provider-sheet (avoiding writes for
+  // the leads already in agreement).
+  drift_db_fresher_submission_ids: number[];
   proposed_changes: DriftRow[];
   applied_count: number;
   errors: string[];
@@ -311,6 +315,9 @@ async function run(
   const skippedAmbiguous = skipped.filter((s) => s.reason === "ambiguous").length;
   const skippedNoSignal = skipped.filter((s) => s.reason === "no_signal").length;
   const skippedDbFresher = skipped.filter((s) => s.reason === "db_fresher").length;
+  const dbFresherIds = skipped
+    .filter((s) => s.reason === "db_fresher")
+    .map((s) => s.submission_id);
   const skippedTargetDisallowed = skipped.filter((s) => s.reason === "target_disallowed").length;
 
   if (!apply) {
@@ -323,6 +330,7 @@ async function run(
       drift_skipped_no_signal: skippedNoSignal,
       drift_skipped_db_fresher: skippedDbFresher,
       drift_skipped_target_disallowed: skippedTargetDisallowed,
+      drift_db_fresher_submission_ids: dbFresherIds,
       proposed_changes: proposed,
       applied_count: 0,
       errors: [],
@@ -438,6 +446,7 @@ async function run(
     drift_skipped_no_signal: skippedNoSignal,
     drift_skipped_db_fresher: skippedDbFresher,
     drift_skipped_target_disallowed: skippedTargetDisallowed,
+    drift_db_fresher_submission_ids: dbFresherIds,
     proposed_changes: proposed,
     applied_count: appliedCount,
     errors,

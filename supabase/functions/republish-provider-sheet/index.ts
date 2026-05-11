@@ -47,7 +47,11 @@ if (!SHEETS_APPEND_TOKEN) throw new Error("SHEETS_APPEND_TOKEN not set");
 
 const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, prepare: false });
 
-const INTER_WRITE_DELAY_MS = 100;
+// 50ms between Apps Script writes. Empirically Apps Script copes fine
+// at 100ms (~10/s) and 50ms (~20/s) for the per-sheet load we hit on
+// EMS (~140 routed leads). Lower is risky — onto Google's invisible
+// rate limits on URL Fetch dispatched from a single owner account.
+const INTER_WRITE_DELAY_MS = 50;
 
 interface RoutedLead {
   submission_id: number;
@@ -95,7 +99,11 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-async function run(providerId: string, apply: boolean): Promise<RunSummary> {
+async function run(
+  providerId: string,
+  apply: boolean,
+  submissionFilter: number[] | null,
+): Promise<RunSummary> {
   // 1. Load provider + sheet webhook
   const providerRows = await sql<Array<{
     sheet_webhook_url: string | null;
@@ -114,17 +122,31 @@ async function run(providerId: string, apply: boolean): Promise<RunSummary> {
     throw new Error(`provider ${providerId} has no sheet_webhook_url configured`);
   }
 
-  // 2. Load every routed lead for this provider with current DB state
-  const leads = await sql<RoutedLead[]>`
-    SELECT s.id AS submission_id,
-           COALESCE(e.status, 'open') AS status,
-           e.lost_reason,
-           s.fastracked_at
-      FROM leads.submissions s
- LEFT JOIN crm.enrolments e ON e.submission_id = s.id
-     WHERE s.primary_routed_to = ${providerId}
-       AND s.is_dq IS NOT TRUE
-  `;
+  // 2. Load routed leads for this provider. If submissionFilter is set,
+  //    scope to just those IDs (e.g. when the reconcile panel knows which
+  //    rows are drifting and only wants those re-written, not all 142+).
+  const leads = submissionFilter
+    ? await sql<RoutedLead[]>`
+        SELECT s.id AS submission_id,
+               COALESCE(e.status, 'open') AS status,
+               e.lost_reason,
+               s.fastracked_at
+          FROM leads.submissions s
+     LEFT JOIN crm.enrolments e ON e.submission_id = s.id
+         WHERE s.primary_routed_to = ${providerId}
+           AND s.is_dq IS NOT TRUE
+           AND s.id = ANY(${submissionFilter}::BIGINT[])
+      `
+    : await sql<RoutedLead[]>`
+        SELECT s.id AS submission_id,
+               COALESCE(e.status, 'open') AS status,
+               e.lost_reason,
+               s.fastracked_at
+          FROM leads.submissions s
+     LEFT JOIN crm.enrolments e ON e.submission_id = s.id
+         WHERE s.primary_routed_to = ${providerId}
+           AND s.is_dq IS NOT TRUE
+      `;
 
   const spotChecks: SpotCheck[] = leads.slice(0, 3).map((l) => ({
     submission_id: l.submission_id,
@@ -259,9 +281,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ ok: false, error: "Unauthorized" }, 401);
   }
 
-  let body: { provider_id?: unknown; apply?: unknown };
+  let body: { provider_id?: unknown; apply?: unknown; submission_ids?: unknown };
   try {
-    body = await req.json() as { provider_id?: unknown; apply?: unknown };
+    body = await req.json() as typeof body;
   } catch {
     return json({ ok: false, error: "invalid JSON body" }, 400);
   }
@@ -270,9 +292,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ ok: false, error: "provider_id required" }, 400);
   }
   const apply = body.apply === true;
+  const submissionFilter = Array.isArray(body.submission_ids)
+    ? (body.submission_ids as unknown[]).filter((x): x is number => typeof x === "number")
+    : null;
 
   try {
-    const summary = await run(providerId, apply);
+    const summary = await run(providerId, apply, submissionFilter);
     return json({ ok: true, ...summary });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
