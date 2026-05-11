@@ -15,6 +15,7 @@ import { formatDateTime, formatAgo } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { ResolveButton } from "./resolve-button";
 import { BulkResolveButton } from "./bulk-resolve";
+import { RepublishSheetPanel } from "./republish-sheet-panel";
 
 interface DeadLetterRow {
   id: number;
@@ -261,8 +262,13 @@ function leadStateLabel(s: SubmissionLite | undefined): string {
   return "Unrouted";
 }
 
-export default async function ErrorsPage() {
+export default async function ErrorsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ republish?: string }>;
+}) {
   const supabase = await createClient();
+  const { republish: republishProviderParam } = await searchParams;
 
   // Pending data-ops count (currently just 025 client_nonce; 024 lives
   // Brevo-side and can't be cheaply checked from Postgres). Used to gate
@@ -271,6 +277,24 @@ export default async function ErrorsPage() {
   const admin = createAdminClient();
   const { data: noncePendingRaw } = await admin.rpc("count_client_nonce_pending");
   const noncePending = typeof noncePendingRaw === "number" ? noncePendingRaw : 0;
+
+  // Providers eligible for the sheet republish tool (have a webhook
+  // configured). Loaded once for the picker. Lightweight.
+  const { data: sheetProvidersRaw } = await admin
+    .schema("crm")
+    .from("providers")
+    .select("provider_id, company_name, sheet_webhook_url")
+    .not("sheet_webhook_url", "is", null)
+    .order("company_name", { ascending: true });
+  const sheetProviders = (sheetProvidersRaw ?? []) as Array<{
+    provider_id: string;
+    company_name: string;
+  }>;
+  const initialRepublishProvider =
+    republishProviderParam &&
+    sheetProviders.some((p) => p.provider_id === republishProviderParam)
+      ? republishProviderParam
+      : sheetProviders[0]?.provider_id ?? "";
 
   // Lead reconciliation window: align to Meta's earliest data so we're
   // comparing the same period on both sides. Falls back to last 30 days if
@@ -433,6 +457,28 @@ export default async function ErrorsPage() {
             Open Data ops →
           </Link>
         </div>
+      )}
+
+      {sheetProviders.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Sheet drift recovery</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-[#5a6a72] leading-relaxed">
+              On-demand DB → sheet republish. Re-writes status, lost reason,
+              and fastrack columns for every routed lead using the
+              DB&apos;s current state. Use when you suspect drift (e.g.
+              after a failed status flip, or after manually fixing a lead).
+              Idempotent — re-running is safe. Daily proactive detection is
+              a follow-up.
+            </p>
+            <RepublishSheetPanel
+              providers={sheetProviders}
+              initialProviderId={initialRepublishProvider}
+            />
+          </CardContent>
+        </Card>
       )}
 
       <ReconciliationCard

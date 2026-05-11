@@ -7,11 +7,31 @@ import {
   republishSheetAction,
 } from "./republish-sheet-action";
 
-export function RepublishSheetPanel({ providerId }: { providerId: string }) {
+export interface SheetProviderOption {
+  provider_id: string;
+  company_name: string;
+}
+
+export function RepublishSheetPanel({
+  providers,
+  initialProviderId,
+}: {
+  providers: SheetProviderOption[];
+  initialProviderId: string;
+}) {
+  const [providerId, setProviderId] = useState(initialProviderId);
   const [pending, startTransition] = useTransition();
   const [pendingMode, setPendingMode] = useState<"dry_run" | "apply" | null>(null);
   const [result, setResult] = useState<RepublishResult | null>(null);
   const [confirmApply, setConfirmApply] = useState(false);
+
+  if (providers.length === 0) {
+    return (
+      <p className="text-xs text-[#5a6a72] italic">
+        No providers have a sheet webhook configured.
+      </p>
+    );
+  }
 
   function fire(apply: boolean) {
     setResult(null);
@@ -36,11 +56,32 @@ export function RepublishSheetPanel({ providerId }: { providerId: string }) {
 
   return (
     <div className="space-y-3">
+      <label className="flex items-center gap-2 text-xs">
+        <span className="text-[#5a6a72] font-semibold uppercase tracking-wide">
+          Provider
+        </span>
+        <select
+          value={providerId}
+          onChange={(e) => {
+            setProviderId(e.target.value);
+            setResult(null);
+            setConfirmApply(false);
+          }}
+          disabled={pending}
+          className="border border-[#dde3e6] rounded px-2 py-1 text-xs bg-white cursor-pointer disabled:cursor-not-allowed"
+        >
+          {providers.map((p) => (
+            <option key={p.provider_id} value={p.provider_id}>
+              {p.company_name} ({p.provider_id})
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="flex items-center gap-2 flex-wrap">
         <button
           type="button"
           onClick={() => fire(false)}
-          disabled={pending}
+          disabled={pending || !providerId}
           className="px-3 py-1.5 bg-white text-[#11242e] border border-[#dde3e6] rounded text-xs font-semibold hover:bg-[#f4f1ed] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
         >
           {pending && pendingMode === "dry_run" ? "Counting..." : "Dry-run"}
