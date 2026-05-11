@@ -202,20 +202,32 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     ),
   },
   {
-    q: "Lost my passkey / new device, what do I do?",
+    q: "Forgot my password / can't sign in, what do I do?",
     a: (
       <>
-        Email{" "}
+        On the sign-in page, click{" "}
+        <span className="font-semibold text-slate-900">Forgot your password?</span>{" "}
+        under the password field. We&apos;ll email you a reset link. Set a new
+        password and you&apos;re back in. If that doesn&apos;t arrive within a
+        minute (check spam first), email{" "}
         <a
           href="mailto:support@switchleads.co.uk"
           className="font-semibold text-slate-900 hover:underline"
         >
           support@switchleads.co.uk
         </a>{" "}
-        and we&apos;ll send a fresh invite link to your registered email. The
-        link enrols a new passkey on whichever device you click it on. If you
-        still have access to the portal on your old device, you can also remove
-        old passkeys from the Account → Sign-in &amp; security section.
+        and we&apos;ll send a fresh invite link to your registered email.
+      </>
+    ),
+  },
+  {
+    q: "What is the 6-8 digit code I'm asked for?",
+    a: (
+      <>
+        When you sign in on a fresh device or browser we email you a short
+        sign-in code as a second check. Open your inbox, copy the code, paste
+        it into the box. Day to day you stay signed in for about a week — the
+        code only kicks in on a fresh sign-in.
       </>
     ),
   },

@@ -137,6 +137,12 @@ interface Props {
   // preview overrides this to /admin/leads/ so a click drops the admin into
   // their own lead detail page (which renders more than the provider one).
   linkPrefix?: string;
+  // Canonical open intake IDs for the provider's courses, sourced from
+  // crm.course_intakes (status='open'). Unioned with intake IDs derived
+  // from the visible rows so the cohort filter always reflects the full
+  // set of currently-open dates — even if no routed lead has populated
+  // intake fields yet.
+  seededCohortIds?: string[];
 }
 
 const LOST_REASON_LABEL: Record<LostReason, string> = {
@@ -153,7 +159,13 @@ const LOST_REASON_LABEL: Record<LostReason, string> = {
 // Lost reasons valid for bulk lost (from any non-enrolled state).
 const BULK_LOST_REASONS = VALID_LOST_REASONS.filter((r) => r !== "withdrew_after_enrolment");
 
-export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix = "/provider/leads/" }: Props) {
+export function LeadsTable({
+  rows,
+  initialFilter = "all",
+  onBulkMark,
+  linkPrefix = "/provider/leads/",
+  seededCohortIds = [],
+}: Props) {
   const allowBulk = onBulkMark !== undefined;
   const [filter, setFilter] = useState<Filter>(initialFilter);
   const [query, setQuery] = useState("");
@@ -187,18 +199,23 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
   // they're excluded).
   const cohortOptions = useMemo(() => {
     const set = new Set<string>();
+    // Union 1: intake IDs derived from visible rows.
     for (const r of rows) {
       if (r.preferred_intake_id) set.add(r.preferred_intake_id);
       if (Array.isArray(r.acceptable_intake_ids)) {
         for (const id of r.acceptable_intake_ids) set.add(id);
       }
     }
+    // Union 2: canonical open intakes from crm.course_intakes (seeded by
+    // the page). Surfaces dates the provider's courses currently have open
+    // even when no routed lead has been submitted against that intake yet.
+    for (const id of seededCohortIds) set.add(id);
     return [...set].sort((a, b) => {
       const aDate = parseIntakeDate(a) ?? "";
       const bDate = parseIntakeDate(b) ?? "";
       return aDate.localeCompare(bDate);
     });
-  }, [rows]);
+  }, [rows, seededCohortIds]);
 
   const counts = useMemo(() => {
     let action = 0;
@@ -259,8 +276,12 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
         if (!matchesPreferred && !matchesAcceptable) return false;
       }
       if (q.length > 0) {
-        const haystack = `${r.name} ${r.email ?? ""} ${r.course_id ?? ""}`.toLowerCase();
-        if (!haystack.includes(q)) return false;
+        // Search matches across: lead ID (numeric), name, email, course slug.
+        // Stripping a leading '#' so "#371" works as well as "371".
+        const qStripped = q.startsWith("#") ? q.slice(1) : q;
+        const haystack =
+          `${r.id} ${r.name} ${r.email ?? ""} ${r.course_id ?? ""}`.toLowerCase();
+        if (!haystack.includes(qStripped)) return false;
       }
       return true;
     });
@@ -307,22 +328,9 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search name or course"
-            className="border border-slate-300 rounded-md pl-3 pr-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-slate-400"
+            placeholder="Search name, email, course, or #ID"
+            className="border border-slate-300 rounded-md pl-3 pr-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-slate-400"
           />
-          <button
-            type="button"
-            onClick={() => downloadCsv(filtered)}
-            disabled={filtered.length === 0}
-            title={
-              filter === "all" && query.length === 0
-                ? "Download all leads as CSV"
-                : "Download the current filtered view as CSV"
-            }
-            className="px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 hover:border-slate-400 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
-          >
-            Export CSV
-          </button>
         </div>
       </div>
 
@@ -451,6 +459,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
                       />
                     </th>
                   )}
+                  <th className="text-left px-4 py-3 font-semibold w-20">ID</th>
                   <th className="text-left px-4 py-3 font-semibold">Name</th>
                   <th className="text-left px-4 py-3 font-semibold">Course</th>
                   <th className="text-left px-4 py-3 font-semibold">In your queue</th>
@@ -493,6 +502,9 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
                         />
                       </td>
                     )}
+                    <td className="px-4 py-3 text-xs font-mono text-slate-500 tabular-nums">
+                      #{r.id}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2 flex-wrap">
                         {r.callback_pending && (

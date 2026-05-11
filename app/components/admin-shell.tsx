@@ -36,7 +36,6 @@ const NAV_SECTIONS: Array<{
       { href: "/profit", label: "Profit tracker" },
       { href: "/agents", label: "Agents" },
       { href: "/errors", label: "Data health" },
-      { href: "/audit", label: "Audit trail" },
     ],
   },
 ];

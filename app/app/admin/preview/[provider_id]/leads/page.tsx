@@ -124,6 +124,18 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
         .in("submission_id", ids)
     : { data: [] as EnrolmentRow[] };
 
+  // Canonical open intakes — mirrors the real-provider /provider/leads
+  // query so admin preview shows the same cohort filter options.
+  const { data: courseIntakesData } = await admin
+    .schema("crm")
+    .from("course_intakes")
+    .select("course_slug, intake_id")
+    .eq("status", "open");
+  const courseSlugsInRows = new Set<string | null>(subs.map((s) => s.course_id));
+  const seededIntakeIds = ((courseIntakesData ?? []) as Array<{ course_slug: string; intake_id: string }>)
+    .filter((r) => courseSlugsInRows.has(r.course_slug))
+    .map((r) => r.intake_id);
+
   const enrolBySub = new Map<number, EnrolmentRow>();
   for (const e of (enrolments ?? []) as EnrolmentRow[]) {
     enrolBySub.set(e.submission_id, e);
@@ -220,6 +232,7 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
                   rows={rows}
                   initialFilter={initialFilter}
                   linkPrefix={`/preview/${encodeURIComponent(providerId)}/leads/`}
+                  seededCohortIds={seededIntakeIds}
                 />
               </div>
               <div className="lg:col-span-1 lg:sticky lg:top-6">

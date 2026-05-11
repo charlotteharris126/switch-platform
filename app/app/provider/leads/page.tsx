@@ -66,7 +66,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   const ctx = await requireProviderUser();
   const supabase = await createClient();
 
-  const [submissionsResult, fastrackResult] = await Promise.all([
+  const [submissionsResult, fastrackResult, courseIntakesResult] = await Promise.all([
     supabase
       .schema("leads")
       .from("submissions")
@@ -80,6 +80,16 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       .schema("leads")
       .from("fastrack_submissions")
       .select("parent_submission_id"),
+    // Canonical open intakes per course — seeds the cohort filter so it
+    // shows every currently-open date for the provider's courses even
+    // before any lead has been submitted against that intake. Mirrors
+    // switchable/site/deploy/data/pages/<course>.yml intakes[].
+    supabase
+      .schema("crm")
+      .from("course_intakes")
+      .select("course_slug, intake_id, intake_date")
+      .eq("status", "open")
+      .order("intake_date", { ascending: true }),
   ]);
 
   const submissions = submissionsResult.data;
@@ -103,6 +113,20 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   for (const e of (enrolments ?? []) as EnrolmentRow[]) {
     enrolBySub.set(e.submission_id, e);
   }
+
+  // Seed cohort filter from the canonical course_intakes table — only
+  // intakes whose course matches a course this provider's leads include.
+  // Keeps the filter scoped to "courses this provider serves" without
+  // pulling crm.provider_courses (could be stale).
+  const courseSlugsInRows = new Set<string | null>(subs.map((s) => s.course_id));
+  const seededIntakeRows = (courseIntakesResult.data ?? []) as Array<{
+    course_slug: string;
+    intake_id: string;
+    intake_date: string;
+  }>;
+  const seededIntakeIds = seededIntakeRows
+    .filter((r) => courseSlugsInRows.has(r.course_slug))
+    .map((r) => r.intake_id);
 
   const rows: LeadRow[] = subs.map((s) => {
     const enrol = enrolBySub.get(s.id);
@@ -198,6 +222,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
                 rows={rows}
                 initialFilter={initialFilter}
                 onBulkMark={bulkMarkOutcomeAction}
+                seededCohortIds={seededIntakeIds}
               />
             </div>
             <div className="lg:col-span-1 lg:sticky lg:top-6">
