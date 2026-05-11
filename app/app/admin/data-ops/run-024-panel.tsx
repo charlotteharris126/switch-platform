@@ -17,10 +17,24 @@ export function Run024Panel() {
     setResult(null);
     setPendingMode(apply ? "apply" : "dry_run");
     startTransition(async () => {
-      const r = await runBackfillAction({ apply });
-      setResult(r);
-      setPendingMode(null);
-      if (apply) setConfirmApply(false);
+      try {
+        const r = await runBackfillAction({ apply });
+        setResult(r);
+      } catch (err) {
+        // Catches Server Action throws (e.g. fetch timeouts on Netlify's
+        // ~26s function cap when the Edge Function is still running). The
+        // Edge Function itself is idempotent + tolerant of partial runs,
+        // so the operator can re-run dry-run / apply to mop up.
+        setResult({
+          ok: false,
+          error:
+            (err instanceof Error ? err.message : String(err)) +
+            " — the underlying job may still be running. Re-run dry-run in a minute to see current state.",
+        });
+      } finally {
+        setPendingMode(null);
+        if (apply) setConfirmApply(false);
+      }
     });
   }
 

@@ -54,7 +54,10 @@ const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, prepare: false })
 
 const BREVO_BASE = "https://api.brevo.com/v3";
 const BATCH_SIZE = 100;
-const INTER_WRITE_DELAY_MS = 250;
+// 100ms = ~10 req/s, Brevo's documented contact API rate limit. Was 250ms
+// (4 req/s) initially; lowered after first apply hit the Server Action
+// timeout. Errors halt at 0.5% so a rate-limit burst still self-halts.
+const INTER_WRITE_DELAY_MS = 100;
 const HALT_ERROR_RATE = 0.005;
 const SPOT_CHECK_COUNT = 3;
 
