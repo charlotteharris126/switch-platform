@@ -14,18 +14,24 @@ import { SetPasswordForm } from "./set-password-form";
 
 interface Props {
   params: Promise<{ token: string }>;
+  searchParams: Promise<{ debug?: string }>;
 }
 
-export default async function SetPasswordPage({ params }: Props) {
+export default async function SetPasswordPage({ params, searchParams }: Props) {
   const { token } = await params;
+  const { debug } = await searchParams;
+  const debugMode = debug === "1";
 
   const inviteSecret = process.env.PROVIDER_INVITE_SECRET;
-  if (!inviteSecret) return <InviteUnavailable reason="Server misconfigured." />;
+  if (!inviteSecret) return <InviteUnavailable reason="Server misconfigured (no PROVIDER_INVITE_SECRET on Netlify)." />;
 
   const verify = await verifyInviteToken(token, inviteSecret);
   if (!verify.ok || !verify.payload) {
     if (verify.error === "expired") return <InviteExpired />;
-    return <InviteUnavailable reason="That invite link looks corrupted." />;
+    const detail = debugMode
+      ? `verifier returned error=${verify.error ?? "no_payload"}, token parts=${token.split(".").length}, token length=${token.length}, secret length=${inviteSecret.length}`
+      : "That invite link looks corrupted.";
+    return <InviteUnavailable reason={detail} />;
   }
 
   const admin = createAdminClient();
