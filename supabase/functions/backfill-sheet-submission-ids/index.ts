@@ -38,7 +38,7 @@ interface SheetUnidentifiedRow {
   email?: string;
   course?: string;
   course_id?: string;
-  submitted_at?: string;
+  submitted_at?: string | number | Date;
   name?: string;
   first_name?: string;
   last_name?: string;
@@ -124,11 +124,17 @@ async function run(providerId: string, apply: boolean): Promise<RunSummary> {
   // 3. For each, look up the DB match by email + course (when both present)
   const proposed: ProposedAssignment[] = [];
   const skipped: Skip[] = [];
+  // Track IDs already assigned in this batch so two sheet rows can't get
+  // the same DB id. Surfaced today when re-applications (parent+child on
+  // the same email+course) caused both legacy sheet rows to be assigned
+  // to the parent ID, then republish errored "2 rows match" on apply.
+  const assignedIds = new Set<number>();
 
   for (const row of unidentified) {
     const email = (row.email ?? "").toString().trim().toLowerCase();
     const courseRaw = (row.course_id ?? row.course ?? "").toString().trim();
     const name = composeName(row);
+    const sheetSubmittedAt = parseSheetTimestamp(row.submitted_at);
 
     if (!email) {
       skipped.push({
@@ -139,52 +145,85 @@ async function run(providerId: string, apply: boolean): Promise<RunSummary> {
       continue;
     }
 
-    // Query DB: routed-to-provider, non-DQ, non-child, matching email.
-    // Course match enforced when sheet provided a course; otherwise email
-    // alone is allowed but only if exactly one candidate exists.
-    const candidates = courseRaw
-      ? await sql<Array<{ id: number; submitted_at: string; course_id: string | null }>>`
-          SELECT id, submitted_at, course_id
+    // Candidates: routed-to-provider, non-DQ, matching email. INCLUDES
+    // children (parent_submission_id IS NOT NULL) so re-applications can
+    // be matched to their own row. Course match enforced when sheet
+    // provided a course. Order by submitted_at so parent (older) is
+    // listed first when ties happen.
+    const candidatesAll = courseRaw
+      ? await sql<Array<{ id: number; submitted_at: string; course_id: string | null; parent_submission_id: number | string | null }>>`
+          SELECT id, submitted_at, course_id, parent_submission_id
             FROM leads.submissions
            WHERE primary_routed_to = ${providerId}
              AND is_dq IS NOT TRUE
              AND archived_at IS NULL
-             AND parent_submission_id IS NULL
              AND LOWER(TRIM(email)) = ${email}
              AND LOWER(TRIM(course_id)) = ${courseRaw.toLowerCase()}
+           ORDER BY submitted_at
         `
-      : await sql<Array<{ id: number; submitted_at: string; course_id: string | null }>>`
-          SELECT id, submitted_at, course_id
+      : await sql<Array<{ id: number; submitted_at: string; course_id: string | null; parent_submission_id: number | string | null }>>`
+          SELECT id, submitted_at, course_id, parent_submission_id
             FROM leads.submissions
            WHERE primary_routed_to = ${providerId}
              AND is_dq IS NOT TRUE
              AND archived_at IS NULL
-             AND parent_submission_id IS NULL
              AND LOWER(TRIM(email)) = ${email}
+           ORDER BY submitted_at
         `;
+
+    // Drop any candidate already assigned in this batch (one ID per
+    // sheet row — never two sheet rows on the same DB id).
+    const candidates = candidatesAll.filter((c) => !assignedIds.has(Number(c.id)));
 
     if (candidates.length === 0) {
       skipped.push({
         row_index: row.row_index,
-        reason: "no_db_match",
+        reason: candidatesAll.length === 0 ? "no_db_match" : "ambiguous_db_match",
         sheet: { email, course: courseRaw || null, name },
-      });
-      continue;
-    }
-    if (candidates.length > 1) {
-      skipped.push({
-        row_index: row.row_index,
-        reason: "ambiguous_db_match",
-        sheet: { email, course: courseRaw || null, name },
-        candidate_ids: candidates.map((c) => c.id),
+        candidate_ids: candidatesAll.map((c) => Number(c.id)),
       });
       continue;
     }
 
+    let chosen: typeof candidates[number];
+    let matchReason: string;
+    if (candidates.length === 1) {
+      chosen = candidates[0];
+      matchReason = courseRaw ? "email + course (single candidate)" : "email (single candidate)";
+    } else if (sheetSubmittedAt != null) {
+      // Multiple candidates and the sheet has a usable submitted_at —
+      // pick the candidate whose submitted_at is closest. Re-applications
+      // and parents land on different sheet rows because each row's
+      // submitted_at is closer to its own DB record than to the sibling's.
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < candidates.length; i++) {
+        const dbTime = new Date(candidates[i].submitted_at).getTime();
+        const dist = Math.abs(dbTime - sheetSubmittedAt);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+      chosen = candidates[bestIdx];
+      matchReason = `email + course + submitted_at proximity (${Math.round(bestDist / 1000)}s)`;
+    } else {
+      // Multiple candidates and no usable submitted_at signal — too risky
+      // to guess. Skip as ambiguous; operator hand-fixes if needed.
+      skipped.push({
+        row_index: row.row_index,
+        reason: "ambiguous_db_match",
+        sheet: { email, course: courseRaw || null, name },
+        candidate_ids: candidates.map((c) => Number(c.id)),
+      });
+      continue;
+    }
+
+    assignedIds.add(Number(chosen.id));
     proposed.push({
       row_index: row.row_index,
-      submission_id: candidates[0].id,
-      match_reason: courseRaw ? "email + course exact" : "email exact, single candidate",
+      submission_id: Number(chosen.id),
+      match_reason: matchReason,
       sheet: { email, course: courseRaw, name },
     });
   }
@@ -234,6 +273,30 @@ function composeName(r: SheetUnidentifiedRow): string {
   if (r.name) return String(r.name);
   const parts = [r.first_name, r.last_name].filter(Boolean).map(String);
   return parts.join(" ") || "—";
+}
+
+// Sheet cells can come back from Apps Script as ISO strings, Date
+// objects (serialised via JSON.stringify to ISO strings), or numbers
+// (Excel-style serial dates if the cell is formatted that way).
+// Returns milliseconds since epoch, or null when unparseable.
+function parseSheetTimestamp(v: string | number | Date | undefined): number | null {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "number") {
+    // Apps Script numeric dates are days since 1899-12-30. If the value
+    // looks like a small integer (< 100000), treat as a serial date.
+    // Otherwise assume ms-since-epoch (already-converted timestamp).
+    if (v < 100000) {
+      const SERIAL_EPOCH = Date.UTC(1899, 11, 30);
+      return SERIAL_EPOCH + v * 86400000;
+    }
+    return v;
+  }
+  if (typeof v === "string") {
+    const parsed = Date.parse(v);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 async function fetchUnidentifiedRows(webhookUrl: string): Promise<SheetUnidentifiedRow[]> {
