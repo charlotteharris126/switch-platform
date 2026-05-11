@@ -412,6 +412,21 @@ export default async function ErrorsPage() {
         }
       />
 
+      <div className="bg-white border border-[#dde3e6] rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+        <div className="text-xs text-[#5a6a72]">
+          <span className="font-semibold text-[#11242e]">Need to fix something across the data?</span>{" "}
+          One-off backfills and repair scripts live on{" "}
+          <span className="text-[#11242e] font-semibold">Data ops</span>{" "}
+          (e.g. fastrack URLs, Brevo attribute alignment).
+        </div>
+        <Link
+          href="/data-ops"
+          className="px-3 py-1.5 bg-[#11242e] text-white text-xs font-semibold rounded hover:bg-[#1f3744] cursor-pointer shrink-0"
+        >
+          Open Data ops →
+        </Link>
+      </div>
+
       <ReconciliationCard
         data={reconciliation}
         metaReported={metaReported30d}

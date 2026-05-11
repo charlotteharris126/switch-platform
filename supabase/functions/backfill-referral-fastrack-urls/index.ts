@@ -54,10 +54,12 @@ const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, prepare: false })
 
 const BREVO_BASE = "https://api.brevo.com/v3";
 const BATCH_SIZE = 100;
-// 100ms = ~10 req/s, Brevo's documented contact API rate limit. Was 250ms
-// (4 req/s) initially; lowered after first apply hit the Server Action
-// timeout. Errors halt at 0.5% so a rate-limit burst still self-halts.
-const INTER_WRITE_DELAY_MS = 100;
+// 150ms = ~6.7 req/s. We had this at 100ms (AT Brevo's 10 req/s ceiling)
+// after the first Server-Action-timeout incident, but at-the-limit
+// starved a concurrent route-lead.ts Brevo upsert (dead-letter row,
+// lead #370, 2026-05-10). 150ms leaves headroom for normal traffic
+// while still finishing 174 audience contacts in ~30s.
+const INTER_WRITE_DELAY_MS = 150;
 const HALT_ERROR_RATE = 0.005;
 const SPOT_CHECK_COUNT = 3;
 

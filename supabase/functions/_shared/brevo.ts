@@ -45,7 +45,12 @@ const BREVO_CONTACTS_ENDPOINT = "https://api.brevo.com/v3/contacts";
 // consecutive failures, Netlify auto-disabled the whole webhook. We now accept
 // that a rare slow Brevo call costs one missed email (recoverable) rather than
 // risking the webhook (not recoverable). See changelog 2026-04-21 Session 3.3.
-const BREVO_TIMEOUT_MS = 5000;
+// 15s. Was 5s; bumped 2026-05-11 after a concurrent backfill at Brevo's
+// 10 req/s rate limit starved a route-lead.ts upsert (dead-letter row,
+// lead #370). Brevo can take >5s under load even for normal contact
+// upserts; 15s gives headroom without making user-facing failures wait
+// forever.
+const BREVO_TIMEOUT_MS = 15000;
 
 export type BrevoBrand = "switchleads" | "switchable";
 
