@@ -502,3 +502,6 @@ verify_jwt = false
 
 [functions.sheet-drift-reconcile-daily]
 verify_jwt = false
+
+[functions.reconcile-sheet-to-db]
+verify_jwt = false

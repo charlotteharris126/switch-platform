@@ -298,9 +298,10 @@ function BillingSummary({ provider }: { provider: ProviderRow | null | undefined
     const max = provider.max_fee != null ? `£${provider.max_fee}` : "-";
     lines.push({ label: "Percent of fee", value: `${provider.percent_rate}% (min ${min}, max ${max})` });
   }
-  if (provider.free_enrolments_remaining != null) {
-    lines.push({ label: "Free enrolments left", value: provider.free_enrolments_remaining });
-  }
+  // free_enrolments_remaining intentionally hidden: the counter never gets
+  // decremented (no trigger wired to crm.enrolments), so showing it would
+  // mislead providers. Revisit when billing logic hardens and a proper
+  // decrement path lands. Tracked: data correctness issue surfaced 2026-05-11.
 
   if (lines.length === 0) return <p className="text-sm text-slate-500">-</p>;
 

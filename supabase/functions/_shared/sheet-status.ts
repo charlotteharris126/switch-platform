@@ -43,3 +43,33 @@ export function lostReasonHumanText(reason: string | null): string {
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+// Inverse of statusToSheetLabel — maps a sheet's status cell back to the
+// canonical DB enum value. Used by the sheet → DB reconcile flow.
+//
+// Returns null when:
+//   - The sheet cell is empty/null (treat as no-signal; the provider hasn't
+//     touched it yet). Reconcile should leave DB alone.
+//   - The label is "Calling". The DB has three attempt_*_no_answer states
+//     and the sheet collapses them all to "Calling" — going back the other
+//     way is ambiguous. Reconcile skips these; let sheet-edit-mirror's
+//     Channel A handle attempt-count progression on real edit events.
+//   - The label is unrecognised. Conservative: skip rather than guess.
+//
+// Case-insensitive, whitespace-trimmed. "Open" returns "open" so the
+// caller can choose to no-op when sheet and DB both say open.
+export function sheetLabelToStatus(label: string | null | undefined): string | null {
+  if (label == null) return null;
+  const norm = String(label).trim().toLowerCase();
+  if (norm === "") return null;
+  switch (norm) {
+    case "open": return "open";
+    case "calling": return null; // ambiguous, skip
+    case "meeting booked": return "enrolment_meeting_booked";
+    case "enrolled": return "enrolled";
+    case "presumed enrolled": return "presumed_enrolled";
+    case "lost": return "lost";
+    case "cannot reach": return "cannot_reach";
+    default: return null;
+  }
+}
