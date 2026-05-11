@@ -1,22 +1,18 @@
-// /admin/audit — full audit trail across the platform.
+// /admin/providers/[id]/audit — audit trail scoped to one provider.
 //
-// Surfaces every row in audit.actions: who did what, when, on which
-// table/row, and the before/after values. The audit schema is exposed
-// in the Data API and gated by RLS (readonly_analytics SELECT policy).
-// Admin client (service role) bypasses RLS so we see everything.
-//
-// Filters land as URL searchParams so a filtered view can be linked or
-// bookmarked. Pagination is offset-based with a 100-row page size; for
-// deeper digging the operator can narrow by surface/action/target/date.
-//
-// For provider-scoped audit (only this provider's actions + admin actions
-// on their data), see /admin/providers/[id]/audit.
+// Surfaces every audit.actions row where the provider portal users acted
+// (context->>actor_provider_id matches) plus admin/system actions whose
+// target is one of this provider's enrolments. Default range is 30 days;
+// filterable like the global /audit page.
 
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdminUser } from "@/lib/auth/require-admin";
-import { AuditTable, type AuditRow } from "./audit-table";
+import { AuditTable, type AuditRow } from "@/app/admin/audit/audit-table";
+import { ProviderTabs } from "../tabs";
+import { Badge } from "@/components/ui/badge";
 
 type SurfaceFilter = "all" | "admin" | "provider" | "system";
 type RangeFilter = "24h" | "7d" | "30d" | "90d" | "all";
@@ -25,7 +21,6 @@ interface Filters {
   surface: SurfaceFilter;
   action: string;
   actor: string;
-  target: string;
   range: RangeFilter;
   page: number;
 }
@@ -40,30 +35,46 @@ const RANGE_HOURS: Record<RangeFilter, number | null> = {
 };
 
 interface Props {
+  params: Promise<{ id: string }>;
   searchParams: Promise<{
     surface?: string;
     action?: string;
     actor?: string;
-    target?: string;
     range?: string;
     page?: string;
   }>;
 }
 
-export default async function AuditPage({ searchParams }: Props) {
+export default async function ProviderAuditPage({ params, searchParams }: Props) {
   await requireAdminUser();
 
-  const raw = await searchParams;
+  const { id: raw } = await params;
+  const providerId = decodeURIComponent(raw);
+
+  const rawSearch = await searchParams;
   const filters: Filters = {
-    surface: parseSurface(raw.surface),
-    action: typeof raw.action === "string" ? raw.action.trim() : "",
-    actor: typeof raw.actor === "string" ? raw.actor.trim() : "",
-    target: typeof raw.target === "string" ? raw.target.trim() : "",
-    range: parseRange(raw.range),
-    page: Math.max(0, parseInt(raw.page ?? "0", 10) || 0),
+    surface: parseSurface(rawSearch.surface),
+    action: typeof rawSearch.action === "string" ? rawSearch.action.trim() : "",
+    actor: typeof rawSearch.actor === "string" ? rawSearch.actor.trim() : "",
+    range: parseRange(rawSearch.range),
+    page: Math.max(0, parseInt(rawSearch.page ?? "0", 10) || 0),
   };
 
   const admin = createAdminClient();
+
+  const { data: provider } = await admin
+    .schema("crm")
+    .from("providers")
+    .select("provider_id, company_name, is_demo")
+    .eq("provider_id", providerId)
+    .maybeSingle<{ provider_id: string; company_name: string; is_demo: boolean }>();
+  if (!provider) notFound();
+
+  // Filter: actor_provider_id in the audit row's context JSON equals this
+  // provider. Captures every provider-portal action by users belonging to
+  // this provider. Admin actions on this provider's data also carry the
+  // provider_id in context (set by callers that know they're touching a
+  // specific provider's enrolment) — same filter handles both.
   let query = admin
     .schema("audit")
     .from("actions")
@@ -71,12 +82,17 @@ export default async function AuditPage({ searchParams }: Props) {
       "id, created_at, actor_user_id, actor_email, surface, action, target_table, target_id, before_value, after_value, context",
       { count: "exact" },
     )
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    // Provider scope. context->>'actor_provider_id' = providerId matches
+    // both the provider-portal audit writer (audit.log_provider_action,
+    // which injects actor_provider_id) and the bulk variant.
+    .or(
+      `context->>actor_provider_id.eq.${providerId},context->>provider_id.eq.${providerId}`,
+    );
 
   if (filters.surface !== "all") query = query.eq("surface", filters.surface);
   if (filters.action) query = query.ilike("action", `%${filters.action}%`);
   if (filters.actor) query = query.ilike("actor_email", `%${filters.actor}%`);
-  if (filters.target) query = query.ilike("target_table", `%${filters.target}%`);
   const rangeHours = RANGE_HOURS[filters.range];
   if (rangeHours != null) {
     const cutoff = new Date(Date.now() - rangeHours * 60 * 60 * 1000).toISOString();
@@ -93,16 +109,38 @@ export default async function AuditPage({ searchParams }: Props) {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="max-w-7xl space-y-6">
+    <div className="max-w-6xl space-y-6">
       <div>
-        <h1 className="text-[28px] font-extrabold text-[#11242e] tracking-tight">
-          Audit trail
+        <Link
+          href="/providers"
+          className="text-[11px] font-bold uppercase tracking-[1.5px] text-[#cd8b76] hover:text-[#b3412e]"
+        >
+          ← Back to providers
+        </Link>
+        <h1 className="text-[28px] font-extrabold text-[#11242e] mt-2 tracking-tight">
+          {provider.company_name}
         </h1>
+        <div className="flex gap-2 mt-2 items-center">
+          <span className="text-xs text-[#5a6a72] font-mono">
+            {provider.provider_id}
+          </span>
+          {provider.is_demo && (
+            <Badge className="bg-violet-100 text-violet-800 hover:bg-violet-100">
+              Demo
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <ProviderTabs providerId={provider.provider_id} active="audit" />
+
+      <div>
+        <h2 className="text-base font-semibold text-[#11242e]">Audit trail</h2>
         <p className="text-sm text-[#5a6a72] mt-1">
-          Every recorded action on the platform — admin moves, provider portal
-          activity, system jobs. Most recent first. {total.toLocaleString()}{" "}
-          total rows match this filter. For a single provider&apos;s activity,
-          open their <Link href="/providers" className="font-semibold text-[#11242e] underline-offset-2 hover:underline">provider page</Link> and use the Audit tab.
+          Every recorded action involving {provider.company_name} — portal users
+          marking outcomes, admin moves on their leads, system jobs running on
+          their data. Most recent first. {total.toLocaleString()} total rows
+          match this filter.
         </p>
       </div>
 
@@ -111,16 +149,25 @@ export default async function AuditPage({ searchParams }: Props) {
           <CardTitle className="text-sm">Filter</CardTitle>
         </CardHeader>
         <CardContent>
-          <form method="get" className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <form method="get" className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <SelectField name="surface" label="Surface" value={filters.surface}>
               <option value="all">All</option>
               <option value="admin">Admin</option>
               <option value="provider">Provider</option>
               <option value="system">System</option>
             </SelectField>
-            <TextField name="action" label="Action contains" value={filters.action} placeholder="mark_outcome" />
-            <TextField name="actor" label="Actor email contains" value={filters.actor} placeholder="@switchleads" />
-            <TextField name="target" label="Target table contains" value={filters.target} placeholder="crm.enrolments" />
+            <TextField
+              name="action"
+              label="Action contains"
+              value={filters.action}
+              placeholder="mark_outcome"
+            />
+            <TextField
+              name="actor"
+              label="Actor email contains"
+              value={filters.actor}
+              placeholder="@example.com"
+            />
             <SelectField name="range" label="Range" value={filters.range}>
               <option value="24h">Last 24 hours</option>
               <option value="7d">Last 7 days</option>
@@ -136,7 +183,7 @@ export default async function AuditPage({ searchParams }: Props) {
                 Apply
               </button>
               <Link
-                href="/audit"
+                href={`/providers/${encodeURIComponent(providerId)}/audit`}
                 className="px-3 py-1.5 text-[#11242e] border border-[#dde3e6] rounded-md text-sm font-medium hover:bg-[#f4f1ed] transition-colors"
               >
                 Reset
@@ -162,6 +209,7 @@ export default async function AuditPage({ searchParams }: Props) {
 
       {totalPages > 1 && (
         <Pagination
+          providerId={providerId}
           filters={filters}
           totalPages={totalPages}
           shown={rows.length}
@@ -229,6 +277,7 @@ function SelectField({
 }
 
 function Pagination({
+  providerId,
   filters,
   totalPages,
   shown,
@@ -236,6 +285,7 @@ function Pagination({
   toRow,
   total,
 }: {
+  providerId: string;
   filters: Filters;
   totalPages: number;
   shown: number;
@@ -243,13 +293,17 @@ function Pagination({
   toRow: number;
   total: number;
 }) {
-  const prevHref = filters.page > 0 ? hrefWith(filters, filters.page - 1) : null;
-  const nextHref = filters.page < totalPages - 1 ? hrefWith(filters, filters.page + 1) : null;
+  const prevHref = filters.page > 0 ? hrefWith(providerId, filters, filters.page - 1) : null;
+  const nextHref =
+    filters.page < totalPages - 1 ? hrefWith(providerId, filters, filters.page + 1) : null;
 
   return (
     <div className="flex items-center justify-between gap-3 text-xs text-[#5a6a72]">
       <div>
-        Showing {shown > 0 ? `${fromRow.toLocaleString()}–${toRow.toLocaleString()}` : "0"}{" "}
+        Showing{" "}
+        {shown > 0
+          ? `${fromRow.toLocaleString()}–${toRow.toLocaleString()}`
+          : "0"}{" "}
         of {total.toLocaleString()}
       </div>
       <div className="flex items-center gap-2">
@@ -281,16 +335,16 @@ function Pagination({
   );
 }
 
-function hrefWith(filters: Filters, page: number): string {
+function hrefWith(providerId: string, filters: Filters, page: number): string {
   const params = new URLSearchParams();
   if (filters.surface !== "all") params.set("surface", filters.surface);
   if (filters.action) params.set("action", filters.action);
   if (filters.actor) params.set("actor", filters.actor);
-  if (filters.target) params.set("target", filters.target);
   if (filters.range !== "30d") params.set("range", filters.range);
   if (page > 0) params.set("page", String(page));
   const qs = params.toString();
-  return qs ? `/audit?${qs}` : "/audit";
+  const base = `/providers/${encodeURIComponent(providerId)}/audit`;
+  return qs ? `${base}?${qs}` : base;
 }
 
 function parseSurface(v: string | undefined): SurfaceFilter {

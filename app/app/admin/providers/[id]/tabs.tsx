@@ -2,13 +2,14 @@ import Link from "next/link";
 
 interface Props {
   providerId: string;
-  active: "overview" | "catch-up" | "trust";
+  active: "overview" | "catch-up" | "trust" | "audit";
 }
 
-const TABS: Array<{ key: "overview" | "catch-up" | "trust"; label: string; hrefSuffix: string }> = [
+const TABS: Array<{ key: "overview" | "catch-up" | "trust" | "audit"; label: string; hrefSuffix: string }> = [
   { key: "overview", label: "Overview", hrefSuffix: "" },
   { key: "catch-up", label: "Reporting", hrefSuffix: "/catch-up" },
   { key: "trust", label: "Trust content", hrefSuffix: "/trust" },
+  { key: "audit", label: "Audit trail", hrefSuffix: "/audit" },
 ];
 
 export function ProviderTabs({ providerId, active }: Props) {
