@@ -531,17 +531,27 @@ function buildReferralUrl(
 // nurture v2's fastrack-push automation can link learners straight to their
 // fastrack form with parent submission context resolved via client_nonce.
 //
-// Pattern reuses the existing `?ref=<client_nonce>` param that the funded-
-// form redirect handover already sets, so the thank-you page's existing
-// fastrack form rendering logic handles a nurture-email click identically
-// to a fresh form-submit landing.
+// Mirrors the exact URL shape the funded form's own thank-you redirect
+// emits (`/funded/thank-you/?ref=<nonce>&course=<slug>&m=<0|1>`). The
+// thank-you page's schedule/copy rendering reads `?course=` against
+// matrix.json — without it the page falls back to "to be confirmed"
+// even when a parent submission exists. The earlier (2026-05-09)
+// shape-only ?ref= URL was therefore broken for any click from a Brevo
+// broadcast or admin-pasted link. Fixed 2026-05-11.
 //
 // Returns empty string when client_nonce is missing (legacy pre-0087 rows
 // or non-funded submissions). Brevo template should gate rendering on the
 // attribute being non-empty.
-function buildFastrackUrl(clientNonce: string | null): string {
+function buildFastrackUrl(
+  clientNonce: string | null,
+  courseId: string | null,
+  marketingOptIn: boolean,
+): string {
   if (!clientNonce) return "";
-  return `https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(clientNonce)}`;
+  const params = [`ref=${encodeURIComponent(clientNonce)}`];
+  if (courseId) params.push(`course=${encodeURIComponent(courseId)}`);
+  params.push(`m=${marketingOptIn ? "1" : "0"}`);
+  return `https://switchable.org.uk/funded/thank-you/?${params.join("&")}`;
 }
 
 // Resolves course / region / intake / sector for a submission, branching on
@@ -696,7 +706,7 @@ export async function upsertLearnerInBrevo(
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: lostReason,
     SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
-    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce),
+    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce, submission.course_id, submission.marketing_opt_in === true),
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
@@ -785,7 +795,7 @@ async function sendU1Transactional(
     // to keep template renderers safe.
     SW_PHONE: submission.phone ?? "",
     SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
-    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce),
+    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce, submission.course_id, submission.marketing_opt_in === true),
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
@@ -898,7 +908,7 @@ export async function upsertLearnerInBrevoNoMatch(
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: "",
     SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
-    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce),
+    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce, submission.course_id, submission.marketing_opt_in === true),
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",

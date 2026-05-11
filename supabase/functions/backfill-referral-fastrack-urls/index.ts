@@ -72,9 +72,16 @@ function buildReferralUrl(referralCode: string | null): string {
     : base;
 }
 
-function buildFastrackUrl(clientNonce: string | null): string {
+function buildFastrackUrl(
+  clientNonce: string | null,
+  courseId: string | null,
+  marketingOptIn: boolean,
+): string {
   if (!clientNonce) return "";
-  return `https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(clientNonce)}`;
+  const params = [`ref=${encodeURIComponent(clientNonce)}`];
+  if (courseId) params.push(`course=${encodeURIComponent(courseId)}`);
+  params.push(`m=${marketingOptIn ? "1" : "0"}`);
+  return `https://switchable.org.uk/funded/thank-you/?${params.join("&")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,11 +129,15 @@ async function loadAudienceMap(): Promise<Map<string, SubmissionDesired>> {
     email: string;
     referral_code: string | null;
     client_nonce: string | null;
+    course_id: string | null;
+    marketing_opt_in: boolean | null;
   }>>`
     SELECT DISTINCT ON (lower(email))
       lower(email) AS email,
       referral_code,
-      client_nonce
+      client_nonce,
+      course_id,
+      marketing_opt_in
     FROM leads.submissions
     WHERE email IS NOT NULL
       AND marketing_opt_in = true
@@ -139,7 +150,7 @@ async function loadAudienceMap(): Promise<Map<string, SubmissionDesired>> {
       referral_code: r.referral_code,
       client_nonce: r.client_nonce,
       desired_referral_url: buildReferralUrl(r.referral_code),
-      desired_fastrack_url: buildFastrackUrl(r.client_nonce),
+      desired_fastrack_url: buildFastrackUrl(r.client_nonce, r.course_id, r.marketing_opt_in === true),
     });
   }
   return map;
