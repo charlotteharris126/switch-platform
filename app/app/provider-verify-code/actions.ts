@@ -19,8 +19,8 @@ export async function providerLoginVerifyAction(args: {
   const email = typeof args.email === "string" ? args.email.trim().toLowerCase() : "";
   const code = typeof args.code === "string" ? args.code.trim() : "";
 
-  if (!email || !/^\d{6}$/.test(code)) {
-    return { ok: false, error: "Enter the 6-digit code." };
+  if (!email || !/^\d{6,8}$/.test(code)) {
+    return { ok: false, error: "Enter the sign-in code from your email." };
   }
 
   const supabase = await createClient();

@@ -70,7 +70,7 @@ export default async function SetPasswordPage({ params, searchParams }: Props) {
         <p className="text-slate-600 mt-3 text-sm">
           Hi{row.display_name ? `, ${row.display_name}` : ""}. Choose a password for your
           portal account. Next time you sign in, you&apos;ll enter your email
-          and this password, then a 6-digit code we email you (only when
+          and this password, then a short code we email you (only when
           you sign in fresh — day to day you stay signed in).
         </p>
         <SetPasswordForm token={token} email={row.contact_email} />

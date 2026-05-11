@@ -23,7 +23,7 @@ export default async function VerifyCodePage({ searchParams }: Props) {
         <p className="text-xs uppercase tracking-widest text-slate-500 font-semibold">SwitchLeads</p>
         <h1 className="text-2xl font-semibold text-slate-900 mt-2">Enter your code</h1>
         <p className="text-slate-600 mt-3 text-sm">
-          We&apos;ve emailed a 6-digit code to{" "}
+          We&apos;ve emailed a sign-in code to{" "}
           <strong className="text-slate-900">{email}</strong>. It expires in a few
           minutes.
         </p>

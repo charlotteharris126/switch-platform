@@ -16,12 +16,13 @@ export function VerifyForm({ email, next }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   // Strip non-digits as the user types so paste-with-spaces "1 2 3 4 5 6"
-  // resolves to "123456" cleanly.
+  // resolves to "123456" cleanly. Supabase OTP length is project-configured
+  // (default 8 for recent versions, 6 on older); accept the 6-8 range.
   function onCodeChange(raw: string) {
-    setCode(raw.replace(/\D/g, "").slice(0, 6));
+    setCode(raw.replace(/\D/g, "").slice(0, 8));
   }
 
-  const canSubmit = code.length === 6 && !pending;
+  const canSubmit = code.length >= 6 && code.length <= 8 && !pending;
 
   function submit() {
     if (!canSubmit) return;
@@ -40,7 +41,7 @@ export function VerifyForm({ email, next }: Props) {
     <div className="mt-5 space-y-4">
       <div>
         <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-          6-digit code
+          Sign-in code
         </label>
         <input
           type="text"
@@ -52,7 +53,7 @@ export function VerifyForm({ email, next }: Props) {
             if (e.key === "Enter") submit();
           }}
           className="w-full border border-slate-300 rounded-md px-3 py-3 text-xl tracking-[0.5em] tabular-nums text-center font-semibold focus:outline-none focus:ring-2 focus:ring-slate-400"
-          placeholder="••••••"
+          placeholder="••••••••"
         />
       </div>
 

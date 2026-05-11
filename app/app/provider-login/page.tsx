@@ -34,7 +34,7 @@ export default async function ProviderLoginPage({ searchParams }: Props) {
           </div>
         )}
         <p className="text-slate-600 mt-3 text-sm">
-          Enter your email and password. We&apos;ll send you a 6-digit code to
+          Enter your email and password. We&apos;ll email you a sign-in code to
           confirm it&apos;s you on this device.
         </p>
         <LoginForm next={next ?? null} />

@@ -306,7 +306,7 @@ function renderInviteEmail(args: {
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #0f172a;">
   <p style="margin: 0 0 16px;">Hi,</p>
   <p style="margin: 0 0 16px;">You've been invited to set up portal access for <strong>${escapeHtml(args.company)}</strong> on SwitchLeads.</p>
-  <p style="margin: 0 0 16px;">Click the button below to choose a password. From then on, you'll sign in with your email + that password, and we'll email you a 6-digit code on fresh devices to confirm it's you.</p>
+  <p style="margin: 0 0 16px;">Click the button below to choose a password. From then on, you'll sign in with your email + that password, and we'll email you a short sign-in code on fresh devices to confirm it's you.</p>
   <p style="margin: 24px 0;">
     <a href="${escapeHtml(args.inviteUrl)}" style="display: inline-block; background: #0f172a; color: #ffffff; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600;">Set up your password</a>
   </p>
