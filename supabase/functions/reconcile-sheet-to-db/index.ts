@@ -165,8 +165,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const providerId = typeof body.provider_id === "string" ? body.provider_id : null;
   if (!providerId) return json({ ok: false, error: "provider_id required" }, 400);
   const apply = body.apply === true;
+  // Coerce string-or-number IDs to numbers (postgres.js returns BIGINT
+  // as strings by default, so a round-trip via Server Action can arrive
+  // here as strings). Same fix as in republish-provider-sheet.
   const whitelist = Array.isArray(body.submission_ids)
-    ? new Set((body.submission_ids as unknown[]).filter((x): x is number => typeof x === "number"))
+    ? new Set(
+        (body.submission_ids as unknown[])
+          .map((x) => typeof x === "number" || typeof x === "string" ? Number(x) : NaN)
+          .filter((n) => Number.isFinite(n)),
+      )
     : null;
 
   try {
@@ -315,9 +322,14 @@ async function run(
   const skippedAmbiguous = skipped.filter((s) => s.reason === "ambiguous").length;
   const skippedNoSignal = skipped.filter((s) => s.reason === "no_signal").length;
   const skippedDbFresher = skipped.filter((s) => s.reason === "db_fresher").length;
+  // postgres.js returns BIGINT columns as strings by default, so even
+  // though the TS type says number, lead.submission_id can be a string
+  // at runtime. Coerce here so the IDs serialize cleanly and republish
+  // can use them as a SQL filter (= ANY(BIGINT[])).
   const dbFresherIds = skipped
     .filter((s) => s.reason === "db_fresher")
-    .map((s) => s.submission_id);
+    .map((s) => Number(s.submission_id))
+    .filter((n) => Number.isFinite(n));
   const skippedTargetDisallowed = skipped.filter((s) => s.reason === "target_disallowed").length;
 
   if (!apply) {

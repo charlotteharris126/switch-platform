@@ -292,8 +292,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ ok: false, error: "provider_id required" }, 400);
   }
   const apply = body.apply === true;
+  // PostgreSQL BIGINT columns come back from postgres.js as strings by
+  // default. So submission_ids from a previous Edge Function call may
+  // arrive here as strings ("123") even though the type says number[].
+  // Coerce via Number() and keep only finite results so the SQL filter
+  // doesn't silently drop everything.
   const submissionFilter = Array.isArray(body.submission_ids)
-    ? (body.submission_ids as unknown[]).filter((x): x is number => typeof x === "number")
+    ? (body.submission_ids as unknown[])
+        .map((x) => typeof x === "number" || typeof x === "string" ? Number(x) : NaN)
+        .filter((x) => Number.isFinite(x))
     : null;
 
   try {
