@@ -67,7 +67,7 @@ const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
 const STALE_ATTEMPT_MS = 48 * 60 * 60 * 1000;
 function isActionRow(r: LeadRow): boolean {
   if (r.callback_pending) return true;
-  if (r.has_fastrack && r.status !== "lost" && r.status !== "presumed_enrolled") return true;
+  if (r.has_fastrack && !FASTRACK_SETTLED.has(r.status)) return true;
   if (r.status === "open") return true;
   if (
     (r.status === "attempt_1_no_answer" ||
@@ -88,6 +88,9 @@ const CALLING = new Set<LeadStatus>([
 ]);
 const ENROLLED = new Set<LeadStatus>(["enrolled", "presumed_enrolled"]);
 const COLD = new Set<LeadStatus>(["lost", "cannot_reach"]);
+// Statuses that mean a fastrack is no longer the next action. Excludes
+// cannot_reach so a learner who comes back can still be picked up.
+const FASTRACK_SETTLED = new Set<LeadStatus>(["lost", "enrolled", "presumed_enrolled"]);
 
 type BulkResult = { ok: boolean; applied: number; skipped: number; error?: string };
 
@@ -181,7 +184,10 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
     for (const r of rows) {
       if (isActionRow(r)) action += 1;
       if (r.callback_pending) callback += 1;
-      if (r.has_fastrack) fastrack += 1;
+      // Fastrack count excludes already-settled leads (lost, enrolled,
+      // presumed_enrolled) — once a lead is closed out the fastrack is
+      // no longer the next action. Matches the home-page badge logic.
+      if (r.has_fastrack && !FASTRACK_SETTLED.has(r.status)) fastrack += 1;
       if (r.status === "open") open += 1;
       if (CALLING.has(r.status)) calling += 1;
       if (r.status === "enrolment_meeting_booked") meeting += 1;
@@ -201,7 +207,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
       } else if (filter === "callback") {
         if (!r.callback_pending) return false;
       } else if (filter === "fastrack") {
-        if (!r.has_fastrack) return false;
+        if (!r.has_fastrack || FASTRACK_SETTLED.has(r.status)) return false;
       } else if (filter === "open") {
         if (r.status !== "open") return false;
       } else if (filter === "calling") {

@@ -155,10 +155,23 @@ export default async function ProviderHomePage() {
   const allRoutedIds = new Set<number>(allRouted.map((r) => r.id));
 
   // Fastrack-ready = routed leads with a fastrack submission, NOT yet at a
-  // settled enrolment status (still actionable).
+  // settled enrolment status (still actionable). Settled = lost /
+  // presumed_enrolled / enrolled — once a lead has hit any of those, the
+  // fastrack is no longer the next action regardless of what the form
+  // captured. cannot_reach stays in scope because the learner might come
+  // back. Caught 2026-05-11 when lead 375 (Lisa Parker, lost + fastrack)
+  // showed in "Needs your attention" despite being closed out.
+  const SETTLED_FOR_FASTRACK = new Set(["lost", "presumed_enrolled", "enrolled"]);
+  const settledIds = new Set<number>(
+    enrolments
+      .filter((e) => SETTLED_FOR_FASTRACK.has(e.status))
+      .map((e) => e.submission_id),
+  );
   const fastrackRows = (fastrackResult.data ?? []) as FastrackTimedRow[];
   const fastrackParentIds = new Set<number>(fastrackRows.map((r) => r.parent_submission_id));
-  const fastrackReadyIds = [...fastrackParentIds].filter((id) => allRoutedIds.has(id));
+  const fastrackReadyIds = [...fastrackParentIds].filter(
+    (id) => allRoutedIds.has(id) && !settledIds.has(id),
+  );
   const fastrackReadyCount = fastrackReadyIds.length;
 
   // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >48h ago.
@@ -183,7 +196,10 @@ export default async function ProviderHomePage() {
   );
   const oldestFastrackSince = oldestIso(
     fastrackRows
-      .filter((r) => allRoutedIds.has(r.parent_submission_id))
+      .filter(
+        (r) => allRoutedIds.has(r.parent_submission_id)
+          && !settledIds.has(r.parent_submission_id),
+      )
       .map((r) => r.submitted_at),
   );
   const oldestOpenSince = oldestIso(
