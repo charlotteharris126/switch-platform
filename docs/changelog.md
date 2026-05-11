@@ -4,6 +4,27 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-11 (Session 40) — Daily sheet ↔ DB drift reconcile cron
+
+**Type:** 1 new Edge Function + 1 migration (0115) + 1 Apps Script mode + 1 shared module extraction.
+
+- **Why:** `republish-provider-sheet` shipped in Session 39 as the recovery path for sheet drift, but detection was operator-discretion ("run the republish tool when you suspect something"). Lead #375's two-day silent drift bit before the fix landed; the cron is the proactive counterpart that surfaces drift within ~24h instead of waiting for an operator to notice.
+- **Edge Function `sheet-drift-reconcile-daily`** (`supabase/functions/sheet-drift-reconcile-daily/index.ts`). For every active provider with a `sheet_webhook_url`, POSTs the appender's new `read_all_status` mode, projects each routed-non-DQ DB lead through `_shared/sheet-status.ts` (`statusToSheetLabel` + `lostReasonHumanText` — the same projection `republish-provider-sheet` writes with, so the two tools agree on "what the sheet should say"), and compares against the sheet cells. Records drift kinds (`status`, `lost_reason`, `fastracked`, `missing_from_sheet`) and writes `leads.dead_letter` source `sheet_drift_detected` rows. Dedupes against existing unresolved drift rows by `(provider_id, submission_id, sorted-kinds)` so persisting-from-yesterday drift doesn't re-fire. Per-provider read failures (unknown mode, missing Submission ID column, fetch error) land as source `sheet_drift_provider_skipped` with 23h-window dedup. Emails owner a summary when any new drift detected. Auth: `x-audit-key`. Deploy with `--no-verify-jwt`.
+- **Apps Script `read_all_status` mode** (`apps-scripts/provider-sheet-appender-v2.gs`). Read-only — no cells touched. Returns one JSON row per data row keyed by Submission ID, carrying values for the drift-relevant columns. Sheets without a Submission ID column return `ok:false`; the cron caller surfaces those as `sheet_drift_provider_skipped` so the gap is operator-visible.
+- **Migration 0115** schedules `sheet-drift-reconcile-daily` cron at 06:00 UTC daily (07:00 BST) — sits before the 08:00 meta-ads and 09:00 stalled-email crons so the morning summary email lands clean of cross-noise. Mirrors the `email-stalled-cron` migration pattern (`net.http_post` via vault `AUDIT_SHARED_SECRET`). 120s timeout for headroom on cold-start sheet reads.
+- **Shared module extraction:** moved `statusToSheetLabel` + `lostReasonHumanText` out of `republish-provider-sheet/index.ts` into `_shared/sheet-status.ts`. Two consumers today (republish + drift cron), one source of truth for the projection. `fastrack-receive` keeps its own specialised lost_reason humaniser for the two fastrack-specific reasons (different intent).
+- **Dead_letter naming:** new sources are `sheet_drift_detected` (per-drift) and `sheet_drift_provider_skipped` (per-provider read failure). Both visible to `/admin/errors` via the existing `crm.dead_letter`-backed query.
+- **Impact assessment** (per `.claude/rules/data-infrastructure.md §8`):
+  - Change: 1 cron schedule + 1 Edge Function + 1 helper script mode. No schema change.
+  - Readers: cron function reads `crm.providers`, `leads.submissions`, `crm.enrolments`, `leads.dead_letter` (dedup). Apps Script reads sheet rows (read-only).
+  - Writers: cron function INSERTs `leads.dead_letter` via existing `functions_writer` role (RLS policy + GRANT both already in place from migrations 0001 + 0002). No new GRANTs.
+  - Schema version: not affected. No payload changes.
+  - Rollback: `cron.unschedule('sheet-drift-reconcile-daily')` + delete Edge Function deploy. Sheets keep working — `read_all_status` mode is additive and harmless if never called.
+- **Pre-cutover requirement (owner action):** every active provider sheet must be redeployed with the 2026-05-11 `provider-sheet-appender-v2.gs` before the cron covers it. Sheets pending redeploy: EMS, WYK, Courses Direct (also any demo sheet if active). Until redeployed, the cron logs one `sheet_drift_provider_skipped` per day per sheet ("unknown mode: read_all_status") and skips comparison for that provider — visible at `/admin/errors`.
+- **Sign-off:** in-session owner approval per Session 39 handoff sequencing this as Session 40's first task. Migration unapplied + functions undeployed at session close per the deploy-batching workflow; deploy ritual queued for the session-end batch.
+
+---
+
 ## 2026-05-11 — Brevo backfill: SW_REFERRAL_URL + SW_FASTRACK_URL (Wren ask, completed)
 
 **Type:** 1 data-ops local script + 1 Edge Function + 1 admin UI panel. Pre-broadcast data hygiene.

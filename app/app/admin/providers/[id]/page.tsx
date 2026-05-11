@@ -101,17 +101,28 @@ export default async function ProviderDetailPage({
 
       <ProviderTabs providerId={provider.provider_id} active="overview" />
 
-      {provider.sheet_webhook_url && (
-        <div className="text-xs text-[#5a6a72] flex items-center gap-2">
-          <span>Sheet drift suspected?</span>
+      <div className="text-xs text-[#5a6a72] flex items-center gap-4 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span>Want to dogfood their portal?</span>
           <Link
-            href={`/errors?republish=${provider.provider_id}#sheet-drift`}
+            href={`/preview/${encodeURIComponent(provider.provider_id)}/leads`}
             className="font-semibold text-[#11242e] hover:underline underline-offset-2"
           >
-            Republish from Data health →
+            View as {provider.company_name} →
           </Link>
         </div>
-      )}
+        {provider.sheet_webhook_url && (
+          <div className="flex items-center gap-2">
+            <span>Sheet drift suspected?</span>
+            <Link
+              href={`/errors?republish=${provider.provider_id}#sheet-drift`}
+              className="font-semibold text-[#11242e] hover:underline underline-offset-2"
+            >
+              Republish from Data health →
+            </Link>
+          </div>
+        )}
+      </div>
 
       <Card>
         <CardHeader>

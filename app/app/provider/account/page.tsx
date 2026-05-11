@@ -198,24 +198,30 @@ export default async function ProviderAccountPage() {
           />
         </Card>
 
-        {/* Provider info */}
-        <Card title="Your business" subtitle="What we have on file. Email support@switchleads.co.uk to change anything here.">
-          <Row label="Company" value={provider?.company_name ?? "-"} />
-          <Row label="Business email" value={provider?.contact_email ?? "-"} />
-          <Row label="Business phone" value={provider?.contact_phone ?? "-"} />
-          <Row
-            label="Pilot status"
-            value={provider?.pilot_status ? humanise(provider.pilot_status) : "-"}
-          />
-          {provider?.is_demo && (
-            <Row label="" value={<span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-800 border border-violet-200">Demo provider</span>} />
-          )}
-        </Card>
+        {/* Provider info — admin-only. Business and pricing are owner-level
+            context; team members on the User role don't need (and shouldn't
+            see) commercial terms. */}
+        {callerIsAdmin && (
+          <Card title="Your business" subtitle="What we have on file. Email support@switchleads.co.uk to change anything here.">
+            <Row label="Company" value={provider?.company_name ?? "-"} />
+            <Row label="Business email" value={provider?.contact_email ?? "-"} />
+            <Row label="Business phone" value={provider?.contact_phone ?? "-"} />
+            <Row
+              label="Pilot status"
+              value={provider?.pilot_status ? humanise(provider.pilot_status) : "-"}
+            />
+            {provider?.is_demo && (
+              <Row label="" value={<span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-800 border border-violet-200">Demo provider</span>} />
+            )}
+          </Card>
+        )}
 
-        {/* Billing */}
-        <Card title="Pricing">
-          <BillingSummary provider={provider} />
-        </Card>
+        {/* Billing — admin-only, same reasoning. */}
+        {callerIsAdmin && (
+          <Card title="Pricing">
+            <BillingSummary provider={provider} />
+          </Card>
+        )}
 
         {/* Support */}
         <Card title="Need help?">

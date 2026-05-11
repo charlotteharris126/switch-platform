@@ -12,6 +12,18 @@
 // `lostreason`. Sheets must be redeployed with this script (and add the
 // two new column headers) for fastrack writes to land.
 //
+// 2026-05-11 update: added "read_all_status" mode for the daily sheet ↔ DB
+// drift reconcile cron. Returns one row per data row in the sheet,
+// keyed by Submission ID, carrying the cell values for Status, Lost
+// Reason, Fastrack Application Filled, and Fastrack Details. The Edge
+// Function `sheet-drift-reconcile-daily` calls this mode against every
+// active provider's sheet, projects DB state through the same status
+// label / lost-reason humaniser the appender writes with, and flags any
+// disagreement to dead_letter. Read-only — no cells touched. Sheets
+// must be redeployed with this script before they participate in drift
+// detection; until redeploy, the cron logs "unknown mode" against that
+// provider's sheet and skips comparison.
+//
 // What v2 does differently from v1:
 //   v1: hardcoded column order (Lead ID | Submitted at | ... | Notes) matching
 //   the EMS sheet's layout. Every new provider that wanted a different header
@@ -187,6 +199,9 @@ function doPost(e) {
     if (mode === 'update_by_submission_id') {
       return handleUpdateBySubmissionId_(sheet, headers, lastColumn, body);
     }
+    if (mode === 'read_all_status') {
+      return handleReadAllStatus_(sheet, headers, lastColumn);
+    }
     return json_({ok: false, error: 'unknown mode: ' + mode});
   } catch (err) {
     return json_({ok: false, error: String(err)});
@@ -278,6 +293,70 @@ function handleUpdateBySubmissionId_(sheet, headers, lastColumn, body) {
   }
 
   return json_({ok: true, mode: 'update_by_submission_id', row: sheetRow, updates: updates});
+}
+
+// Read-all-status mode: scan every data row (row 2..lastRow) and return
+// one JSON object per row carrying the Submission ID and the cell values
+// for the drift-relevant headers (status, lost_reason, fastracked,
+// fastrack_notes). Used by sheet-drift-reconcile-daily once a day to
+// confirm the sheet still agrees with the DB. Read-only — no cells
+// touched.
+//
+// Rows without a Submission ID column value are skipped (the column may
+// be blank for legacy rows added before Session 34's column rollout).
+// Skipped rows are reported in the `skipped_no_submission_id` count so
+// the operator knows whether the sheet still has uncovered drift surface.
+function handleReadAllStatus_(sheet, headers, lastColumn) {
+  // Map sheet column index → canonical payload key (or null if header
+  // isn't in FIELD_MAP). Only payload keys we care about for drift are
+  // emitted in the output rows; everything else is ignored.
+  const READ_KEYS = ['submission_id', 'status', 'lost_reason', 'fastracked', 'fastrack_notes'];
+  const keyByCol = headers.map(function(h) {
+    const key = FIELD_MAP[normaliseHeader_(h)];
+    return key && READ_KEYS.indexOf(key) !== -1 ? key : null;
+  });
+
+  // Sheet must have a Submission ID column for drift detection. Without
+  // it we can't key DB rows back to sheet rows, so the cron caller logs
+  // a one-off "no Submission ID column" alert and skips this provider.
+  const hasSubmissionIdCol = keyByCol.indexOf('submission_id') !== -1;
+  if (!hasSubmissionIdCol) {
+    return json_({ok: false, error: 'sheet has no Submission ID column for read_all_status mode'});
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return json_({ok: true, mode: 'read_all_status', rows: [], skipped_no_submission_id: 0});
+  }
+
+  const data = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues();
+  const rows = [];
+  let skippedNoSid = 0;
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const out = {};
+    for (let c = 0; c < keyByCol.length; c++) {
+      const key = keyByCol[c];
+      if (!key) continue;
+      const v = row[c];
+      if (v === '' || v === null || v === undefined) continue;
+      // submission_id is stored numerically in sheets; stringify so the
+      // caller can compare against DB ids without worrying about types.
+      out[key] = key === 'submission_id' ? String(v) : v;
+    }
+    if (!out.submission_id) {
+      skippedNoSid++;
+      continue;
+    }
+    rows.push(out);
+  }
+
+  return json_({
+    ok: true,
+    mode: 'read_all_status',
+    rows: rows,
+    skipped_no_submission_id: skippedNoSid
+  });
 }
 
 // Normalise a header cell for FIELD_MAP lookup: lowercase, strip all

@@ -499,3 +499,6 @@ verify_jwt = false
 
 [functions.republish-provider-sheet]
 verify_jwt = false
+
+[functions.sheet-drift-reconcile-daily]
+verify_jwt = false

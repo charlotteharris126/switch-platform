@@ -38,6 +38,7 @@
 // function is idempotent — same row state in → same row state out).
 
 import postgres from "npm:postgres@3";
+import { lostReasonHumanText, statusToSheetLabel } from "../_shared/sheet-status.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) throw new Error("SUPABASE_DB_URL not set");
@@ -81,38 +82,6 @@ async function getAuditSharedSecret(): Promise<string> {
   const secret = rows[0]?.secret;
   if (!secret) throw new Error("AUDIT_SHARED_SECRET not in vault");
   return secret;
-}
-
-function statusToSheetLabel(status: string): string {
-  // Mirrors the appender's accepted values. Sheet has a status dropdown
-  // with these labels — fastrack-receive uses the same set.
-  switch (status) {
-    case "open":
-      return "Open";
-    case "attempt_1_no_answer":
-    case "attempt_2_no_answer":
-    case "attempt_3_no_answer":
-      return "Calling";
-    case "enrolment_meeting_booked":
-      return "Meeting booked";
-    case "enrolled":
-      return "Enrolled";
-    case "presumed_enrolled":
-      return "Presumed enrolled";
-    case "lost":
-      return "Lost";
-    case "cannot_reach":
-      return "Cannot reach";
-    default:
-      return status;
-  }
-}
-
-function lostReasonHumanText(reason: string | null): string {
-  if (!reason) return "";
-  return reason
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function sleep(ms: number): Promise<void> {

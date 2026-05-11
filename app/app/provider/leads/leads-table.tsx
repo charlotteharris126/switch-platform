@@ -90,11 +90,18 @@ type BulkResult = { ok: boolean; applied: number; skipped: number; error?: strin
 interface Props {
   rows: LeadRow[];
   initialFilter?: Filter;
-  onBulkMark: (args: {
+  // Optional. When omitted the bulk-mark UI (select column + BulkBar) is
+  // hidden — used by the admin preview at /admin/preview/[provider_id]/leads
+  // where writes need to stay disabled.
+  onBulkMark?: (args: {
     submissionIds: number[];
     status: "cannot_reach" | "lost";
     lostReason?: string | null;
   }) => Promise<BulkResult>;
+  // Where lead-name links route to. Defaults to /provider/leads/. The admin
+  // preview overrides this to /admin/leads/ so a click drops the admin into
+  // their own lead detail page (which renders more than the provider one).
+  linkPrefix?: string;
 }
 
 const LOST_REASON_LABEL: Record<LostReason, string> = {
@@ -111,7 +118,8 @@ const LOST_REASON_LABEL: Record<LostReason, string> = {
 // Lost reasons valid for bulk lost (from any non-enrolled state).
 const BULK_LOST_REASONS = VALID_LOST_REASONS.filter((r) => r !== "withdrew_after_enrolment");
 
-export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
+export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix = "/provider/leads/" }: Props) {
+  const allowBulk = onBulkMark !== undefined;
   const [filter, setFilter] = useState<Filter>(initialFilter);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -261,7 +269,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
         </div>
       ) : (
         <>
-          {selected.size > 0 && (
+          {allowBulk && selected.size > 0 && (
             <BulkBar
               selectedCount={selected.size}
               pending={bulkPending}
@@ -277,7 +285,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
                 setBulkResult(null);
                 startBulkTransition(async () => {
                   const ids = [...selected];
-                  const r = await onBulkMark({ submissionIds: ids, status: "cannot_reach" });
+                  const r = await onBulkMark!({ submissionIds: ids, status: "cannot_reach" });
                   if (r.ok) {
                     setBulkResult({ kind: "ok", applied: r.applied, skipped: r.skipped });
                     setSelected(new Set());
@@ -291,7 +299,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
                 setBulkResult(null);
                 startBulkTransition(async () => {
                   const ids = [...selected];
-                  const r = await onBulkMark({
+                  const r = await onBulkMark!({
                     submissionIds: ids,
                     status: "lost",
                     lostReason,
@@ -315,32 +323,34 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-4 py-3 w-10">
-                    <input
-                      type="checkbox"
-                      checked={
-                        filtered.length > 0 && filtered.every((r) => selected.has(r.id))
-                      }
-                      ref={(el) => {
-                        if (el) {
-                          const some = filtered.some((r) => selected.has(r.id));
-                          const all = filtered.every((r) => selected.has(r.id));
-                          el.indeterminate = some && !all;
+                  {allowBulk && (
+                    <th className="px-4 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filtered.length > 0 && filtered.every((r) => selected.has(r.id))
                         }
-                      }}
-                      onChange={(e) => {
-                        const next = new Set(selected);
-                        if (e.target.checked) {
-                          for (const r of filtered) next.add(r.id);
-                        } else {
-                          for (const r of filtered) next.delete(r.id);
-                        }
-                        setSelected(next);
-                      }}
-                      className="cursor-pointer"
-                      aria-label="Select all visible leads"
-                    />
-                  </th>
+                        ref={(el) => {
+                          if (el) {
+                            const some = filtered.some((r) => selected.has(r.id));
+                            const all = filtered.every((r) => selected.has(r.id));
+                            el.indeterminate = some && !all;
+                          }
+                        }}
+                        onChange={(e) => {
+                          const next = new Set(selected);
+                          if (e.target.checked) {
+                            for (const r of filtered) next.add(r.id);
+                          } else {
+                            for (const r of filtered) next.delete(r.id);
+                          }
+                          setSelected(next);
+                        }}
+                        className="cursor-pointer"
+                        aria-label="Select all visible leads"
+                      />
+                    </th>
+                  )}
                   <th className="text-left px-4 py-3 font-semibold">Name</th>
                   <th className="text-left px-4 py-3 font-semibold">Course</th>
                   <th className="text-left px-4 py-3 font-semibold">In your queue</th>
@@ -361,26 +371,28 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark }: Props) {
                             : ""
                     }`}
                   >
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(r.id)}
-                        onChange={(e) => {
-                          const next = new Set(selected);
-                          if (e.target.checked) next.add(r.id);
-                          else next.delete(r.id);
-                          setSelected(next);
-                        }}
-                        className="cursor-pointer"
-                        aria-label={`Select ${r.name}`}
-                      />
-                    </td>
+                    {allowBulk && (
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(r.id)}
+                          onChange={(e) => {
+                            const next = new Set(selected);
+                            if (e.target.checked) next.add(r.id);
+                            else next.delete(r.id);
+                            setSelected(next);
+                          }}
+                          className="cursor-pointer"
+                          aria-label={`Select ${r.name}`}
+                        />
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2 flex-wrap">
                         {r.callback_pending && (
                           <span className="inline-block w-2 h-2 rounded-full bg-rose-500" aria-label="Callback requested" />
                         )}
-                        <Link href={`/provider/leads/${r.id}`} className="text-slate-900 font-medium hover:underline cursor-pointer">
+                        <Link href={`${linkPrefix}${r.id}`} className="text-slate-900 font-medium hover:underline cursor-pointer">
                           {r.name}
                         </Link>
                         {r.callback_pending && (
