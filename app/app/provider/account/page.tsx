@@ -19,7 +19,7 @@ import { PasskeyList } from "./passkey-list";
 import { DisplayNameForm } from "./display-name-form";
 import { TeamPanel, type TeamUserRow } from "./team-panel";
 import { removePasskeyAction, updateDisplayNameAction } from "./actions";
-import { inviteProviderUserAction } from "./team-actions";
+import { inviteProviderUserAction, removeProviderUserAction } from "./team-actions";
 
 interface ProviderUserRow {
   id: number;
@@ -102,6 +102,7 @@ export default async function ProviderAccountPage() {
       .from("provider_users")
       .select("id, contact_email, display_name, role, status, invited_at, last_login_at")
       .eq("provider_id", pu.provider_id)
+      .neq("status", "removed")
       .order("invited_at", { ascending: true }),
   ]);
 
@@ -195,6 +196,7 @@ export default async function ProviderAccountPage() {
             callerIsAdmin={callerIsAdmin}
             users={teamUsers}
             onInvite={inviteProviderUserAction}
+            onRemove={removeProviderUserAction}
           />
         </Card>
 

@@ -79,6 +79,7 @@ export default async function PreviewAccountPage({ params }: Props) {
       .from("provider_users")
       .select("id, contact_email, display_name, role, status, invited_at, last_login_at")
       .eq("provider_id", providerId)
+      .neq("status", "removed")
       .order("invited_at", { ascending: true }),
     // Pull passkeys for every provider_user in one go, then group client-side.
     admin

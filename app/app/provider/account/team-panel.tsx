@@ -27,9 +27,14 @@ interface Props {
     role: "provider_admin" | "provider_user";
     display_name?: string;
   }) => Promise<{ ok: boolean; expiresAt?: string; error?: string }>;
+  onRemove: (args: { provider_user_id: number }) => Promise<{
+    ok: boolean;
+    removedEmail?: string;
+    error?: string;
+  }>;
 }
 
-export function TeamPanel({ callerIsAdmin, users, onInvite }: Props) {
+export function TeamPanel({ callerIsAdmin, users, onInvite, onRemove }: Props) {
   const [showInvite, setShowInvite] = useState(false);
 
   return (
@@ -41,6 +46,7 @@ export function TeamPanel({ callerIsAdmin, users, onInvite }: Props) {
             user={u}
             callerIsAdmin={callerIsAdmin}
             onResend={onInvite}
+            onRemove={onRemove}
           />
         ))}
       </ul>
@@ -84,14 +90,19 @@ function UserRow({
   user,
   callerIsAdmin,
   onResend,
+  onRemove,
 }: {
   user: TeamUserRow;
   callerIsAdmin: boolean;
   onResend: Props["onInvite"];
+  onRemove: Props["onRemove"];
 }) {
   const [pending, startTransition] = useTransition();
+  const [removePending, startRemoveTransition] = useTransition();
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [result, setResult] = useState<
     | { kind: "ok"; expiresAt: string }
+    | { kind: "removed"; email: string }
     | { kind: "error"; message: string }
     | null
   >(null);
@@ -109,6 +120,20 @@ function UserRow({
       });
       if (r.ok) setResult({ kind: "ok", expiresAt: r.expiresAt ?? "" });
       else setResult({ kind: "error", message: r.error ?? "Failed" });
+    });
+  }
+
+  function fireRemove() {
+    setResult(null);
+    startRemoveTransition(async () => {
+      const r = await onRemove({ provider_user_id: user.id });
+      if (r.ok) {
+        setResult({ kind: "removed", email: r.removedEmail ?? user.contact_email });
+        setConfirmRemove(false);
+      } else {
+        setResult({ kind: "error", message: r.error ?? "Failed to remove" });
+        setConfirmRemove(false);
+      }
     });
   }
 
@@ -154,25 +179,63 @@ function UserRow({
             Fresh invite sent.
           </div>
         )}
+        {result?.kind === "removed" && (
+          <div className="mt-2 text-xs text-slate-700 bg-slate-100 border border-slate-200 rounded p-2">
+            {result.email} removed from this account.
+          </div>
+        )}
         {result?.kind === "error" && (
           <div className="mt-2 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">
             {result.message}
           </div>
         )}
+        {confirmRemove && (
+          <div className="mt-2 p-2 bg-rose-50 border border-rose-200 rounded flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-rose-900 font-semibold">
+              Remove {user.display_name || user.contact_email}? They&apos;ll lose access immediately.
+            </span>
+            <button
+              type="button"
+              onClick={fireRemove}
+              disabled={removePending}
+              className="px-2.5 py-1 bg-rose-700 text-white rounded text-xs font-semibold hover:bg-rose-800 disabled:opacity-60 cursor-pointer"
+            >
+              {removePending ? "Removing…" : "Yes, remove"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmRemove(false)}
+              disabled={removePending}
+              className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
-      {callerIsAdmin && user.status !== "revoked" && !user.is_self && (
-        <button
-          type="button"
-          onClick={fire}
-          disabled={pending}
-          className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
-        >
-          {pending
-            ? "Sending..."
-            : user.status === "active"
-              ? "Re-issue invite"
-              : "Resend invite"}
-        </button>
+      {callerIsAdmin && user.status !== "revoked" && user.status !== "removed" && !user.is_self && !confirmRemove && (
+        <div className="flex items-start gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={fire}
+            disabled={pending || removePending}
+            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          >
+            {pending
+              ? "Sending..."
+              : user.status === "active"
+                ? "Re-issue invite"
+                : "Resend invite"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmRemove(true)}
+            disabled={pending || removePending}
+            className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-white border border-rose-200 rounded-md hover:bg-rose-50 hover:border-rose-300 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          >
+            Remove
+          </button>
+        </div>
       )}
     </li>
   );

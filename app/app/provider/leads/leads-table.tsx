@@ -246,39 +246,15 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
 
   return (
     <div>
-      {/* Action-needed pill — elevated above the standard filter row.
-          Dark red when there's anything waiting, emerald when all clear.
-          Compact pill (not full-width) with a clear active vs inactive
-          distinction (ring + darker fill when selected as the filter). */}
-      <div className="mb-3 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setFilter(filter === "action" ? "all" : "action")}
-          aria-pressed={filter === "action"}
-          className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border transition-colors cursor-pointer text-sm font-semibold ${
-            counts.action > 0
-              ? filter === "action"
-                ? "bg-rose-900 border-rose-900 text-white ring-2 ring-rose-300 ring-offset-2"
-                : "bg-rose-700 border-rose-700 hover:bg-rose-800 hover:border-rose-800 text-white"
-              : filter === "action"
-                ? "bg-emerald-800 border-emerald-800 text-white ring-2 ring-emerald-300 ring-offset-2"
-                : "bg-emerald-50 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 text-emerald-800"
-          }`}
-        >
-          <span>Action needed</span>
-          <span className="tabular-nums leading-none">
-            {counts.action > 0 ? counts.action : "✓"}
-          </span>
-        </button>
-        {filter === "action" && (
-          <span className="text-xs text-slate-500">
-            Filtered. Click again or pick another filter to clear.
-          </span>
-        )}
-      </div>
-
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex flex-wrap gap-1">
+          <FilterPill
+            label="Action needed"
+            count={counts.action}
+            active={filter === "action"}
+            onClick={() => setFilter(filter === "action" ? "all" : "action")}
+            tone="rose"
+          />
           {FILTER_DEFS.map((f) => (
             <FilterPill
               key={f.value}
@@ -313,47 +289,51 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
         </div>
       </div>
 
-      {(courseOptions.length > 1 || cohortOptions.length > 0) && (
-        <div className="flex flex-wrap items-center gap-2 mb-3 text-sm">
-          {courseOptions.length > 1 && (
-            <label className="flex items-center gap-1.5 text-slate-700">
-              <span className="text-xs text-slate-500">Course</span>
-              <select
-                value={courseFilter}
-                onChange={(e) => setCourseFilter(e.target.value)}
-                className="border border-slate-300 rounded-md px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
-              >
-                <option value="all">All courses ({courseOptions.length})</option>
-                {courseOptions.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-          )}
-          {cohortOptions.length > 0 && (
-            <label className="flex items-center gap-1.5 text-slate-700">
-              <span className="text-xs text-slate-500">Cohort</span>
-              <select
-                value={cohortFilter}
-                onChange={(e) => setCohortFilter(e.target.value)}
-                className="border border-slate-300 rounded-md px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
-              >
-                <option value="all">All cohorts ({cohortOptions.length})</option>
-                {cohortOptions.map((c) => (
-                  <option key={c} value={c}>{cohortLabel(c)}</option>
-                ))}
-              </select>
-            </label>
-          )}
-          {(courseFilter !== "all" || cohortFilter !== "all") && (
-            <button
-              type="button"
-              onClick={() => { setCourseFilter("all"); setCohortFilter("all"); }}
-              className="text-xs text-slate-500 hover:text-slate-900 underline-offset-2 hover:underline cursor-pointer"
-            >
-              Clear
-            </button>
-          )}
+      {courseOptions.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1 mb-2">
+          <span className="text-xs uppercase tracking-wide font-semibold text-slate-500 mr-2">Course</span>
+          <FilterPill
+            label="All"
+            count={rows.length}
+            active={courseFilter === "all"}
+            onClick={() => setCourseFilter("all")}
+          />
+          {courseOptions.map((c) => (
+            <FilterPill
+              key={c}
+              label={courseDisplayName(c)}
+              count={rows.filter((r) => r.course_id === c).length}
+              active={courseFilter === c}
+              onClick={() => setCourseFilter(c)}
+            />
+          ))}
+        </div>
+      )}
+
+      {cohortOptions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 mb-3">
+          <span className="text-xs uppercase tracking-wide font-semibold text-slate-500 mr-2">Cohort</span>
+          <FilterPill
+            label="All"
+            count={rows.length}
+            active={cohortFilter === "all"}
+            onClick={() => setCohortFilter("all")}
+          />
+          {cohortOptions.map((c) => (
+            <FilterPill
+              key={c}
+              label={cohortDisplayName(c)}
+              count={
+                rows.filter(
+                  (r) =>
+                    r.preferred_intake_id === c
+                    || (Array.isArray(r.acceptable_intake_ids) && r.acceptable_intake_ids.includes(c)),
+                ).length
+              }
+              active={cohortFilter === c}
+              onClick={() => setCohortFilter(c)}
+            />
+          ))}
         </div>
       )}
 
@@ -702,18 +682,50 @@ function parseIntakeDate(intakeId: string | null | undefined): string | null {
   return m ? m[1] : null;
 }
 
-// Human-readable cohort label: "Starts 26 May 2026 · tees-valley".
-// Falls back to the raw id if the date can't be parsed.
-function cohortLabel(intakeId: string): string {
+// Short cohort label for the filter pill: "26 May" (year-omitted unless
+// the cohort straddles years). Falls back to the raw id if the date
+// can't be parsed.
+function cohortDisplayName(intakeId: string): string {
   const date = parseIntakeDate(intakeId);
   if (!date) return intakeId;
-  const region = intakeId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
-  const friendly = new Date(date + "T00:00:00Z").toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-  return region ? `Starts ${friendly} · ${region}` : `Starts ${friendly}`;
+  const d = new Date(date + "T00:00:00Z");
+  const thisYear = new Date().getUTCFullYear();
+  const opts: Intl.DateTimeFormatOptions = d.getUTCFullYear() === thisYear
+    ? { day: "numeric", month: "short" }
+    : { day: "numeric", month: "short", year: "numeric" };
+  return d.toLocaleDateString("en-GB", opts);
+}
+
+// Pretty course label from the canonical course_id slug.
+// "counselling-skills-tees-valley" → "Counselling Skills"
+// "smm-for-ecommerce-tees-valley" → "SMM for Ecommerce"
+// The region/location suffix (tees-valley, lift-camden-etc) is dropped
+// since cohort filter already conveys location. Known multi-word
+// acronyms / lowercase fillers handled by the small-words guard.
+function courseDisplayName(courseId: string | null | undefined): string {
+  if (!courseId) return "—";
+  // Strip known region suffixes. List grows as new regions ship.
+  const REGION_SUFFIXES = [
+    "-tees-valley",
+    "-lift-camden",
+    "-lift-hackney",
+    "-lift-islington",
+    "-lift-boroughs",
+  ];
+  let core = courseId;
+  for (const suffix of REGION_SUFFIXES) {
+    if (core.endsWith(suffix)) { core = core.slice(0, -suffix.length); break; }
+  }
+  const SMALL_WORDS = new Set(["for", "and", "of", "the", "in", "on", "to", "a"]);
+  const ACRONYMS: Record<string, string> = { smm: "SMM", crm: "CRM", l3: "L3", l4: "L4" };
+  return core
+    .split("-")
+    .map((word, i) => {
+      if (ACRONYMS[word]) return ACRONYMS[word];
+      if (i > 0 && SMALL_WORDS.has(word)) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
 }
 
 function FilterPill({
@@ -721,24 +733,40 @@ function FilterPill({
   count,
   active,
   onClick,
+  tone,
 }: {
   label: string;
   count: number;
   active: boolean;
   onClick: () => void;
+  // Default tone uses slate (dark when active). `rose` is used by the
+  // "Action needed" pill — red outline when inactive, red filled when
+  // active — to match the existing visual language of the other pills
+  // while staying clearly distinct as the attention-grabber.
+  tone?: "slate" | "rose";
 }) {
+  const isRose = tone === "rose";
+  const palette = active
+    ? isRose
+      ? "bg-rose-700 text-white border-rose-700"
+      : "bg-slate-900 text-white border-slate-900"
+    : isRose
+      ? "bg-white text-rose-700 border-rose-300 hover:bg-rose-50 hover:border-rose-400"
+      : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300";
+  const countTone = active
+    ? "text-white/70"
+    : isRose
+      ? "text-rose-400"
+      : "text-slate-400";
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`px-3 py-1.5 rounded-md text-sm font-medium border transition-colors cursor-pointer ${
-        active
-          ? "bg-slate-900 text-white border-slate-900"
-          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
-      }`}
+      aria-pressed={active}
+      className={`px-3 py-1.5 rounded-md text-sm font-medium border transition-colors cursor-pointer ${palette}`}
     >
       {label}
-      <span className={`ml-1.5 text-xs tabular-nums ${active ? "text-slate-300" : "text-slate-400"}`}>
+      <span className={`ml-1.5 text-xs tabular-nums ${countTone}`}>
         {count}
       </span>
     </button>

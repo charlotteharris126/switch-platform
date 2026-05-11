@@ -98,3 +98,130 @@ export async function inviteProviderUserAction(args: InviteArgs): Promise<Invite
 
   return { ok: true, expiresAt: body.expires_at ?? new Date().toISOString() };
 }
+
+// ---------------------------------------------------------------------
+// Remove a teammate. Soft delete: provider_users.status flips to
+// 'removed', the auth row stays so any audit trail it owns keeps
+// pointing at a real user.
+//
+// Guard rails:
+//   - Caller must be an active provider_admin (same gate as invite)
+//   - Target must belong to the caller's provider_id (RLS adds a second
+//     check but we enforce here for the early-fail error message)
+//   - Can't remove yourself (would lock yourself out)
+//   - Can't remove the last remaining provider_admin (no admin left)
+//
+// Audit: writes via public.log_provider_action_v1 so the existing
+// admin audit-trail page picks it up alongside outcome marks and note
+// adds. before/after capture the role + status flip.
+// ---------------------------------------------------------------------
+
+type RemoveResult = { ok: true; removedEmail: string } | { ok: false; error: string };
+
+export async function removeProviderUserAction(args: {
+  provider_user_id: number;
+}): Promise<RemoveResult> {
+  if (typeof args.provider_user_id !== "number" || args.provider_user_id <= 0) {
+    return { ok: false, error: "Invalid user id." };
+  }
+
+  const supabase = await createClient();
+  const { data: sessionData } = await supabase.auth.getSession();
+  const user = sessionData.session?.user;
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const admin = createAdminClient();
+
+  // Resolve caller — must be active provider_admin
+  const { data: caller, error: callerErr } = await admin
+    .schema("crm")
+    .from("provider_users")
+    .select("id, provider_id, role, status")
+    .eq("auth_user_id", user.id)
+    .eq("status", "active")
+    .maybeSingle<{ id: number; provider_id: string; role: string; status: string }>();
+  if (callerErr) return { ok: false, error: callerErr.message };
+  if (!caller) return { ok: false, error: "Active provider user not found" };
+  if (caller.role !== "provider_admin") {
+    return { ok: false, error: "Only account admins can remove team members." };
+  }
+  if (caller.id === args.provider_user_id) {
+    return { ok: false, error: "You can't remove yourself. Ask another admin or email support@switchleads.co.uk." };
+  }
+
+  // Resolve target — must be on caller's provider, active
+  const { data: target, error: targetErr } = await admin
+    .schema("crm")
+    .from("provider_users")
+    .select("id, provider_id, contact_email, display_name, role, status")
+    .eq("id", args.provider_user_id)
+    .maybeSingle<{
+      id: number;
+      provider_id: string;
+      contact_email: string;
+      display_name: string | null;
+      role: string;
+      status: string;
+    }>();
+  if (targetErr) return { ok: false, error: targetErr.message };
+  if (!target) return { ok: false, error: "That user doesn't exist." };
+  if (target.provider_id !== caller.provider_id) {
+    return { ok: false, error: "That user belongs to another account." };
+  }
+  if (target.status !== "active") {
+    return { ok: false, error: "That user is already inactive." };
+  }
+
+  // Last-admin guard — count remaining active provider_admins after this
+  // removal would land. If zero, refuse.
+  if (target.role === "provider_admin") {
+    const { count, error: countErr } = await admin
+      .schema("crm")
+      .from("provider_users")
+      .select("id", { count: "exact", head: true })
+      .eq("provider_id", caller.provider_id)
+      .eq("role", "provider_admin")
+      .eq("status", "active");
+    if (countErr) return { ok: false, error: countErr.message };
+    if ((count ?? 0) <= 1) {
+      return {
+        ok: false,
+        error: "Can't remove the last admin. Promote another team member to admin first, or email support@switchleads.co.uk.",
+      };
+    }
+  }
+
+  const before = { role: target.role, status: target.status };
+  const after = { role: target.role, status: "removed" };
+
+  const { error: updateErr } = await admin
+    .schema("crm")
+    .from("provider_users")
+    .update({ status: "removed" })
+    .eq("id", target.id);
+  if (updateErr) return { ok: false, error: updateErr.message };
+
+  // Audit via the public wrapper so the admin audit page picks it up
+  // (same write path as outcome marking). Uses the AUTHENTICATED
+  // client so auth.uid() lands as the caller, not service-role.
+  const { error: auditErr } = await supabase.rpc("log_provider_action_v1", {
+    p_action: "remove_team_user",
+    p_target_table: "crm.provider_users",
+    p_target_id: String(target.id),
+    p_before: before,
+    p_after: after,
+    p_context: {
+      removed_email: target.contact_email,
+      removed_display_name: target.display_name,
+      provider_id: caller.provider_id,
+    },
+  });
+  if (auditErr) {
+    return {
+      ok: false,
+      error: `User removed but audit write failed: ${auditErr.message}`,
+    };
+  }
+
+  return { ok: true, removedEmail: target.contact_email };
+}
