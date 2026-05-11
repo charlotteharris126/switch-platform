@@ -336,7 +336,9 @@ export default async function LeadDetailPage({
             </p>
             {lead.client_nonce ? (
               <CopyableUrl
-                url={`https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(lead.client_nonce)}`}
+                url={`https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(lead.client_nonce)}${
+                  lead.course_id ? `&course=${encodeURIComponent(lead.course_id)}` : ""
+                }&m=${lead.marketing_opt_in ? "1" : "0"}`}
               />
             ) : (
               <p className="text-xs text-[#b3412e] bg-[#fbeae5] border border-[#f4d3c8] rounded px-2 py-1.5">
