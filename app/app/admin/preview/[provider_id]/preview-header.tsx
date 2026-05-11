@@ -15,7 +15,7 @@
 
 import Link from "next/link";
 
-type Active = "leads" | "account";
+type Active = "home" | "leads" | "account";
 
 interface Props {
   providerId: string;
@@ -44,6 +44,11 @@ export function PreviewHeader({ providerId, companyName, isDemo, active }: Props
           </span>
         </div>
         <div className="flex items-center gap-2 text-sm">
+          <TabLink
+            href={`/preview/${encoded}/home`}
+            label="Their home"
+            active={active === "home"}
+          />
           <TabLink
             href={`/preview/${encoded}/leads`}
             label="Their leads"

@@ -105,7 +105,7 @@ export default async function ProviderDetailPage({
         <div className="flex items-center gap-2">
           <span>Want to dogfood their portal?</span>
           <Link
-            href={`/preview/${encodeURIComponent(provider.provider_id)}/leads`}
+            href={`/preview/${encodeURIComponent(provider.provider_id)}/home`}
             className="font-semibold text-[#11242e] hover:underline underline-offset-2"
           >
             View as {provider.company_name} →
