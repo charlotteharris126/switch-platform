@@ -248,13 +248,22 @@ export async function addLeadNoteAction(args: {
 // independently — invalid transitions are skipped and counted, not
 // errored. Audit logs one row per successful update.
 //
-// Currently supports cannot_reach (no extra fields) and lost (with
-// shared lost_reason). Other transitions stay one-by-one because the
-// state machine is tighter on those (e.g. attempt_2 from open is wrong;
-// attempt_1 from already-attempt_1 is a no-op).
+// Status modes:
+//   - "attempt_advance" — special. Each selected lead moves one step
+//     down the attempt path (open→1, 1→2, 2→3). Anything past attempt_3
+//     or already-terminal is skipped. Used when the provider has just
+//     done a batch of calls and got no answer on each.
+//   - "enrolment_meeting_booked" / "cannot_reach" / "lost" — direct
+//     targets; validated per-lead via the state machine.
+//   - "lost" additionally requires lostReason valid for each row's
+//     from-state.
+//
+// "enrolled" is deliberately NOT supported in bulk — too consequential
+// to be a multi-select action; goes through the per-lead outcome path
+// where the provider sees the lead they're confirming.
 export async function bulkMarkOutcomeAction(args: {
   submissionIds: number[];
-  status: "cannot_reach" | "lost";
+  status: "attempt_advance" | "enrolment_meeting_booked" | "cannot_reach" | "lost";
   lostReason?: string | null;
 }): Promise<{ ok: boolean; applied: number; skipped: number; error?: string }> {
   if (!Array.isArray(args.submissionIds) || args.submissionIds.length === 0) {
@@ -263,7 +272,12 @@ export async function bulkMarkOutcomeAction(args: {
   if (args.submissionIds.length > 200) {
     return { ok: false, applied: 0, skipped: 0, error: "Too many leads selected (max 200)" };
   }
-  if (args.status !== "cannot_reach" && args.status !== "lost") {
+  if (
+    args.status !== "attempt_advance"
+    && args.status !== "enrolment_meeting_booked"
+    && args.status !== "cannot_reach"
+    && args.status !== "lost"
+  ) {
     return { ok: false, applied: 0, skipped: 0, error: `Bulk doesn't support status: ${args.status}` };
   }
   if (args.status === "lost") {
@@ -294,8 +308,19 @@ export async function bulkMarkOutcomeAction(args: {
     lost_reason: string | null;
   }>;
 
-  const targetStatus = args.status as LeadStatus;
-  const newLostReason: LostReason | null = args.status === "lost" ? (args.lostReason as LostReason) : null;
+  // "attempt_advance" resolves per-lead: each row picks its own target
+  // based on current status. Non-advance modes have one shared target.
+  const ATTEMPT_NEXT: Record<string, LeadStatus> = {
+    open: "attempt_1_no_answer",
+    attempt_1_no_answer: "attempt_2_no_answer",
+    attempt_2_no_answer: "attempt_3_no_answer",
+  };
+  const sharedTarget: LeadStatus | null = args.status === "attempt_advance"
+    ? null
+    : (args.status as LeadStatus);
+  const newLostReason: LostReason | null = args.status === "lost"
+    ? (args.lostReason as LostReason)
+    : null;
   const nowIso = new Date().toISOString();
 
   let applied = 0;
@@ -303,6 +328,14 @@ export async function bulkMarkOutcomeAction(args: {
 
   for (const row of rows) {
     const fromStatus = row.status as LeadStatus;
+    const targetStatus: LeadStatus | null = sharedTarget
+      ?? ATTEMPT_NEXT[fromStatus]
+      ?? null;
+    if (!targetStatus) {
+      // attempt_advance on a row past attempt_3 or already terminal → skip
+      skipped += 1;
+      continue;
+    }
     if (!isAllowedTransition(fromStatus, targetStatus)) {
       skipped += 1;
       continue;
@@ -345,7 +378,7 @@ export async function bulkMarkOutcomeAction(args: {
       p_target_id: String(row.id),
       p_before: before,
       p_after: after,
-      p_context: { submission_id: row.submission_id, bulk: true },
+      p_context: { submission_id: row.submission_id, bulk: true, bulk_mode: args.status },
     });
 
     applied += 1;

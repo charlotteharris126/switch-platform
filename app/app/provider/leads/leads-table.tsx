@@ -102,7 +102,7 @@ interface Props {
   // where writes need to stay disabled.
   onBulkMark?: (args: {
     submissionIds: number[];
-    status: "cannot_reach" | "lost";
+    status: "attempt_advance" | "enrolment_meeting_booked" | "cannot_reach" | "lost";
     lostReason?: string | null;
   }) => Promise<BulkResult>;
   // Where lead-name links route to. Defaults to /provider/leads/. The admin
@@ -355,6 +355,32 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
                 setShowLostPicker(false);
                 setBulkResult(null);
               }}
+              onAdvanceAttempt={() => {
+                setBulkResult(null);
+                startBulkTransition(async () => {
+                  const ids = [...selected];
+                  const r = await onBulkMark!({ submissionIds: ids, status: "attempt_advance" });
+                  if (r.ok) {
+                    setBulkResult({ kind: "ok", applied: r.applied, skipped: r.skipped });
+                    setSelected(new Set());
+                  } else {
+                    setBulkResult({ kind: "error", message: r.error ?? "Failed" });
+                  }
+                });
+              }}
+              onMarkMeeting={() => {
+                setBulkResult(null);
+                startBulkTransition(async () => {
+                  const ids = [...selected];
+                  const r = await onBulkMark!({ submissionIds: ids, status: "enrolment_meeting_booked" });
+                  if (r.ok) {
+                    setBulkResult({ kind: "ok", applied: r.applied, skipped: r.skipped });
+                    setSelected(new Set());
+                  } else {
+                    setBulkResult({ kind: "error", message: r.error ?? "Failed" });
+                  }
+                });
+              }}
               onCannotReach={() => {
                 setBulkResult(null);
                 startBulkTransition(async () => {
@@ -520,6 +546,8 @@ function BulkBar({
   lostReason,
   onLostReasonChange,
   onCancel,
+  onAdvanceAttempt,
+  onMarkMeeting,
   onCannotReach,
   onLostClick,
   onLostConfirm,
@@ -532,6 +560,8 @@ function BulkBar({
   lostReason: LostReason;
   onLostReasonChange: (r: LostReason) => void;
   onCancel: () => void;
+  onAdvanceAttempt: () => void;
+  onMarkMeeting: () => void;
   onCannotReach: () => void;
   onLostClick: () => void;
   onLostConfirm: () => void;
@@ -549,11 +579,28 @@ function BulkBar({
       <div className="flex flex-wrap items-center gap-2 ml-auto">
         <button
           type="button"
+          onClick={onAdvanceAttempt}
+          disabled={pending}
+          title="Tried each selected lead, no answer. Advances each by one attempt step (open→1, 1→2, 2→3). Leads past attempt_3 or already terminal are skipped."
+          className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900 rounded-md hover:bg-white disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+        >
+          {pending ? "Marking…" : "Tried, no answer"}
+        </button>
+        <button
+          type="button"
+          onClick={onMarkMeeting}
+          disabled={pending}
+          className="px-3 py-1.5 text-xs font-semibold bg-blue-400 text-blue-950 rounded-md hover:bg-blue-300 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+        >
+          {pending ? "Marking…" : "Meeting booked"}
+        </button>
+        <button
+          type="button"
           onClick={onCannotReach}
           disabled={pending}
           className="px-3 py-1.5 text-xs font-semibold bg-amber-500 text-amber-950 rounded-md hover:bg-amber-400 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
         >
-          {pending ? "Marking…" : "Mark Cannot reach"}
+          {pending ? "Marking…" : "Cannot reach"}
         </button>
         <button
           type="button"
@@ -561,7 +608,7 @@ function BulkBar({
           disabled={pending}
           className="px-3 py-1.5 text-xs font-semibold bg-rose-500 text-rose-950 rounded-md hover:bg-rose-400 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
         >
-          Mark Lost…
+          Lost…
         </button>
         <button
           type="button"
@@ -569,7 +616,7 @@ function BulkBar({
           disabled={pending}
           className="px-3 py-1.5 text-xs font-semibold bg-slate-700 text-white rounded-md hover:bg-slate-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
         >
-          Export selected
+          Export
         </button>
         <button
           type="button"
