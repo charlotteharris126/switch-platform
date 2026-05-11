@@ -149,6 +149,21 @@ export function ReconcileSheetPanel({
           ...(driftIds && driftIds.length > 0 ? { submission_ids: driftIds } : {}),
         });
         setRepublishResult(r);
+        // After a successful apply, re-read drift so the summary at the
+        // top reflects current state (instead of the pre-apply count).
+        // Apply-sheet-to-db already does this; republish was missing it.
+        if (apply && r.ok) {
+          try {
+            const refreshed = await reconcileSheetToDbAction({ provider_id: providerId, apply: false });
+            setDryRunResult(refreshed);
+            if (refreshed.ok) {
+              setSelectedIds(new Set(refreshed.proposed_changes.map((c) => c.submission_id)));
+            }
+          } catch {
+            // Refresh failed — the apply still succeeded. Operator can hit
+            // Check drift manually to see post-apply state.
+          }
+        }
       } catch (err) {
         setRepublishResult({
           ok: false,
