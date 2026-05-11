@@ -36,6 +36,7 @@
 // deferred until Andy asks for it.
 
 import postgres from "npm:postgres@3";
+import { sendBrevoEmail } from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -406,6 +407,27 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
+  // Step 10: notify provider's team when a clean fastrack lands.
+  // Only fires on the eager-signal path — i.e. learner still qualifies
+  // (no l3_mismatch, no cohort_decline). Auto-DQ paths already write a
+  // system note + audit row; piling an email on top would be misleading.
+  // Also requires parent.primary_routed_to (no routed provider = no team
+  // to notify). PII-free: just the lead ID + a deep link.
+  let notifySent = 0;
+  let notifySkipped = 0;
+  if (!lostReason && parent.primary_routed_to) {
+    try {
+      notifySent = await notifyProviderOfFastrack({
+        submissionId: parent.id,
+        providerId: parent.primary_routed_to,
+      });
+    } catch (err) {
+      console.error("fastrack: provider notify failed (non-fatal):", describeError(err));
+      notifySkipped = 1;
+      // Don't dead-letter — Brevo failures here aren't lead-critical.
+    }
+  }
+
   return json({
     status: "ok",
     fastrack_submission_id: fastrackId,
@@ -413,8 +435,76 @@ Deno.serve(async (req: Request): Promise<Response> => {
     l3_mismatch_flag: l3MismatchFlag,
     cohort_decline_flag: cohortDeclineFlag,
     lost_reason: lostReason,
+    notify_sent: notifySent,
+    notify_skipped: notifySkipped,
   });
 });
+
+// Emails every active provider_user for the given provider with a PII-free
+// "Lead #N has fast-tracked, eager signal" note + deep link to the portal
+// lead page. Returns the number of successful sends.
+async function notifyProviderOfFastrack(args: {
+  submissionId: number;
+  providerId: string;
+}): Promise<number> {
+  const recipients = await sql<Array<{
+    contact_email: string;
+    display_name: string | null;
+  }>>`
+    SELECT contact_email, display_name
+      FROM crm.provider_users
+     WHERE provider_id = ${args.providerId}
+       AND status = 'active'
+  `;
+  if (recipients.length === 0) return 0;
+
+  const portalUrl = `https://app.switchleads.co.uk/leads/${args.submissionId}`;
+  const subject = `Lead #${args.submissionId} just fast-tracked — eager signal`;
+  const html = composeFastrackNotifyHtml({
+    submissionId: args.submissionId,
+    portalUrl,
+  });
+
+  let sent = 0;
+  for (const r of recipients) {
+    if (!r.contact_email) continue;
+    const result = await sendBrevoEmail({
+      brand: "switchleads",
+      to: [{ email: r.contact_email, name: r.display_name ?? r.contact_email }],
+      subject,
+      htmlContent: html,
+      tags: ["fastrack-notify-provider"],
+    });
+    if (result.ok) {
+      sent++;
+    } else {
+      console.error(
+        `fastrack notify Brevo send failed for ${r.contact_email}: ${result.error ?? "unknown"}`,
+      );
+    }
+  }
+  return sent;
+}
+
+function composeFastrackNotifyHtml(args: {
+  submissionId: number;
+  portalUrl: string;
+}): string {
+  return `
+<!doctype html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; line-height: 1.5; padding: 16px; max-width: 560px;">
+  <p>Hi,</p>
+  <p>Lead <strong>#${args.submissionId}</strong> has just completed the fast-track form on their thank-you page.</p>
+  <p>This is an eager signal: the learner confirmed their cohort, kept their qualifications consistent, and opted to move things along themselves. Worth a call sooner rather than later.</p>
+  <p style="margin: 24px 0;">
+    <a href="${args.portalUrl}" style="display: inline-block; padding: 10px 18px; background: #0f172a; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">
+      Open the lead in your portal
+    </a>
+  </p>
+  <p style="margin-top: 32px; color: #64748b;">Switchable</p>
+</body></html>
+  `.trim();
+}
 
 // -------- helpers --------
 

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -263,6 +264,14 @@ function leadStateLabel(s: SubmissionLite | undefined): string {
 export default async function ErrorsPage() {
   const supabase = await createClient();
 
+  // Pending data-ops count (currently just 025 client_nonce; 024 lives
+  // Brevo-side and can't be cheaply checked from Postgres). Used to gate
+  // the "Open Data ops" banner so it only shows when there's actually
+  // something to do.
+  const admin = createAdminClient();
+  const { data: noncePendingRaw } = await admin.rpc("count_client_nonce_pending");
+  const noncePending = typeof noncePendingRaw === "number" ? noncePendingRaw : 0;
+
   // Lead reconciliation window: align to Meta's earliest data so we're
   // comparing the same period on both sides. Falls back to last 30 days if
   // Meta has no rows yet.
@@ -409,20 +418,22 @@ export default async function ErrorsPage() {
         }
       />
 
-      <div className="bg-white border border-[#dde3e6] rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
-        <div className="text-xs text-[#5a6a72]">
-          <span className="font-semibold text-[#11242e]">Need to fix something across the data?</span>{" "}
-          One-off backfills and repair scripts live on{" "}
-          <span className="text-[#11242e] font-semibold">Data ops</span>{" "}
-          (e.g. fastrack URLs, Brevo attribute alignment).
+      {noncePending > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-amber-900">
+            <span className="font-semibold">Data ops: {noncePending} pending</span>
+            {" — "}
+            {noncePending === 1 ? "1 funded lead needs" : `${noncePending} funded leads need`}{" "}
+            a fastrack URL stamped via the 025 backfill.
+          </div>
+          <Link
+            href="/data-ops"
+            className="px-3 py-1.5 bg-amber-700 text-white text-xs font-semibold rounded hover:bg-amber-800 cursor-pointer shrink-0"
+          >
+            Open Data ops →
+          </Link>
         </div>
-        <Link
-          href="/data-ops"
-          className="px-3 py-1.5 bg-[#11242e] text-white text-xs font-semibold rounded hover:bg-[#1f3744] cursor-pointer shrink-0"
-        >
-          Open Data ops →
-        </Link>
-      </div>
+      )}
 
       <ReconciliationCard
         data={reconciliation}
