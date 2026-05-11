@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { DurationTimer } from "../duration-timer";
 import { STATUS_LABEL, type LeadStatus, type LostReason, VALID_LOST_REASONS } from "@/lib/lead-status";
+import { labelCourse, labelFunding } from "@/lib/lead-values";
 
 const STATUS_TONE: Record<LeadStatus, string> = {
   open: "bg-slate-100 text-slate-700 border-slate-200",
@@ -43,7 +44,11 @@ export type Filter =
   | "calling"
   | "meeting"
   | "enrolled"
-  | "cold";
+  | "cold"
+  // Subset of "action": only attempts that have gone stale (status hasn't
+  // moved in 36h+). Linked from the home page "call attempts need
+  // retrying" card so the count + the click destination match exactly.
+  | "stale_attempts";
 
 // "Action needed" is rendered separately above as its own prominent pill
 // (rose when items waiting, emerald when zero). The standard filter row
@@ -59,25 +64,48 @@ const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "cold", label: "Cold" },
 ];
 
+// Overdue thresholds. Mirror the home page so the badge logic is
+// consistent across surfaces.
+const OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000; // 24h
+const OVERDUE_36H_MS = 36 * 60 * 60 * 1000; // callback / attempt stale
+
 // "Action needed" = anything where the next move is on the provider:
 //   - callback flag pending
 //   - fastrack ready (lead has fastrack submission, not yet settled)
 //   - status=open (no contact attempt yet)
-//   - status=attempt_X with status_updated_at >48h ago (stale follow-up)
-const STALE_ATTEMPT_MS = 48 * 60 * 60 * 1000;
+//   - status=attempt_X with status_updated_at >36h ago (stale follow-up)
+const STALE_ATTEMPT_MS = OVERDUE_36H_MS;
 function isActionRow(r: LeadRow): boolean {
   if (r.callback_pending) return true;
   if (r.has_fastrack && !FASTRACK_SETTLED.has(r.status)) return true;
   if (r.status === "open") return true;
+  if (isStaleAttempt(r)) return true;
+  return false;
+}
+
+function isStaleAttempt(r: LeadRow): boolean {
   if (
-    (r.status === "attempt_1_no_answer" ||
-      r.status === "attempt_2_no_answer" ||
-      r.status === "attempt_3_no_answer") &&
-    r.status_updated_at &&
-    Date.now() - new Date(r.status_updated_at).getTime() > STALE_ATTEMPT_MS
+    r.status !== "attempt_1_no_answer"
+    && r.status !== "attempt_2_no_answer"
+    && r.status !== "attempt_3_no_answer"
   ) {
-    return true;
+    return false;
   }
+  if (!r.status_updated_at) return false;
+  return Date.now() - new Date(r.status_updated_at).getTime() > STALE_ATTEMPT_MS;
+}
+
+// Per-row overdue: any of (a) open + routed >24h ago, (b) callback flag
+// pending + status hasn't moved in 36h, (c) attempt status stale (already
+// >36h). Surfaces a red badge on the row plus a red dot on the lead name.
+function isOverdueRow(r: LeadRow): boolean {
+  if (r.status === "open" && r.routed_at) {
+    if (Date.now() - new Date(r.routed_at).getTime() > OVERDUE_OPEN_MS) return true;
+  }
+  if (r.callback_pending && r.status_updated_at) {
+    if (Date.now() - new Date(r.status_updated_at).getTime() > OVERDUE_36H_MS) return true;
+  }
+  if (isStaleAttempt(r)) return true;
   return false;
 }
 
@@ -181,6 +209,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
     let cold = 0;
     let callback = 0;
     let fastrack = 0;
+    let stale_attempts = 0;
     for (const r of rows) {
       if (isActionRow(r)) action += 1;
       if (r.callback_pending) callback += 1;
@@ -193,8 +222,9 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
       if (r.status === "enrolment_meeting_booked") meeting += 1;
       if (ENROLLED.has(r.status)) enrolled += 1;
       if (COLD.has(r.status)) cold += 1;
+      if (isStaleAttempt(r)) stale_attempts += 1;
     }
-    return { all: rows.length, action, callback, fastrack, open, calling, meeting, enrolled, cold };
+    return { all: rows.length, action, callback, fastrack, open, calling, meeting, enrolled, cold, stale_attempts };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -204,6 +234,8 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
         // pass
       } else if (filter === "action") {
         if (!isActionRow(r)) return false;
+      } else if (filter === "stale_attempts") {
+        if (!isStaleAttempt(r)) return false;
       } else if (filter === "callback") {
         if (!r.callback_pending) return false;
       } else if (filter === "fastrack") {
@@ -294,52 +326,15 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
         </div>
       </div>
 
-      {courseOptions.length > 1 && (
-        <div className="flex flex-wrap items-center gap-1 mb-2">
-          <span className="text-xs uppercase tracking-wide font-semibold text-slate-500 mr-2">Course</span>
-          <FilterPill
-            label="All"
-            count={rows.length}
-            active={courseFilter === "all"}
-            onClick={() => setCourseFilter("all")}
-          />
-          {courseOptions.map((c) => (
-            <FilterPill
-              key={c}
-              label={courseDisplayName(c)}
-              count={rows.filter((r) => r.course_id === c).length}
-              active={courseFilter === c}
-              onClick={() => setCourseFilter(c)}
-            />
-          ))}
-        </div>
-      )}
-
-      {cohortOptions.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1 mb-3">
-          <span className="text-xs uppercase tracking-wide font-semibold text-slate-500 mr-2">Cohort</span>
-          <FilterPill
-            label="All"
-            count={rows.length}
-            active={cohortFilter === "all"}
-            onClick={() => setCohortFilter("all")}
-          />
-          {cohortOptions.map((c) => (
-            <FilterPill
-              key={c}
-              label={cohortDisplayName(c)}
-              count={
-                rows.filter(
-                  (r) =>
-                    r.preferred_intake_id === c
-                    || (Array.isArray(r.acceptable_intake_ids) && r.acceptable_intake_ids.includes(c)),
-                ).length
-              }
-              active={cohortFilter === c}
-              onClick={() => setCohortFilter(c)}
-            />
-          ))}
-        </div>
+      {(courseOptions.length > 1 || cohortOptions.length > 0) && (
+        <RefineFilters
+          courseOptions={courseOptions}
+          courseFilter={courseFilter}
+          setCourseFilter={setCourseFilter}
+          cohortOptions={cohortOptions}
+          cohortFilter={cohortFilter}
+          setCohortFilter={setCohortFilter}
+        />
       )}
 
       {filtered.length === 0 ? (
@@ -463,17 +458,23 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((r) => (
+                {filtered.map((r) => {
+                  const overdue = isOverdueRow(r);
+                  const courseLabel = labelCourse(r.course_id) ?? r.course_id ?? "-";
+                  const fundingLabel = labelFunding(r.funding_category, null);
+                  return (
                   <tr
                     key={r.id}
                     className={`hover:bg-slate-50 transition-colors ${
                       selected.has(r.id)
                         ? "bg-slate-100"
-                        : r.callback_pending
-                          ? "bg-rose-50/50"
-                          : r.has_fastrack
-                            ? "bg-violet-50/40"
-                            : ""
+                        : overdue
+                          ? "bg-rose-50"
+                          : r.callback_pending
+                            ? "bg-rose-50/50"
+                            : r.has_fastrack
+                              ? "bg-violet-50/40"
+                              : ""
                     }`}
                   >
                     {allowBulk && (
@@ -500,6 +501,11 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
                         <Link href={`${linkPrefix}${r.id}`} className="text-slate-900 font-medium hover:underline cursor-pointer">
                           {r.name}
                         </Link>
+                        {overdue && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-rose-600 text-white">
+                            Overdue
+                          </span>
+                        )}
                         {r.callback_pending && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-rose-100 text-rose-800 border border-rose-200">
                             Callback
@@ -514,15 +520,9 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
                       {r.email && <div className="text-xs text-slate-500">{r.email}</div>}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {r.course_id ?? "-"}
-                      {r.funding_category && (
-                        <div className="text-xs text-slate-500">
-                          {r.funding_category === "gov"
-                            ? "Funded"
-                            : r.funding_category === "self"
-                              ? "Self-funded"
-                              : r.funding_category}
-                        </div>
+                      {courseLabel}
+                      {fundingLabel && (
+                        <div className="text-xs text-slate-500">{fundingLabel}</div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-700 tabular-nums">
@@ -534,7 +534,8 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
                       </span>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -778,6 +779,165 @@ function courseDisplayName(courseId: string | null | undefined): string {
       return word.charAt(0).toUpperCase() + word.slice(1);
     })
     .join(" ");
+}
+
+// Secondary filters (course + cohort) shown in a collapsible "Refine" row.
+// Default collapsed when there are >0 secondary filter dimensions, so the
+// primary status row stays the focus. Active filters are visible at all
+// times via the "1 course / 2 cohorts" summary so the provider always
+// knows what's narrowing their view.
+function RefineFilters({
+  courseOptions,
+  courseFilter,
+  setCourseFilter,
+  cohortOptions,
+  cohortFilter,
+  setCohortFilter,
+}: {
+  courseOptions: string[];
+  courseFilter: string;
+  setCourseFilter: (v: string) => void;
+  cohortOptions: string[];
+  cohortFilter: string;
+  setCohortFilter: (v: string) => void;
+}) {
+  const hasCourses = courseOptions.length > 1;
+  const hasCohorts = cohortOptions.length > 0;
+  const anyActive = (courseFilter !== "all") || (cohortFilter !== "all");
+  const [open, setOpen] = useState<boolean>(anyActive);
+
+  const courseActiveLabel = courseFilter === "all"
+    ? null
+    : courseDisplayName(courseFilter);
+  const cohortActiveLabel = cohortFilter === "all"
+    ? null
+    : cohortDisplayName(cohortFilter);
+
+  function clearAll() {
+    setCourseFilter("all");
+    setCohortFilter("all");
+  }
+
+  return (
+    <div className="mb-3 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="text-xs font-semibold text-slate-700 hover:text-slate-900 cursor-pointer flex items-center gap-1"
+        >
+          <span>{open ? "−" : "+"}</span>
+          <span>Refine by course / cohort</span>
+        </button>
+        {courseActiveLabel && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-full">
+            <span className="text-slate-500">Course:</span>
+            <span className="text-slate-900 font-medium">{courseActiveLabel}</span>
+            <button
+              type="button"
+              onClick={() => setCourseFilter("all")}
+              className="ml-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
+              aria-label="Clear course filter"
+            >
+              ×
+            </button>
+          </span>
+        )}
+        {cohortActiveLabel && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-full">
+            <span className="text-slate-500">Cohort:</span>
+            <span className="text-slate-900 font-medium">{cohortActiveLabel}</span>
+            <button
+              type="button"
+              onClick={() => setCohortFilter("all")}
+              className="ml-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
+              aria-label="Clear cohort filter"
+            >
+              ×
+            </button>
+          </span>
+        )}
+        {anyActive && (
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-[11px] text-slate-500 hover:text-slate-900 underline-offset-2 hover:underline ml-auto cursor-pointer"
+          >
+            Clear refinements
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-3 space-y-2">
+          {hasCourses && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[11px] uppercase tracking-wide font-semibold text-slate-500 mr-2 w-14">
+                Course
+              </span>
+              <SecondaryPill
+                label="All"
+                active={courseFilter === "all"}
+                onClick={() => setCourseFilter("all")}
+              />
+              {courseOptions.map((c) => (
+                <SecondaryPill
+                  key={c}
+                  label={courseDisplayName(c)}
+                  active={courseFilter === c}
+                  onClick={() => setCourseFilter(c)}
+                />
+              ))}
+            </div>
+          )}
+          {hasCohorts && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[11px] uppercase tracking-wide font-semibold text-slate-500 mr-2 w-14">
+                Cohort
+              </span>
+              <SecondaryPill
+                label="All"
+                active={cohortFilter === "all"}
+                onClick={() => setCohortFilter("all")}
+              />
+              {cohortOptions.map((c) => (
+                <SecondaryPill
+                  key={c}
+                  label={cohortDisplayName(c)}
+                  active={cohortFilter === c}
+                  onClick={() => setCohortFilter(c)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SecondaryPill({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2 py-0.5 rounded-full text-[11px] border transition-colors cursor-pointer ${
+        active
+          ? "bg-slate-900 text-white border-slate-900"
+          : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+      }`}
+    >
+      {label}
+    </button>
+  );
 }
 
 function FilterPill({

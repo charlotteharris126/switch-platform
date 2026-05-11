@@ -153,6 +153,9 @@ export function LeadDetailView({
             submission.email ||
             `Lead ${submission.id}`}
         </h1>
+        <span className="text-sm font-mono text-slate-500 tabular-nums">
+          #{submission.id}
+        </span>
         {callbackPending && (
           <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200">
             Callback requested

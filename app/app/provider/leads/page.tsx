@@ -238,7 +238,8 @@ function parseFilter(param: string | undefined): Filter {
     normalised === "calling" ||
     normalised === "meeting" ||
     normalised === "enrolled" ||
-    normalised === "cold"
+    normalised === "cold" ||
+    normalised === "stale_attempts"
   ) {
     return normalised;
   }

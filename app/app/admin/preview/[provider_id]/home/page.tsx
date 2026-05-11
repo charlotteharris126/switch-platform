@@ -148,7 +148,7 @@ export default async function PreviewHomePage({ params }: Props) {
   );
   const fastrackReadyCount = fastrackReadyIds.length;
 
-  const STALE_ATTEMPT_HOURS = 48;
+  const STALE_ATTEMPT_HOURS = 36;
   const staleAttemptCutoff = Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000;
   const staleAttempts = enrolments.filter(
     (e) =>
@@ -180,19 +180,13 @@ export default async function PreviewHomePage({ params }: Props) {
   );
   const oldestStaleAttemptSince = oldestIso(staleAttempts.map((e) => e.status_updated_at));
 
-  // Lead source breakdown — last 30 days routed leads, by utm_source
-  // (empty/null bucketed as "direct"). Top 5.
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const sourceCounts = new Map<string, number>();
-  for (const r of allRouted) {
-    if (!r.routed_at || new Date(r.routed_at).getTime() < thirtyDaysAgo) continue;
-    const source = r.utm_source && r.utm_source.trim() !== "" ? r.utm_source.trim() : "direct";
-    sourceCounts.set(source, (sourceCounts.get(source) ?? 0) + 1);
-  }
-  const sourceBreakdown = [...sourceCounts.entries()]
-    .map(([source, count]) => ({ source, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
+  // Overdue thresholds mirror /provider/page.tsx.
+  const OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000;
+  const OVERDUE_36H_MS = 36 * 60 * 60 * 1000;
+  const overdueOpen = isOlderThan(oldestOpenSince, OVERDUE_OPEN_MS);
+  const overdueCallback = isOlderThan(oldestCallbackSince, OVERDUE_36H_MS);
+  const overdueStaleAttempt = isOlderThan(oldestStaleAttemptSince, OVERDUE_36H_MS);
+  const overdueFastrack = false;
 
   const recentLeads = recentSubs.map((s) => {
     const enrol = recentEnrolBySub.get(s.id);
@@ -230,7 +224,10 @@ export default async function PreviewHomePage({ params }: Props) {
           oldestOpenSince={oldestOpenSince}
           oldestStaleAttemptSince={oldestStaleAttemptSince}
           recentLeads={recentLeads}
-          sourceBreakdown={sourceBreakdown}
+          overdueFastrack={overdueFastrack}
+          overdueCallback={overdueCallback}
+          overdueOpen={overdueOpen}
+          overdueStaleAttempt={overdueStaleAttempt}
           leadsBase={`/preview/${encoded}`}
           leadDetailPrefix={`/preview/${encoded}/leads/`}
         />
@@ -278,4 +275,9 @@ function oldestIso(values: string[]): string | null {
     }
   }
   return oldest;
+}
+
+function isOlderThan(iso: string | null, thresholdMs: number): boolean {
+  if (!iso) return false;
+  return Date.now() - new Date(iso).getTime() > thresholdMs;
 }

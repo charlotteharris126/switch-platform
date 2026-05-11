@@ -178,9 +178,11 @@ export default async function ProviderHomePage() {
   );
   const fastrackReadyCount = fastrackReadyIds.length;
 
-  // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >48h ago.
+  // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >36h ago.
   // Provider rang once, no answer, hasn't tried again. Caller's nudge.
-  const STALE_ATTEMPT_HOURS = 48;
+  // Threshold lowered from 48h to 36h on 2026-05-11 to match Charlotte's
+  // overdue-badge spec.
+  const STALE_ATTEMPT_HOURS = 36;
   const staleAttemptCutoff = Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000;
   const staleAttempts = enrolments.filter(
     (e) =>
@@ -221,30 +223,28 @@ export default async function ProviderHomePage() {
     recentEnrolBySub.set(e.submission_id, e);
   }
 
-  // Lead source breakdown — last 30 days routed leads grouped by
-  // utm_source (empty/null bucketed as "direct"). Top 5 sources by
-  // count. ProviderHomeView renders the bars; we just shape the data.
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const sourceCounts = new Map<string, number>();
-  for (const r of allRouted) {
-    if (!r.routed_at || new Date(r.routed_at).getTime() < thirtyDaysAgo) continue;
-    const source = r.utm_source && r.utm_source.trim() !== "" ? r.utm_source.trim() : "direct";
-    sourceCounts.set(source, (sourceCounts.get(source) ?? 0) + 1);
-  }
-  const sourceBreakdown = [...sourceCounts.entries()]
-    .map(([source, count]) => ({ source, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
-
   // Pre-compute the nav "action needed" badge count from data already in
   // memory so ProviderShell can skip its own Suspense fetch on home.
   // Matches LeadsNavLink's definition exactly: callback-pending OR
-  // fastrack-ready (not settled) OR open OR stale-attempt (48h+).
+  // fastrack-ready (not settled) OR open OR stale-attempt (36h+).
   const actionCount =
     callbackCount +
     fastrackReadyCount +
     counts.open +
     staleAttemptCount;
+
+  // Overdue thresholds — when the oldest item in a bucket has been
+  // waiting longer than these, the home card shows an Overdue badge.
+  // Mirrors the per-row overdue logic in leads-table.tsx so the home
+  // glance matches the list-level signal.
+  const OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000; // 24h
+  const OVERDUE_36H_MS = 36 * 60 * 60 * 1000;
+  const overdueOpen = isOlderThan(oldestOpenSince, OVERDUE_OPEN_MS);
+  const overdueCallback = isOlderThan(oldestCallbackSince, OVERDUE_36H_MS);
+  const overdueStaleAttempt = isOlderThan(oldestStaleAttemptSince, OVERDUE_36H_MS);
+  // Fastrack: don't flag overdue purely on age — the call-in window is
+  // the provider's responsibility but we don't have a hard SLA here yet.
+  const overdueFastrack = false;
 
   const recentLeads = recentSubs.map((s) => {
     const enrol = recentEnrolBySub.get(s.id);
@@ -281,12 +281,20 @@ export default async function ProviderHomePage() {
         oldestOpenSince={oldestOpenSince}
         oldestStaleAttemptSince={oldestStaleAttemptSince}
         recentLeads={recentLeads}
-        sourceBreakdown={sourceBreakdown}
+        overdueFastrack={overdueFastrack}
+        overdueCallback={overdueCallback}
+        overdueOpen={overdueOpen}
+        overdueStaleAttempt={overdueStaleAttempt}
         leadsBase="/provider"
         leadDetailPrefix="/provider/leads/"
       />
     </ProviderShell>
   );
+}
+
+function isOlderThan(iso: string | null, thresholdMs: number): boolean {
+  if (!iso) return false;
+  return Date.now() - new Date(iso).getTime() > thresholdMs;
 }
 
 function oldestIso(values: string[]): string | null {
