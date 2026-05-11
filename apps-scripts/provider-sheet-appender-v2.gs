@@ -202,6 +202,12 @@ function doPost(e) {
     if (mode === 'read_all_status') {
       return handleReadAllStatus_(sheet, headers, lastColumn);
     }
+    if (mode === 'read_rows_missing_submission_id') {
+      return handleReadRowsMissingSubmissionId_(sheet, headers, lastColumn);
+    }
+    if (mode === 'write_submission_ids') {
+      return handleWriteSubmissionIds_(sheet, headers, lastColumn, body);
+    }
     return json_({ok: false, error: 'unknown mode: ' + mode});
   } catch (err) {
     return json_({ok: false, error: String(err)});
@@ -356,6 +362,132 @@ function handleReadAllStatus_(sheet, headers, lastColumn) {
     mode: 'read_all_status',
     rows: rows,
     skipped_no_submission_id: skippedNoSid
+  });
+}
+
+// Read-rows-missing-submission-id mode: scan every data row, return any
+// where the Submission ID column is blank, along with the row's
+// identifying columns (email, course, submitted-at, name). The Edge
+// Function uses these to look up the matching DB submission_id and
+// then calls `write_submission_ids` to populate the cell.
+//
+// Read-only. No cells touched.
+function handleReadRowsMissingSubmissionId_(sheet, headers, lastColumn) {
+  // Locate the Submission ID column (mandatory).
+  let submissionIdCol = -1;
+  for (let c = 0; c < headers.length; c++) {
+    if (FIELD_MAP[normaliseHeader_(headers[c])] === 'submission_id') {
+      submissionIdCol = c;
+      break;
+    }
+  }
+  if (submissionIdCol === -1) {
+    return json_({ok: false, error: 'sheet has no Submission ID column; add it as a header first'});
+  }
+
+  // Map the identifier columns we care about. Only emit fields the sheet
+  // actually has — if email is missing the row can't be matched anyway.
+  const IDENT_KEYS = ['email', 'course', 'course_id', 'submitted_at', 'name', 'first_name', 'last_name'];
+  const keyByCol = headers.map(function(h) {
+    const key = FIELD_MAP[normaliseHeader_(h)];
+    return key && IDENT_KEYS.indexOf(key) !== -1 ? key : null;
+  });
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return json_({
+      ok: true,
+      mode: 'read_rows_missing_submission_id',
+      submission_id_col_index: submissionIdCol + 1, // 1-indexed for caller clarity
+      rows: []
+    });
+  }
+
+  const data = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues();
+  const rows = [];
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const sidCell = row[submissionIdCol];
+    if (sidCell !== '' && sidCell !== null && sidCell !== undefined) {
+      continue; // already has an ID — skip
+    }
+    const out = { row_index: i + 2 }; // sheet row (1 = header, 2 = first data row)
+    for (let c = 0; c < keyByCol.length; c++) {
+      const key = keyByCol[c];
+      if (!key) continue;
+      const v = row[c];
+      if (v === '' || v === null || v === undefined) continue;
+      out[key] = v;
+    }
+    rows.push(out);
+  }
+
+  return json_({
+    ok: true,
+    mode: 'read_rows_missing_submission_id',
+    submission_id_col_index: submissionIdCol + 1,
+    rows: rows
+  });
+}
+
+// Write-submission-ids mode: for each {row_index, submission_id} entry
+// in body.assignments, write submission_id into the Submission ID cell
+// of that row IF the cell is currently blank. Skips and reports if the
+// cell already has a value (no overwrites — once an ID is set the cell
+// is sacred).
+//
+// Touches one column. Never modifies anything else on the sheet.
+function handleWriteSubmissionIds_(sheet, headers, lastColumn, body) {
+  const assignments = body.assignments;
+  if (!Array.isArray(assignments)) {
+    return json_({ok: false, error: 'assignments array required'});
+  }
+
+  let submissionIdCol = -1;
+  for (let c = 0; c < headers.length; c++) {
+    if (FIELD_MAP[normaliseHeader_(headers[c])] === 'submission_id') {
+      submissionIdCol = c;
+      break;
+    }
+  }
+  if (submissionIdCol === -1) {
+    return json_({ok: false, error: 'sheet has no Submission ID column'});
+  }
+
+  const lastRow = sheet.getLastRow();
+  let written = 0;
+  let skippedAlreadyPopulated = 0;
+  let skippedOutOfRange = 0;
+  const errors = [];
+
+  for (const a of assignments) {
+    const rowIdx = a.row_index;
+    const sid = a.submission_id;
+    if (typeof rowIdx !== 'number' || rowIdx < 2 || rowIdx > lastRow) {
+      skippedOutOfRange++;
+      continue;
+    }
+    if (sid === null || sid === undefined || sid === '') {
+      errors.push('row ' + rowIdx + ': missing submission_id in assignment');
+      continue;
+    }
+    const cellRange = sheet.getRange(rowIdx, submissionIdCol + 1);
+    const existing = cellRange.getValue();
+    if (existing !== '' && existing !== null && existing !== undefined) {
+      skippedAlreadyPopulated++;
+      continue;
+    }
+    cellRange.setValue(sid);
+    written++;
+  }
+
+  return json_({
+    ok: true,
+    mode: 'write_submission_ids',
+    written: written,
+    skipped_already_populated: skippedAlreadyPopulated,
+    skipped_out_of_range: skippedOutOfRange,
+    errors: errors
   });
 }
 

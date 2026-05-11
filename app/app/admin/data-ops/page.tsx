@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Run024Panel } from "./run-024-panel";
 import { RunClientNoncePanel } from "./run-client-nonce-panel";
+import { RunSheetIdBackfillPanel } from "./run-sheet-id-backfill-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,21 @@ export default async function DataOpsPage() {
   // we get -1 and fall back to showing the panel unconditionally — safe.
   const noncePending = await getClientNoncePendingCount();
   const showNoncePanel = noncePending !== 0;
+
+  // Providers eligible for the sheet ID backfill panel (have a sheet
+  // webhook). Loaded once for the picker. Lightweight query.
+  const admin = createAdminClient();
+  const { data: sheetProvidersRaw } = await admin
+    .schema("crm")
+    .from("providers")
+    .select("provider_id, company_name, sheet_webhook_url")
+    .eq("active", true)
+    .not("sheet_webhook_url", "is", null)
+    .order("company_name", { ascending: true });
+  const sheetIdProviders = (sheetProvidersRaw ?? []).map((p: { provider_id: string; company_name: string }) => ({
+    provider_id: p.provider_id,
+    company_name: p.company_name,
+  }));
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -169,6 +185,49 @@ export default async function DataOpsPage() {
             </div>
             <div className="border-t border-[#dde3e6] pt-4">
               <RunClientNoncePanel />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {sheetIdProviders.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">
+              Backfill: Submission IDs in legacy sheet rows
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="text-xs text-[#5a6a72] space-y-2 leading-relaxed">
+              <p>
+                <span className="font-semibold text-[#11242e]">Why:</span>{" "}
+                The <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">Submission ID</code>
+                {" "}column on provider sheets was introduced 2026-05-07 for the
+                Fastrack flow. Rows that pre-date that change have a blank cell
+                in that column, so the regular Sheet ↔ DB reconcile on{" "}
+                <a href="/errors" className="font-semibold underline-offset-2 hover:underline">Data health</a>
+                {" "}can&apos;t match them. This one-shot tool fills in the
+                missing IDs by matching each unidentified sheet row to a DB
+                lead via email + course.
+              </p>
+              <p>
+                <span className="font-semibold text-[#11242e]">Safety:</span>{" "}
+                only writes the Submission ID cell, only to currently-blank cells,
+                never overwrites. Dry-run shows exactly which row gets which ID
+                before any write. Idempotent.
+              </p>
+              <p>
+                <span className="font-semibold text-[#11242e]">After running:</span>{" "}
+                go to <a href="/errors" className="font-semibold underline-offset-2 hover:underline">Data health</a>,
+                Check drift, Push DB → sheet — the old rows will now match and
+                update correctly.
+              </p>
+            </div>
+            <div className="border-t border-[#dde3e6] pt-4">
+              <RunSheetIdBackfillPanel
+                providers={sheetIdProviders}
+                initialProviderId={sheetIdProviders[0].provider_id}
+              />
             </div>
           </CardContent>
         </Card>
