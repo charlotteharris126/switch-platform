@@ -244,6 +244,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (l3MismatchFlag) lostReason = "l3_mismatch_self_reported";
   else if (cohortDeclineFlag) lostReason = "cohort_decline";
 
+  // Tracks whether Step 8's DB flip actually succeeded. When false, we
+  // must NOT tell the sheet to mark this lead as Lost — otherwise the
+  // DB stays "open" while the sheet says "Lost", which is exactly the
+  // divergence lead #375 hit (sheet flipped, DB didn't, no visible
+  // alert until owner noticed two days later).
+  let flipSucceeded = false;
+
   if (lostReason) {
     const reasonHuman = lostReasonHumanText(lostReason);
     const noteBody =
@@ -260,9 +267,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
          LIMIT 1
       `;
 
+      let rowsAffected = 0;
       await sql.begin(async (trx) => {
         await trx`SET LOCAL ROLE functions_writer`;
-        await trx`
+        const updateResult = await trx`
           UPDATE crm.enrolments
              SET status            = 'lost',
                  lost_reason       = ${lostReason!},
@@ -270,6 +278,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                  updated_at        = now()
            WHERE submission_id = ${parent.id}
         `;
+        rowsAffected = updateResult.count;
         // System-authored note so the provider sees a clear explanation in
         // the lead's notes log alongside the silent status flip. Only
         // written when the lead is actually routed to a provider — there's
@@ -286,6 +295,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
           `;
         }
       });
+
+      // Distinguish "UPDATE threw" (caught below) from "UPDATE ran but
+      // matched 0 rows" — the latter is silent in postgres but means the
+      // crm.enrolments row didn't exist (lead never landed in CRM). Either
+      // way, sheet must NOT be told to mark this lead Lost.
+      if (rowsAffected > 0) {
+        flipSucceeded = true;
+      } else {
+        await persistSideEffectFailure(
+          rawBody,
+          `fastrack: UPDATE crm.enrolments matched 0 rows for submission_id=${parent.id} (no enrolment row exists). Sheet will receive fastrack notes but NOT Lost status.`,
+          parent.id,
+        );
+      }
 
       // Audit trail. system surface so /admin/leads/[id] activity panel
       // shows the auto-flip alongside provider/admin actions. Best-effort:
@@ -357,7 +380,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
         fastracked: "yes",
         fastrack_notes: fastrackNotes,
       };
-      if (lostReason) {
+      // Sheet "Lost" write is gated on the DB flip succeeding. Without
+      // this gate, a Step 8 failure (transaction throw, 0 rows matched)
+      // leaves the sheet saying "Lost" while crm.enrolments stays
+      // "open" — the divergence lead #375 hit.
+      if (lostReason && flipSucceeded) {
         sheetPayload.status = "Lost";
         sheetPayload.lost_reason = lostReasonHumanText(lostReason);
       }
