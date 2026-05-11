@@ -225,10 +225,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
      WHERE id = ${providerUserId}
   `;
 
-  // Build invite URL — /passkey-enrol/<token> is a shared auth path on the
-  // Next.js proxy (no rewrite, no auth gate). Reachable directly from any
-  // hostname (admin.* and app.*).
-  const inviteUrl = `${PORTAL_BASE_URL}/passkey-enrol/${token}`;
+  // Build invite URL — /provider-set-password/<token> is a shared auth
+  // path on the Next.js proxy (no rewrite, no auth gate). Reachable
+  // directly from any hostname (admin.* and app.*). Retired
+  // /passkey-enrol/ on 2026-05-11.
+  const inviteUrl = `${PORTAL_BASE_URL}/provider-set-password/${token}`;
 
   // Send the invite email (SwitchLeads brand)
   const subject = `Set up your ${provider.company_name} portal access`;

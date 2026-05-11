@@ -246,15 +246,20 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
 
   return (
     <div>
+      {/* Action-needed sits on its own row above the other filter pills
+          so it's prominent — Charlotte's the-thing-you-should-do-now
+          glance state. */}
+      <div className="mb-2">
+        <FilterPill
+          label="Action needed"
+          count={counts.action}
+          active={filter === "action"}
+          onClick={() => setFilter(filter === "action" ? "all" : "action")}
+          tone="rose"
+        />
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex flex-wrap gap-1">
-          <FilterPill
-            label="Action needed"
-            count={counts.action}
-            active={filter === "action"}
-            onClick={() => setFilter(filter === "action" ? "all" : "action")}
-            tone="rose"
-          />
           {FILTER_DEFS.map((f) => (
             <FilterPill
               key={f.value}

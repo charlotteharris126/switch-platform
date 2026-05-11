@@ -13,6 +13,7 @@
 
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { requireAdminUser } from "@/lib/auth/require-admin";
 import { PreviewHeader } from "../preview-header";
 
 interface ProviderRow {
@@ -60,6 +61,7 @@ interface Props {
 }
 
 export default async function PreviewAccountPage({ params }: Props) {
+  await requireAdminUser();
   const { provider_id: rawId } = await params;
   const providerId = decodeURIComponent(rawId);
 

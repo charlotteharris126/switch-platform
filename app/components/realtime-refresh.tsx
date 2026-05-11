@@ -32,6 +32,18 @@ import { createClient } from "@/lib/supabase/client";
 interface TableSpec {
   schema: "leads" | "crm" | "audit";
   table: string;
+  // Optional Postgres-realtime filter applied to this subscription.
+  // Format: "<column>=eq.<value>" (also supports neq/lt/lte/gt/gte/in).
+  // When set, the broker only emits events whose NEW row (or OLD on
+  // DELETE) matches the filter — server-side scoping that drops the
+  // multi-tenant fan-out from O(providers × users) to O(users per provider).
+  //
+  // Each provider page passes a filter pinning the subscription to its
+  // own provider's rows (e.g. provider_id=eq.<id> on crm.enrolments,
+  // primary_routed_to=eq.<id> on leads.submissions). Admin surfaces leave
+  // the filter unset so they receive every row (RLS still scopes to what
+  // their session can read).
+  filter?: string;
 }
 
 interface Props {
@@ -69,11 +81,18 @@ export function RealtimeRefresh({ tables, channel }: Props) {
       if (cancelled) return;
       const ch = supabase.channel(channelName);
       for (const t of tables) {
+        const config: {
+          event: "*";
+          schema: string;
+          table: string;
+          filter?: string;
+        } = { event: "*", schema: t.schema, table: t.table };
+        if (t.filter) config.filter = t.filter;
         ch.on(
           // Postgres changes is dynamically typed by the client lib — type assertion to placate TS.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           "postgres_changes" as any,
-          { event: "*", schema: t.schema, table: t.table },
+          config,
           queueRefresh,
         );
       }

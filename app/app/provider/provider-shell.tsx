@@ -18,9 +18,14 @@ type Active = "home" | "leads" | "account" | "support";
 interface Props {
   active: Active;
   children: React.ReactNode;
+  // Pre-computed "action needed" count. When provided, skips the
+  // Suspense badge fetch — used by /provider where the page already
+  // pulled the underlying enrolments + fastrack rows. Saves two DB
+  // roundtrips on every home paint.
+  actionCount?: number;
 }
 
-export async function ProviderShell({ active, children }: Props) {
+export async function ProviderShell({ active, children, actionCount }: Props) {
   return (
     <div className="min-h-screen bg-slate-50">
       <nav className="bg-slate-900 border-b border-slate-800">
@@ -37,9 +42,18 @@ export async function ProviderShell({ active, children }: Props) {
           </Link>
           <div className="flex items-center gap-1 text-sm">
             <NavLink href="/provider" label="Home" active={active === "home"} />
-            <Suspense fallback={<NavLink href="/provider/leads" label="Leads" active={active === "leads"} />}>
-              <LeadsNavLink active={active === "leads"} />
-            </Suspense>
+            {actionCount != null ? (
+              <NavLink
+                href={actionCount > 0 ? "/provider/leads?status=action" : "/provider/leads"}
+                label="Leads"
+                active={active === "leads"}
+                badge={actionCount}
+              />
+            ) : (
+              <Suspense fallback={<NavLink href="/provider/leads" label="Leads" active={active === "leads"} />}>
+                <LeadsNavLink active={active === "leads"} />
+              </Suspense>
+            )}
             <NavLink href="/provider/support" label="Support" active={active === "support"} />
             <NavLink href="/provider/account" label="Account" active={active === "account"} />
             <form action={signOutAction} className="ml-2">
@@ -151,5 +165,5 @@ async function signOutAction() {
   "use server";
   const supabase = await createClient();
   await supabase.auth.signOut();
-  redirect("/passkey-login");
+  redirect("/provider-login");
 }

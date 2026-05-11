@@ -53,7 +53,7 @@
 // to re-run; second run reports drift_eligible_total = 0.
 
 import postgres from "npm:postgres@3";
-import { sheetLabelToStatus } from "../_shared/sheet-status.ts";
+import { sheetLabelToLostReason, sheetLabelToStatus } from "../_shared/sheet-status.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) throw new Error("SUPABASE_DB_URL not set");
@@ -88,6 +88,7 @@ interface DbLead {
   enrolment_id: number | null;
   routing_log_id: number | null;
   db_status: string; // "open" if no enrolment row, else e.status
+  db_lost_reason: string | null;
   status_updated_at: string | null;
   has_enrolment_row: boolean;
 }
@@ -95,7 +96,9 @@ interface DbLead {
 type DriftKind =
   | "db_open_sheet_terminal"     // 90% case — apply sheet → DB
   | "db_terminal_sheet_other"    // different terminals — apply sheet → DB
-  | "db_missing_sheet_terminal"; // sub 96 case — INSERT enrolment row
+  | "db_missing_sheet_terminal"  // sub 96 case — INSERT enrolment row
+  | "db_lost_same_status_different_reason"; // same status='lost', sheet's
+                                            // lost_reason differs from DB's
 
 interface DriftRow {
   submission_id: number;
@@ -104,7 +107,15 @@ interface DriftRow {
   kind: DriftKind;
   from_status: string;             // "missing" when no enrolment row exists
   to_status: string;
-  lost_reason: string | null;      // defaults to 'other' for lost target
+  // Lost reason resolved from the sheet's Lost Reason cell. Was previously
+  // hard-coded to 'other' for any lost target regardless of what the
+  // provider wrote — now reads sheetLabelToLostReason(). When the sheet
+  // cell is blank/unparseable but status is "lost", falls back to 'other'
+  // (preserves the migration 016 behaviour for empty cells).
+  lost_reason: string | null;
+  // Previous lost_reason from DB. Used when we're flipping the lost_reason
+  // without changing status, so the audit log captures the change.
+  from_lost_reason: string | null;
 }
 
 interface Skipped {
@@ -217,6 +228,7 @@ async function run(
            e.id AS enrolment_id,
            COALESCE(e.routing_log_id, rl.id) AS routing_log_id,
            COALESCE(e.status, 'open') AS db_status,
+           e.lost_reason AS db_lost_reason,
            e.status_updated_at,
            (e.id IS NOT NULL) AS has_enrolment_row
       FROM leads.submissions s
@@ -242,6 +254,10 @@ async function run(
     const sheetRow = sheetById.get(String(lead.submission_id));
     const sheetLabel = sheetRow?.status ?? null;
     const sheetStatus = sheetLabelToStatus(sheetLabel);
+    // Sheet's lost_reason cell, mapped back to canonical enum. May be null
+    // even when sheetStatus is "lost" (cell blank or unrecognised text);
+    // we fall back to "other" only when actually inserting a lost outcome.
+    const sheetLostReason = sheetLabelToLostReason(sheetRow?.lost_reason ?? null);
 
     // No sheet signal → skip
     if (!sheetRow || sheetStatus == null || sheetStatus === "open") {
@@ -276,9 +292,29 @@ async function run(
       continue;
     }
 
-    // sheetStatus is now a non-open canonical DB status
+    // sheetStatus is a non-open canonical DB status here.
     if (sheetStatus === lead.db_status) {
-      // already in sync — no action
+      // Status agrees. Check for same-status-different-lost-reason drift —
+      // only meaningful when both are "lost" (other statuses ignore the
+      // lost_reason column). Detected by the daily drift cron under
+      // kind="lost_reason"; this is its repair counterpart.
+      if (
+        sheetStatus === "lost"
+        && sheetLostReason != null
+        && sheetLostReason !== lead.db_lost_reason
+      ) {
+        proposed.push({
+          submission_id: lead.submission_id,
+          enrolment_id: lead.enrolment_id,
+          routing_log_id: lead.routing_log_id,
+          kind: "db_lost_same_status_different_reason",
+          from_status: "lost",
+          to_status: "lost",
+          lost_reason: sheetLostReason,
+          from_lost_reason: lead.db_lost_reason,
+        });
+      }
+      // Otherwise truly in sync — no action.
       continue;
     }
 
@@ -312,10 +348,13 @@ async function run(
       kind,
       from_status: lead.has_enrolment_row ? lead.db_status : "missing",
       to_status: sheetStatus,
-      // Sheet doesn't carry structured lost_reason; default 'other' for
-      // lost targets, matching the 016 pattern. Operator can correct the
-      // sub-reason post-flip from the admin lead page if needed.
-      lost_reason: sheetStatus === "lost" ? "other" : null,
+      // Lost reason: read the sheet's Lost Reason cell first; only fall
+      // back to "other" if the cell is blank or unrecognised AND we're
+      // flipping to lost.
+      lost_reason: sheetStatus === "lost"
+        ? (sheetLostReason ?? "other")
+        : null,
+      from_lost_reason: lead.db_lost_reason,
     });
   }
 
@@ -382,6 +421,32 @@ async function run(
             )
             ON CONFLICT (submission_id) DO NOTHING
           `;
+        } else if (change.kind === "db_lost_same_status_different_reason") {
+          // Same status, different lost_reason. Update only the lost_reason
+          // (don't bump status_updated_at — the underlying decision didn't
+          // change, just our record of WHY). Guard the UPDATE on the
+          // previous lost_reason value so concurrent edits are visible.
+          if (change.from_lost_reason == null) {
+            await trx`
+              UPDATE crm.enrolments
+                 SET lost_reason = ${change.lost_reason},
+                     updated_at  = now()
+               WHERE submission_id = ${change.submission_id}
+                 AND provider_id   = ${providerId}
+                 AND status        = 'lost'
+                 AND lost_reason   IS NULL
+            `;
+          } else {
+            await trx`
+              UPDATE crm.enrolments
+                 SET lost_reason = ${change.lost_reason},
+                     updated_at  = now()
+               WHERE submission_id = ${change.submission_id}
+                 AND provider_id   = ${providerId}
+                 AND status        = 'lost'
+                 AND lost_reason   = ${change.from_lost_reason}
+            `;
+          }
         } else {
           await trx`
             UPDATE crm.enrolments
@@ -396,25 +461,29 @@ async function run(
         }
 
         // Audit entry — capture before/after + this script tag
+        const auditAction = change.kind === "db_missing_sheet_terminal"
+          ? "sheet_reconcile_enrolment_insert"
+          : change.kind === "db_lost_same_status_different_reason"
+            ? "sheet_reconcile_lost_reason_correction"
+            : "sheet_reconcile_status_correction";
+
+        const auditBefore = change.kind === "db_missing_sheet_terminal"
+          ? null
+          : change.kind === "db_lost_same_status_different_reason"
+            ? sql.json({ status: "lost", lost_reason: change.from_lost_reason })
+            : sql.json({ status: change.from_status });
+
         const [audit] = await trx<Array<{ id: number }>>`
           SELECT audit.log_system_action(
             p_actor        := 'system:reconcile-sheet-to-db',
-            p_action       := ${
-            change.kind === "db_missing_sheet_terminal"
-              ? "sheet_reconcile_enrolment_insert"
-              : "sheet_reconcile_status_correction"
-          },
+            p_action       := ${auditAction},
             p_target_table := 'crm.enrolments',
             p_target_id    := (
               SELECT id::text FROM crm.enrolments
                WHERE submission_id = ${change.submission_id}
                  AND provider_id = ${providerId}
             ),
-            p_before       := ${
-            change.kind === "db_missing_sheet_terminal"
-              ? null
-              : sql.json({ status: change.from_status })
-          },
+            p_before       := ${auditBefore},
             p_after        := ${
             sql.json({ status: change.to_status, lost_reason: change.lost_reason })
           },

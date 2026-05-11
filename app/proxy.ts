@@ -20,10 +20,16 @@ const SHARED_AUTH_PATHS = [
   "/api/auth/linkedin/callback",
   "/api/auth/meta/connect",
   "/api/auth/meta/callback",
-  // Provider portal passkey auth (Session 37). These pages and API routes
-  // run BEFORE a Supabase session exists (the session is minted as the
-  // outcome of /api/passkey/login-verify or /api/passkey/register-verify).
-  // Treated as shared so the proxy doesn't redirect to /login.
+  // Provider portal auth pages — all reachable before a Supabase session
+  // exists. /provider-login → /provider-verify-code is the live two-step
+  // sign-in flow (email + password + email 6-digit code), retired the
+  // passkey flow. /provider-set-password is the invite-link landing.
+  // The passkey-* paths stay listed during the deprecation window so
+  // any in-flight invite links return the deprecation notice instead of
+  // bouncing to /login.
+  "/provider-login",
+  "/provider-verify-code",
+  "/provider-set-password",
   "/passkey-login",
   "/passkey-enrol",
   "/api/passkey/register-options",

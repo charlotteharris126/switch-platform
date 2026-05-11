@@ -65,7 +65,7 @@ export default async function ProviderAccountPage() {
   const supabase = await createClient();
   const { data: sessionData } = await supabase.auth.getSession();
   const user = sessionData.session?.user;
-  if (!user) redirect("/passkey-login");
+  if (!user) redirect("/provider-login");
 
   const admin = createAdminClient();
 
@@ -79,7 +79,7 @@ export default async function ProviderAccountPage() {
 
   if (!pu) {
     await supabase.auth.signOut();
-    redirect("/passkey-login?error=no_active_account");
+    redirect("/provider-login?error=no_active_account");
   }
 
   // provider + passkeys + team users in parallel. all depend on pu but not on each other.

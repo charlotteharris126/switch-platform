@@ -208,10 +208,69 @@ function doPost(e) {
     if (mode === 'write_submission_ids') {
       return handleWriteSubmissionIds_(sheet, headers, lastColumn, body);
     }
-    return json_({ok: false, error: 'unknown mode: ' + mode});
+    if (mode === 'delete_submission_id') {
+      return handleDeleteSubmissionId_(sheet, headers, lastColumn, body);
+    }
+    // Important: gdpr-erase-learner Edge Function distinguishes the
+    // "unsupported_mode" string from generic errors so older appenders
+    // get reported as skipped_unsupported, not failed. Don't change.
+    return json_({ok: false, error: 'unsupported_mode', detail: 'unknown mode: ' + mode});
   } catch (err) {
     return json_({ok: false, error: String(err)});
   }
+}
+
+// Delete mode: erase one or more rows by Submission ID (GDPR right-to-
+// erasure path). Body shape:
+//   { token, mode: 'delete_submission_id', submission_ids: [int, ...] }
+// Returns { ok: true, deleted_count: N }. Idempotent: a submission_id
+// that doesn't exist in the sheet is silently ignored (counted only
+// when actually deleted).
+function handleDeleteSubmissionId_(sheet, headers, lastColumn, body) {
+  const ids = Array.isArray(body.submission_ids) ? body.submission_ids : [];
+  if (ids.length === 0) {
+    return json_({ok: false, error: 'submission_ids required'});
+  }
+  // Locate the Submission ID column the same way the other handlers do
+  // (FIELD_MAP lookup via normaliseHeader_), so a sheet that's renamed
+  // its visible header still works as long as the map is current.
+  var idColumn = -1;
+  for (var c = 0; c < headers.length; c++) {
+    if (FIELD_MAP[normaliseHeader_(headers[c])] === 'submission_id') {
+      idColumn = c;
+      break;
+    }
+  }
+  if (idColumn === -1) {
+    return json_({ok: false, error: 'sheet has no Submission ID column'});
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return json_({ok: true, deleted_count: 0});
+  }
+  // Read the Submission ID column for all data rows. Build a Set of
+  // string-keyed targets for fast lookup; rows match if their cell value
+  // (coerced to string + trimmed) is in the set.
+  const targetSet = {};
+  for (var i = 0; i < ids.length; i++) {
+    targetSet[String(ids[i]).trim()] = true;
+  }
+  const idValues = sheet.getRange(2, idColumn + 1, lastRow - 1, 1).getValues();
+  // Walk rows top-to-bottom but delete bottom-to-top to keep indices
+  // valid (each deleteRow shifts subsequent rows up).
+  const rowsToDelete = [];
+  for (var r = 0; r < idValues.length; r++) {
+    const cell = String(idValues[r][0]).trim();
+    if (cell && targetSet[cell]) {
+      rowsToDelete.push(r + 2); // r=0 is sheet row 2
+    }
+  }
+  let deletedCount = 0;
+  for (var k = rowsToDelete.length - 1; k >= 0; k--) {
+    sheet.deleteRow(rowsToDelete[k]);
+    deletedCount++;
+  }
+  return json_({ok: true, deleted_count: deletedCount});
 }
 
 // Append mode: build a fresh row from each header by reading the matching

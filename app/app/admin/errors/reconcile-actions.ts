@@ -14,10 +14,17 @@ import { isAdmin } from "@/lib/auth/allowlist";
 
 export interface ReconcileProposedChange {
   submission_id: number;
-  kind: "db_open_sheet_terminal" | "db_terminal_sheet_other" | "db_missing_sheet_terminal";
+  kind:
+    | "db_open_sheet_terminal"
+    | "db_terminal_sheet_other"
+    | "db_missing_sheet_terminal"
+    | "db_lost_same_status_different_reason";
   from_status: string;
   to_status: string;
   lost_reason: string | null;
+  // Populated when kind = db_lost_same_status_different_reason so the
+  // panel can show "Funding issue → Not interested" alongside the row.
+  from_lost_reason?: string | null;
 }
 
 export interface ReconcileSheetToDbSummary {
@@ -83,6 +90,65 @@ export async function republishSheetAction(args: {
     apply: args.apply,
     ...(args.submission_ids ? { submission_ids: args.submission_ids } : {}),
   }) as Promise<RepublishSheetResult>;
+}
+
+// =============================================================================
+// GDPR right-to-erasure
+// =============================================================================
+
+export interface ErasureSheetEntry {
+  provider_id: string;
+  company_name: string | null;
+  status: "deleted" | "failed" | "skipped_unsupported" | "skipped_no_webhook";
+  error?: string;
+}
+
+export interface ErasureSummary {
+  ok: true;
+  mode: "dry_run" | "apply";
+  email: string;
+  submission_ids: number[];
+  supabase_result: {
+    submission_ids: number[];
+    rows_deleted: {
+      submissions: number;
+      fastrack_submissions: number;
+      enrolments: number;
+      lead_notes: number;
+      routing_log: number;
+      dead_letter_matched: number;
+    };
+  };
+  brevo_result: { ok: boolean; error?: string };
+  sheet_result: {
+    providers: ErasureSheetEntry[];
+    deleted_count: number;
+    failed_count: number;
+  };
+  erasure_request_id: number | null;
+}
+
+export type ErasureResult = ErasureSummary | { ok: false; error: string };
+
+export async function gdprEraseLearnerAction(args: {
+  email: string;
+  apply: boolean;
+  reason?: string;
+}): Promise<ErasureResult> {
+  // Resolve the calling admin's auth.users.id so the receipt links to a
+  // real processor. callEdgeFunction re-checks admin, but we need the
+  // ID here for the body.
+  const supabase = await createClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user || !isAdmin(userData.user.email)) {
+    return { ok: false, error: "Not authorised" };
+  }
+  return callEdgeFunction("gdpr-erase-learner", {
+    email: args.email,
+    apply: args.apply,
+    ...(args.reason ? { reason: args.reason } : {}),
+    processed_by: userData.user.id,
+  }) as Promise<ErasureResult>;
 }
 
 async function callEdgeFunction(

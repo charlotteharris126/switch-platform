@@ -12,8 +12,8 @@
 // (e.g. /provider/leads?status=open) seeds the initial filter so home
 // page tiles deep-link into the right view.
 
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { requireProviderUser } from "@/lib/auth/require-provider";
 import { ProviderShell } from "../provider-shell";
 import { LeadsTable, type LeadRow, type Filter } from "./leads-table";
 import { LeadsSidebar } from "./leads-sidebar";
@@ -63,11 +63,8 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   const { status: statusParam } = await searchParams;
   const initialFilter = parseFilter(statusParam);
 
+  const ctx = await requireProviderUser();
   const supabase = await createClient();
-  // Cookie-only session check; the proxy already validated against the
-  // Supabase Auth API, RLS gates every query.
-  const { data: sessionData } = await supabase.auth.getSession();
-  if (!sessionData.session?.user) redirect("/passkey-login");
 
   const [submissionsResult, fastrackResult] = await Promise.all([
     supabase
@@ -170,12 +167,12 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   return (
     <ProviderShell active="leads">
       <RealtimeRefresh
+        channel={`rt-provider-leads-${ctx.providerId}`}
         tables={[
-          { schema: "leads", table: "submissions" },
-          { schema: "crm", table: "enrolments" },
-          { schema: "crm", table: "lead_notes" },
+          { schema: "leads", table: "submissions", filter: `primary_routed_to=eq.${ctx.providerId}` },
+          { schema: "crm", table: "enrolments", filter: `provider_id=eq.${ctx.providerId}` },
+          { schema: "crm", table: "lead_notes", filter: `provider_id=eq.${ctx.providerId}` },
         ]}
-        channel="rt-provider-leads"
       />
       <div className="max-w-7xl mx-auto p-6">
         <div className="mb-6">

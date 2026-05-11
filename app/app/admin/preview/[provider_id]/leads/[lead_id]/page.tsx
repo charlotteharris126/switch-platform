@@ -1,24 +1,30 @@
-// /provider/leads/[id]. lead detail + outcome marking + notes log.
+// /admin/preview/[provider_id]/leads/[lead_id] — read-only admin
+// impersonation of /provider/leads/[id], scoped to the target provider.
 //
-// All routed payload fields are visible to the provider (RLS-scoped to
-// their primary_routed_to). Rendering is delegated to <LeadDetailView>
-// so the admin "View as provider" preview can render the same UI with
-// action callbacks omitted (read-only).
+// Mirrors the data fan-out from /provider/leads/[id]/page.tsx but uses
+// the admin client (bypasses RLS) and manually scopes by
+// primary_routed_to. Two defences:
+//   - submission query has .eq("primary_routed_to", providerId), so a
+//     lead routed to a different provider returns no row → notFound.
+//   - Sibling list is also scoped by primary_routed_to so prev/next
+//     stays within the target provider's leads.
+//
+// Action callbacks are NOT passed to <LeadDetailView>, so outcome
+// buttons, notes compose, and the auto-mark-admin-notes-read effect
+// are all hidden. Preview can never fire a write.
 
 import { notFound } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
-import { requireProviderUser } from "@/lib/auth/require-provider";
-import { ProviderShell } from "../../provider-shell";
-import { RealtimeRefresh } from "@/components/realtime-refresh";
-import { markOutcomeAction, addLeadNoteAction, markAdminNotesReadAction } from "./actions";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { requireAdminUser } from "@/lib/auth/require-admin";
 import { type LeadStatus } from "@/lib/lead-status";
 import {
   LeadDetailView,
   type FastrackDetail,
   type LeadDetailEnrolment,
   type LeadDetailSubmission,
-} from "./lead-detail-view";
-import { type NoteRow } from "./notes-log";
+} from "@/app/provider/leads/[id]/lead-detail-view";
+import { type NoteRow } from "@/app/provider/leads/[id]/notes-log";
+import { PreviewHeader } from "../../preview-header";
 
 interface NoteRowRaw {
   id: number;
@@ -26,7 +32,6 @@ interface NoteRowRaw {
   created_at: string;
   author_role: "provider" | "admin" | "system";
   author_display_name: string | null;
-  provider_user_id: number | null;
   read_by_provider_at: string | null;
 }
 
@@ -40,21 +45,29 @@ interface FastrackParentRow {
 }
 
 interface Props {
-  params: Promise<{ id: string }>;
+  params: Promise<{ provider_id: string; lead_id: string }>;
 }
 
-export default async function ProviderLeadDetailPage({ params }: Props) {
-  const { id: idRaw } = await params;
-  const submissionId = parseInt(idRaw, 10);
+export default async function PreviewLeadDetailPage({ params }: Props) {
+  await requireAdminUser();
+  const { provider_id: rawProviderId, lead_id: rawLeadId } = await params;
+  const providerId = decodeURIComponent(rawProviderId);
+  const submissionId = parseInt(rawLeadId, 10);
   if (Number.isNaN(submissionId)) notFound();
 
-  const ctx = await requireProviderUser();
-  const supabase = await createClient();
+  const admin = createAdminClient();
 
-  // Fetch in one wave: this submission, this enrolment, notes for this
-  // lead, all routed siblings (id + routed_at) and fastrack parent ids
-  // for prev/next ordering, plus this lead's own fastrack row if any.
-  // RLS-scoped throughout.
+  const { data: provider } = await admin
+    .schema("crm")
+    .from("providers")
+    .select("provider_id, company_name, is_demo")
+    .eq("provider_id", providerId)
+    .maybeSingle<{ provider_id: string; company_name: string; is_demo: boolean }>();
+  if (!provider) notFound();
+
+  // Same fan-out as /provider/leads/[id]/page.tsx but with admin client +
+  // manual primary_routed_to scoping. The submission query enforces
+  // cross-provider isolation: a lead routed elsewhere returns nothing.
   const [
     submissionResult,
     enrolResult,
@@ -63,41 +76,45 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     fastrackResult,
     fastrackDetailResult,
   ] = await Promise.all([
-    supabase
+    admin
       .schema("leads")
       .from("submissions")
       .select(
         "id,routed_at,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,la,postcode,region",
       )
       .eq("id", submissionId)
+      .eq("primary_routed_to", providerId)
       .maybeSingle<LeadDetailSubmission>(),
-    supabase
+    admin
       .schema("crm")
       .from("enrolments")
       .select("status,outcome_note,status_updated_at,callback_requested_at")
       .eq("submission_id", submissionId)
+      .eq("provider_id", providerId)
       .maybeSingle<LeadDetailEnrolment>(),
-    supabase
+    admin
       .schema("crm")
       .from("lead_notes")
-      .select("id, body, created_at, author_role, author_display_name, provider_user_id, read_by_provider_at")
+      .select("id, body, created_at, author_role, author_display_name, read_by_provider_at")
       .eq("submission_id", submissionId)
       .order("created_at", { ascending: false })
       .limit(200),
-    supabase
+    admin
       .schema("leads")
       .from("submissions")
       .select("id,routed_at")
+      .eq("primary_routed_to", providerId)
       .not("routed_at", "is", null)
       .is("archived_at", null)
       .is("parent_submission_id", null)
       .order("routed_at", { ascending: false })
       .limit(500),
-    supabase
+    admin
       .schema("leads")
       .from("fastrack_submissions")
-      .select("parent_submission_id"),
-    supabase
+      .select("parent_submission_id, parent:submissions!inner(primary_routed_to)")
+      .eq("parent.primary_routed_to", providerId),
+    admin
       .schema("leads")
       .from("fastrack_submissions")
       .select(
@@ -120,8 +137,6 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
   const hasFastrack = fastrackParentIds.has(submission.id);
   const fastrackDetail = fastrackDetailResult.data;
 
-  // Build the same ordering the leads list uses: fastrack first, then
-  // routed_at desc.
   const siblings = (siblingsResult.data ?? []) as SiblingRow[];
   siblings.sort((a, b) => {
     const aFast = fastrackParentIds.has(a.id) ? 1 : 0;
@@ -148,32 +163,33 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     (n) => n.author_role === "admin" && n.read_by_provider_at == null,
   );
 
+  const encoded = encodeURIComponent(providerId);
+
   return (
-    <ProviderShell active="leads">
-      <RealtimeRefresh
-        tables={[
-          { schema: "crm", table: "enrolments", filter: `provider_id=eq.${ctx.providerId}` },
-          { schema: "crm", table: "lead_notes", filter: `provider_id=eq.${ctx.providerId}` },
-        ]}
-        channel={`rt-provider-lead-${submission.id}`}
+    <>
+      <PreviewHeader
+        providerId={providerId}
+        companyName={provider.company_name}
+        isDemo={provider.is_demo}
+        active="leads"
       />
-      <LeadDetailView
-        submission={submission}
-        enrol={enrol}
-        notes={notes}
-        fastrackDetail={fastrackDetail}
-        hasFastrack={hasFastrack}
-        hasUnreadAdminNote={hasUnreadAdminNote}
-        status={status}
-        prevId={prevId}
-        nextId={nextId}
-        positionLabel={positionLabel}
-        leadsListHref="/provider/leads"
-        leadDetailPrefix="/provider/leads/"
-        onMarkOutcome={markOutcomeAction}
-        onAddNote={addLeadNoteAction}
-        onMarkAdminNotesRead={markAdminNotesReadAction}
-      />
-    </ProviderShell>
+      <div className="bg-slate-50 min-h-screen">
+        <LeadDetailView
+          submission={submission}
+          enrol={enrol}
+          notes={notes}
+          fastrackDetail={fastrackDetail}
+          hasFastrack={hasFastrack}
+          hasUnreadAdminNote={hasUnreadAdminNote}
+          status={status}
+          prevId={prevId}
+          nextId={nextId}
+          positionLabel={positionLabel}
+          leadsListHref={`/preview/${encoded}/leads`}
+          leadDetailPrefix={`/preview/${encoded}/leads/`}
+          // Action callbacks intentionally omitted — read-only.
+        />
+      </div>
+    </>
   );
 }

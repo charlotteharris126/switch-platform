@@ -5,13 +5,14 @@
 //
 // Reuses the presentational ProviderHomeView from /provider/home-view.tsx
 // so the rendered output matches what a real provider sees pixel-for-
-// pixel. Only the link targets differ: action-queue / pipeline / "see
-// all" links go to /preview/<provider_id>/leads (preview-side nav),
-// lead-row clicks go to /admin/leads/<id> (admin's own detail page
-// — they see more there than the provider's lead detail anyway).
+// pixel. All link targets (action queue, pipeline pills, "see all",
+// lead-row clicks) stay inside the preview namespace so the operator
+// keeps the PreviewHeader chrome and never gets bounced to the admin
+// lead-detail surface.
 
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { requireAdminUser } from "@/lib/auth/require-admin";
 import { ProviderHomeView } from "@/app/provider/home-view";
 import type { LeadStatus } from "@/lib/lead-status";
 import { PreviewHeader } from "../preview-header";
@@ -54,6 +55,7 @@ interface Props {
 }
 
 export default async function PreviewHomePage({ params }: Props) {
+  await requireAdminUser();
   const { provider_id: rawId } = await params;
   const providerId = decodeURIComponent(rawId);
 
@@ -230,7 +232,7 @@ export default async function PreviewHomePage({ params }: Props) {
           recentLeads={recentLeads}
           sourceBreakdown={sourceBreakdown}
           leadsBase={`/preview/${encoded}`}
-          leadDetailPrefix="/admin/leads/"
+          leadDetailPrefix={`/preview/${encoded}/leads/`}
         />
       </div>
     </>

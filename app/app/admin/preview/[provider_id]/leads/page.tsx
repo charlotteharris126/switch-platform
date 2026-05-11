@@ -15,13 +15,14 @@
 // changes, mirror the change here too.
 //
 // Read-only is enforced by not passing `onBulkMark` to LeadsTable, so
-// the select column and BulkBar never render. Lead-name clicks go to
-// /admin/leads/[id] via the `linkPrefix` prop — the admin already has
-// full lead-detail there, no point routing them into /provider/leads/[id]
-// where they'd hit RLS and see nothing.
+// the select column and BulkBar never render. Lead-name clicks stay
+// inside the preview namespace and land on
+// /preview/<provider_id>/leads/<lead_id> via the `linkPrefix` prop, so
+// the PreviewHeader chrome is preserved and outcome controls hide.
 
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { requireAdminUser } from "@/lib/auth/require-admin";
 import { LeadsTable, type LeadRow, type Filter } from "@/app/provider/leads/leads-table";
 import { LeadsSidebar } from "@/app/provider/leads/leads-sidebar";
 import type { LeadStatus } from "@/lib/lead-status";
@@ -67,6 +68,7 @@ interface Props {
 }
 
 export default async function PreviewLeadsPage({ params, searchParams }: Props) {
+  await requireAdminUser();
   const { provider_id: rawId } = await params;
   const providerId = decodeURIComponent(rawId);
   const { status: statusParam } = await searchParams;
@@ -217,7 +219,7 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
                   key={initialFilter}
                   rows={rows}
                   initialFilter={initialFilter}
-                  linkPrefix="/admin/leads/"
+                  linkPrefix={`/preview/${encodeURIComponent(providerId)}/leads/`}
                 />
               </div>
               <div className="lg:col-span-1 lg:sticky lg:top-6">

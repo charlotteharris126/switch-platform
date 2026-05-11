@@ -33,6 +33,7 @@ const KIND_LABEL: Record<ReconcileProposedChange["kind"], string> = {
   db_open_sheet_terminal: "DB still open, sheet moved on",
   db_terminal_sheet_other: "Different terminal status on each side",
   db_missing_sheet_terminal: "No DB enrolment row, sheet has terminal",
+  db_lost_same_status_different_reason: "Lost on both, different reason",
 };
 
 export function ReconcileSheetPanel({

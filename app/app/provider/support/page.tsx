@@ -16,7 +16,7 @@ export default async function ProviderSupportPage() {
   const supabase = await createClient();
   const { data: sessionData } = await supabase.auth.getSession();
   const user = sessionData.session?.user;
-  if (!user) redirect("/passkey-login");
+  if (!user) redirect("/provider-login");
 
   const admin = createAdminClient();
   const { data: pu } = await admin

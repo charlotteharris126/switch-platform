@@ -73,3 +73,30 @@ export function sheetLabelToStatus(label: string | null | undefined): string | n
     default: return null;
   }
 }
+
+// Inverse of lostReasonHumanText — maps a sheet's Lost Reason cell back to
+// the canonical DB enum value. The forward humaniser snake-cases-to-spaces
+// + title-cases, so the inverse is just a normalise + lookup table.
+//
+// Returns null when:
+//   - cell is empty / null (no signal)
+//   - text doesn't match a known reason (conservative: skip rather than guess)
+//
+// Case-insensitive, whitespace-trimmed. Known reasons mirror the LostReason
+// enum in app/lib/lead-status.ts.
+export function sheetLabelToLostReason(label: string | null | undefined): string | null {
+  if (label == null) return null;
+  const norm = String(label).trim().toLowerCase();
+  if (norm === "") return null;
+  switch (norm) {
+    case "not interested": return "not_interested";
+    case "wrong course": return "wrong_course";
+    case "funding issue": return "funding_issue";
+    case "cancelled": return "cancelled";
+    case "withdrew after enrolment": return "withdrew_after_enrolment";
+    case "l3 mismatch self reported": return "l3_mismatch_self_reported";
+    case "cohort decline": return "cohort_decline";
+    case "other": return "other";
+    default: return null;
+  }
+}

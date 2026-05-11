@@ -22,6 +22,7 @@ import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
 import { Run024Panel } from "../data-ops/run-024-panel";
 import { RunClientNoncePanel } from "../data-ops/run-client-nonce-panel";
 import { RunSheetIdBackfillPanel } from "../data-ops/run-sheet-id-backfill-panel";
+import { GdprEraseLearnerPanel } from "./gdpr-erase-learner-panel";
 
 interface DeadLetterRow {
   id: number;
@@ -552,6 +553,21 @@ export default async function ErrorsPage({
             </p>
             <Run024Panel />
           </section>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">GDPR right-to-erasure</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-[#5a6a72] leading-relaxed">
+            Hard-deletes a learner&apos;s PII across the database, Brevo, and
+            every provider sheet that received their lead. UK GDPR Art. 17.
+            Always dry-run first — the preview shows exactly what will go.
+            Receipt lands in <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">audit.erasure_requests</code>.
+          </p>
+          <GdprEraseLearnerPanel />
         </CardContent>
       </Card>
 

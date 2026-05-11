@@ -190,6 +190,48 @@ export async function addBrevoContactToList(args: { email: string; listId: numbe
   return await fetchBrevo(url, "POST", apiKey, { emails: [args.email] });
 }
 
+// Hard-deletes a contact from Brevo. Used by the GDPR right-to-erasure
+// flow (gdpr-erase-learner Edge Function). Returns ok=true on 204 or 404
+// (404 = already gone; idempotent). The Brevo API accepts an email OR
+// identifier in the URL — we use the email.
+export async function deleteBrevoContact(args: { email: string }): Promise<BrevoResult> {
+  const apiKey = Deno.env.get("BREVO_API_KEY");
+  if (!apiKey) return { ok: false, error: "BREVO_API_KEY not set" };
+  if (!args.email) return { ok: false, error: "email required" };
+
+  const url = `${BREVO_CONTACTS_ENDPOINT}/${encodeURIComponent(args.email)}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), BREVO_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        "api-key": apiKey,
+        accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+    // 204 No Content = deleted. 404 Not Found = already gone (idempotent OK).
+    if (res.status === 204 || res.status === 404) {
+      return { ok: true };
+    }
+    let bodyText = "";
+    try {
+      bodyText = await res.text();
+    } catch {
+      // ignore
+    }
+    return {
+      ok: false,
+      error: `Brevo DELETE contact HTTP ${res.status}: ${bodyText.slice(0, 500)}`,
+    };
+  } catch (err) {
+    return { ok: false, error: describeFetchError(err) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // =============================================================================
 // Transactional templated send (Phase 2 of email rearchitecture, 2026-05-05)
 // =============================================================================

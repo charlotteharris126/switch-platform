@@ -16,7 +16,9 @@ export interface NoteRow {
 interface Props {
   submissionId: number;
   notes: NoteRow[];
-  onAdd: (args: { submissionId: number; body: string }) => Promise<{ ok: boolean; error?: string }>;
+  // Optional. Omit to render the log read-only (compose box hidden) — used by
+  // the admin "View as provider" preview, which must never fire a write.
+  onAdd?: (args: { submissionId: number; body: string }) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function NotesLog({ submissionId, notes, onAdd }: Props) {
@@ -24,10 +26,10 @@ export function NotesLog({ submissionId, notes, onAdd }: Props) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = draft.trim().length > 0 && !pending;
+  const canSubmit = draft.trim().length > 0 && !pending && onAdd != null;
 
   function fire() {
-    if (!canSubmit) return;
+    if (!canSubmit || !onAdd) return;
     setError(null);
     startTransition(async () => {
       const result = await onAdd({ submissionId, body: draft });
@@ -41,45 +43,47 @@ export function NotesLog({ submissionId, notes, onAdd }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Compose */}
-      <div className="space-y-2">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={4}
-          placeholder="Add a note: what they said, what's next, anything to remember."
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-              e.preventDefault();
-              fire();
-            }
-          }}
-          className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 resize-none"
-        />
-        <div className="flex items-center justify-between">
-          <p className="text-[11px] text-slate-400">
-            <kbd className="px-1 py-0.5 border border-slate-200 rounded bg-slate-50">⌘</kbd>{" "}
-            <kbd className="px-1 py-0.5 border border-slate-200 rounded bg-slate-50">Enter</kbd>{" "}
-            to save
-          </p>
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={fire}
-            className="px-4 py-1.5 bg-slate-900 text-white rounded-md text-sm font-semibold hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
-          >
-            {pending ? "Saving…" : "Add note"}
-          </button>
-        </div>
-        {error && (
-          <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2">
-            {error}
+      {/* Compose. hidden in read-only mode. */}
+      {onAdd && (
+        <div className="space-y-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={4}
+            placeholder="Add a note: what they said, what's next, anything to remember."
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                fire();
+              }
+            }}
+            className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 resize-none"
+          />
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-slate-400">
+              <kbd className="px-1 py-0.5 border border-slate-200 rounded bg-slate-50">⌘</kbd>{" "}
+              <kbd className="px-1 py-0.5 border border-slate-200 rounded bg-slate-50">Enter</kbd>{" "}
+              to save
+            </p>
+            <button
+              type="button"
+              disabled={!canSubmit}
+              onClick={fire}
+              className="px-4 py-1.5 bg-slate-900 text-white rounded-md text-sm font-semibold hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >
+              {pending ? "Saving…" : "Add note"}
+            </button>
           </div>
-        )}
-      </div>
+          {error && (
+            <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2">
+              {error}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Log */}
-      <div className="mt-5 border-t border-slate-100 pt-4 flex-1 overflow-y-auto">
+      <div className={`${onAdd ? "mt-5 border-t border-slate-100 pt-4" : ""} flex-1 overflow-y-auto`}>
         {notes.length === 0 ? (
           <p className="text-sm text-slate-400 italic">
             No notes yet. Your first note will appear here.

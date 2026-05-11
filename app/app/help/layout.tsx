@@ -23,7 +23,7 @@ export default function HelpLayout({ children }: { children: React.ReactNode }) 
             />
           </Link>
           <Link
-            href="/passkey-login"
+            href="/provider-login"
             className="text-xs font-semibold text-slate-200 hover:text-white underline-offset-2 hover:underline"
           >
             Sign in

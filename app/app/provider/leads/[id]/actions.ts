@@ -165,9 +165,13 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     return { ok: false, error: `Outcome saved but audit write failed: ${auditError.message}` };
   }
 
+  // Only revalidate the detail page the provider is sitting on. The leads
+  // list and home will refresh on next nav OR via the realtime channel
+  // catching the same UPDATE (debounced 600ms). Cutting the two extra
+  // revalidates here removes ~500-800ms of redundant page rerender on
+  // every outcome click — the click-to-paint latency Charlotte was
+  // hitting was substantially this.
   revalidatePath(`/provider/leads/${args.submissionId}`);
-  revalidatePath("/provider/leads");
-  revalidatePath("/provider");
   return { ok: true };
 }
 
@@ -287,14 +291,14 @@ export async function bulkMarkOutcomeAction(args: {
   }
 
   const supabase = await createClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  if (!sessionData.session?.user) {
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) {
     return { ok: false, applied: 0, skipped: 0, error: "Not signed in" };
   }
 
   // RLS scopes the SELECT to the caller's own leads. Out-of-scope ids just
-  // don't appear; out-of-scope ids never get UPDATEd because the .in()
-  // filter on subsequent updates is a subset of returned ids.
+  // don't appear; never get UPDATEd because subsequent UPDATEs filter on
+  // ids returned by this SELECT.
   const { data: existing, error: readError } = await supabase
     .schema("crm")
     .from("enrolments")
@@ -308,8 +312,7 @@ export async function bulkMarkOutcomeAction(args: {
     lost_reason: string | null;
   }>;
 
-  // "attempt_advance" resolves per-lead: each row picks its own target
-  // based on current status. Non-advance modes have one shared target.
+  // attempt_advance resolves per-lead. Non-advance modes share one target.
   const ATTEMPT_NEXT: Record<string, LeadStatus> = {
     open: "attempt_1_no_answer",
     attempt_1_no_answer: "attempt_2_no_answer",
@@ -323,7 +326,20 @@ export async function bulkMarkOutcomeAction(args: {
     : null;
   const nowIso = new Date().toISOString();
 
-  let applied = 0;
+  // Validate each row, group eligible rows by their (from → to) transition
+  // so we can fire one UPDATE per group. For attempt_advance, this is at
+  // most three groups (open→1, 1→2, 2→3). For shared-target modes, one
+  // group. Skipped rows are counted but never written.
+  type GroupKey = string; // `${from}|${to}`
+  interface EligibleRow {
+    enrolmentId: number;
+    submissionId: number;
+    fromStatus: LeadStatus;
+    fromLostReason: string | null;
+    toStatus: LeadStatus;
+    toLostReason: LostReason | null;
+  }
+  const groups = new Map<GroupKey, EligibleRow[]>();
   let skipped = 0;
 
   for (const row of rows) {
@@ -332,7 +348,6 @@ export async function bulkMarkOutcomeAction(args: {
       ?? ATTEMPT_NEXT[fromStatus]
       ?? null;
     if (!targetStatus) {
-      // attempt_advance on a row past attempt_3 or already terminal → skip
       skipped += 1;
       continue;
     }
@@ -351,41 +366,110 @@ export async function bulkMarkOutcomeAction(args: {
       skipped += 1;
       continue;
     }
+    const key: GroupKey = `${fromStatus}|${targetStatus}`;
+    const eligible: EligibleRow = {
+      enrolmentId: row.id,
+      submissionId: row.submission_id,
+      fromStatus,
+      fromLostReason: row.lost_reason,
+      toStatus: targetStatus,
+      toLostReason: newLostReason,
+    };
+    const existingGroup = groups.get(key);
+    if (existingGroup) existingGroup.push(eligible);
+    else groups.set(key, [eligible]);
+  }
 
-    const before = { status: row.status, lost_reason: row.lost_reason };
-    const after = { status: targetStatus, lost_reason: newLostReason };
+  // One UPDATE per (from, to) group. Guarded on `status = fromStatus`
+  // so a concurrent state change between SELECT and UPDATE is a clean no-op
+  // for that row (it falls out of the WHERE; the count delta surfaces as
+  // skipped on the audit side because we only audit IDs that the SELECT
+  // matched, not all attempted writes).
+  let applied = 0;
+  const auditEntries: Array<{
+    target_table: string;
+    target_id: string;
+    before: { status: string; lost_reason: string | null };
+    after: { status: LeadStatus; lost_reason: LostReason | null };
+    context: { submission_id: number; bulk: true; bulk_mode: string };
+  }> = [];
 
-    const { error: updErr } = await supabase
+  for (const [, eligibleRows] of groups) {
+    const ids = eligibleRows.map((r) => r.enrolmentId);
+    const fromStatus = eligibleRows[0].fromStatus;
+    const toStatus = eligibleRows[0].toStatus;
+    const toLostReason = eligibleRows[0].toLostReason;
+
+    const { error: updErr, count } = await supabase
       .schema("crm")
       .from("enrolments")
       .update({
-        status: targetStatus,
-        lost_reason: newLostReason,
+        status: toStatus,
+        lost_reason: toLostReason,
         status_updated_at: nowIso,
         updated_at: nowIso,
         callback_requested_at: null,
         callback_requested_by: null,
-      })
-      .eq("id", row.id);
+      }, { count: "exact" })
+      .in("id", ids)
+      .eq("status", fromStatus);
+
     if (updErr) {
-      skipped += 1;
+      // Treat the whole group as skipped on the audit side. The UPDATE
+      // could partially fail at the RLS level but supabase-js doesn't
+      // report partial results — conservative is to not log audit for
+      // a failed group.
+      skipped += ids.length;
       continue;
     }
 
-    await supabase.rpc("log_provider_action_v1", {
-      p_action: "mark_outcome_bulk",
-      p_target_table: "crm.enrolments",
-      p_target_id: String(row.id),
-      p_before: before,
-      p_after: after,
-      p_context: { submission_id: row.submission_id, bulk: true, bulk_mode: args.status },
-    });
+    // `count` reflects rows actually updated (may be < ids.length if a
+    // concurrent change moved a row off `status = fromStatus`). We still
+    // audit only the rows we *intended* to update — the user-perceived
+    // applied count matches the click intent. If count < ids.length we
+    // add the difference to skipped so the response is accurate.
+    if (typeof count === "number" && count < ids.length) {
+      skipped += ids.length - count;
+    }
+    const actuallyApplied = typeof count === "number" ? count : ids.length;
+    applied += actuallyApplied;
 
-    applied += 1;
+    for (const row of eligibleRows) {
+      auditEntries.push({
+        target_table: "crm.enrolments",
+        target_id: String(row.enrolmentId),
+        before: { status: row.fromStatus, lost_reason: row.fromLostReason },
+        after: { status: row.toStatus, lost_reason: row.toLostReason },
+        context: {
+          submission_id: row.submissionId,
+          bulk: true,
+          bulk_mode: args.status,
+        },
+      });
+    }
   }
 
-  // Skipped count includes both "transition not allowed" and submissions the
-  // caller doesn't own (those never appeared in the SELECT in the first place).
+  // Single audit RPC for the entire batch.
+  if (auditEntries.length > 0) {
+    const { error: auditErr } = await supabase.rpc("log_provider_action_bulk_v1", {
+      p_action: "mark_outcome_bulk",
+      p_entries: auditEntries,
+    });
+    if (auditErr) {
+      // The data writes already landed; audit failed. Surface so the
+      // operator can see the discrepancy and decide whether to replay
+      // the audit out-of-band.
+      return {
+        ok: false,
+        applied,
+        skipped,
+        error: `Outcomes saved but audit write failed: ${auditErr.message}`,
+      };
+    }
+  }
+
+  // Submissions the caller doesn't own never appeared in the SELECT —
+  // count them as skipped so the UI total matches the click count.
   const totalRequested = args.submissionIds.length;
   const notFound = totalRequested - rows.length;
   skipped += notFound;

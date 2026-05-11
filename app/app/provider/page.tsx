@@ -72,9 +72,13 @@ interface FastrackTimedRow {
 
 export default async function ProviderHomePage() {
   const supabase = await createClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const user = sessionData.session?.user;
-  if (!user) redirect("/passkey-login");
+  // Re-verify with the auth server, not cookie-only — defence-in-depth on
+  // top of the proxy's getUser call. Costs ~80ms but happens once per page
+  // paint, in parallel with no data dependency (we await it here only to
+  // get user.id for the provider_user lookup below).
+  const { data: userData } = await supabase.auth.getUser();
+  const user = userData?.user;
+  if (!user) redirect("/provider-login");
 
   const admin = createAdminClient();
 
@@ -119,7 +123,7 @@ export default async function ProviderHomePage() {
   const pu = puResult.data;
   if (!pu) {
     await supabase.auth.signOut();
-    redirect("/passkey-login?error=no_active_account");
+    redirect("/provider-login?error=no_active_account");
   }
 
   const recentSubs = (recentSubsResult.data ?? []) as RecentLeadRow[];
@@ -232,6 +236,16 @@ export default async function ProviderHomePage() {
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
 
+  // Pre-compute the nav "action needed" badge count from data already in
+  // memory so ProviderShell can skip its own Suspense fetch on home.
+  // Matches LeadsNavLink's definition exactly: callback-pending OR
+  // fastrack-ready (not settled) OR open OR stale-attempt (48h+).
+  const actionCount =
+    callbackCount +
+    fastrackReadyCount +
+    counts.open +
+    staleAttemptCount;
+
   const recentLeads = recentSubs.map((s) => {
     const enrol = recentEnrolBySub.get(s.id);
     const name = [s.first_name, s.last_name].filter(Boolean).join(" ") || s.email || `Lead ${s.id}`;
@@ -245,14 +259,14 @@ export default async function ProviderHomePage() {
   });
 
   return (
-    <ProviderShell active="home">
+    <ProviderShell active="home" actionCount={actionCount}>
       <RealtimeRefresh
         tables={[
-          { schema: "leads", table: "submissions" },
-          { schema: "crm", table: "enrolments" },
-          { schema: "crm", table: "lead_notes" },
+          { schema: "leads", table: "submissions", filter: `primary_routed_to=eq.${pu.provider_id}` },
+          { schema: "crm", table: "enrolments", filter: `provider_id=eq.${pu.provider_id}` },
+          { schema: "crm", table: "lead_notes", filter: `provider_id=eq.${pu.provider_id}` },
         ]}
-        channel="rt-provider-home"
+        channel={`rt-provider-home-${pu.provider_id}`}
       />
       <ProviderHomeView
         providerLabel={provider?.company_name ?? pu.provider_id}
