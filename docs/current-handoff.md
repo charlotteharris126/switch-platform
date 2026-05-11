@@ -1,116 +1,56 @@
-# Platform Handoff, Session 38, 2026-05-09
-
-## ⚡ PUSH FROM switchable/email Session 14, 2026-05-10: Brevo contact-attribute backfill (SW_REFERRAL_URL + SW_FASTRACK_URL)
-
-**Urgency:** important but not urgent. Site redirect (`switchable-site` commit `e99fd6d`) is rescuing the click path. Backfill is data hygiene and a precondition for the next marketing broadcast referencing either attribute. Tomorrow morning is fine.
-
-### What happened tonight
-
-Switchable email referral launch broadcast shipped stale `SW_REFERRAL_URL` values to EMS-matched contacts. Root cause: `_shared/route-lead.ts` `buildReferralUrl()` originally wrote `SW_REFERRAL_URL = /find-funded-courses/?ref=CODE` (funded) or `/find-your-course/?ref=CODE` (self-funded) per commit aadf5ad on 4 May 11:41 BST. Rewired to `/refer/?ref=CODE` for everyone per commit 30e62e0 on 4 May 18:06 BST. No Brevo backfill ran when the wiring changed. Existing contacts on the Switchable Marketing list held stale URLs. Broadcast filter `SW_REFERRAL_URL not empty` caught stale values happily.
-
-1 real recipient clicked the broken link before the site redirect rescued the flow. Wren also drafted a correction broadcast but did not send it (blast-radius didn't justify mass apology). Tonight's redirect is permanent defence-in-depth.
-
-### Task: Brevo contact-attribute backfill
-
-For every contact on the Switchable Marketing list (or more cleanly: every Brevo contact where a matching `leads.submissions` row exists with `referral_code` set):
-
-1. **Backfill `SW_REFERRAL_URL`** — rebuild as `https://switchable.org.uk/refer/?ref=<referral_code>` matching current `buildReferralUrl()` output. Push via the existing `upsertBrevoContact` helper used in `route-lead.ts` (same idempotency, same error handling, same audit row).
-2. **Backfill `SW_FASTRACK_URL` in the same pass.** Wiring shipped 2026-05-09 (commit not in my context but the helper is `buildFastrackUrl(submission.client_nonce)` in the same file). Pre-2026-05-09 funded contacts won't have it set. Empty string is correct for self-funded (no `client_nonce`) and for any funded row without a `client_nonce`. The new `u1-funded.html` template (live after the owner pastes it into Brevo Transactional) references `SW_FASTRACK_URL`, and any future marketing reference would need the backfill anyway.
-3. **Spot-check 3 contacts in Brevo manually before/after.** Pull the current attribute value from the Brevo dashboard or Contact API for the same email pre- and post-backfill. Confirm each value matches what live wiring would produce for that contact's source data.
-4. **Log to `platform/docs/changelog.md`** with date, contact count attempted, count succeeded, any failures.
-
-**Scope:** every contact with `marketing_opt_in = true` on their latest submission, regardless of provider. Don't filter on EMS only, the same staleness affects every other broadcast we would send next.
-
-**Out of scope (Wren is handling):** the site redirect, the correction email draft, the process lock.
-
-**Report back to owner with:** total count attempted, total succeeded, Brevo API failures (likely dead-letter), 3 spot-check before/after values.
-
-### Reference docs
-
-- `switchable/email/docs/current-handoff.md` Session 14 — full incident detail
-- `platform/supabase/functions/_shared/route-lead.ts` lines 519-527 (current `buildReferralUrl`), lines 542-545 (current `buildFastrackUrl`)
-- Phase 3c backfill pattern from 2026-05-07 (47 contacts realigned) — closest precedent
-- **New process lock now in `platform/CLAUDE.md` core discipline + `switchable/email/CLAUDE.md` Pre-broadcast gate + memory entry `feedback_brevo_attribute_wiring_requires_backfill.md`.** TL;DR: every change to an attribute-producing function in `route-lead.ts` requires a same-session backfill plan before merge, and the next marketing broadcast referencing the attribute is gated on the backfill being run. This bullet was added to your Core discipline list this session.
-
----
+# Platform Handoff, Session 39, 2026-05-11
 
 ## Current state
 
-Two of Clara's three EMS-cutover gating conditions cleared this session: audit-log wrapper wired (mig 0106 + Server Action update) and RLS proof signed off 14/14 PASS (data-ops 020 + runbook). Real surprise: the proof caught that migration 0096's write-side policies were no-ops because table-level GRANTs were missing — `markOutcomeAction` has been silently failing since Session 37 despite the "owner-tested" claim. Migration 0108 grants the privileges 0096's comment already promised. Charlotte needs to retest outcome marking on the demo provider before EMS cutover. Clara's third gating condition was a multi-agent cloud diff review that isn't available in this setup; flagged to Charlotte to confirm an alternative review shape (focused single-agent diff review, or her own read).
+Provider portal hardened end-to-end for EMS cutover: team management on `/provider/account`, public first-time-access guide at `/help/getting-started`, copyable per-lead fastrack + referral URLs on `/admin/leads/[id]`, fastrack-receive now notifies the provider's team on the eager-signal path. New `/admin/data-ops` hub for one-off backfills (024 + 025 both shipped and applied). New "Sheet drift recovery" panel in Data health for on-demand DB → sheet republish. Two latent bugs caught and fixed: `buildFastrackUrl` was emitting an incomplete URL shape (since 2026-05-09), and migration 0109 (`crm.lead_notes`) was missing the `functions_writer` GRANT, which bricked the fastrack DQ flow for lead #375.
 
 ## What was done this session
 
-Migrations:
-
-- **0106** `public.log_provider_action_v1` — public-schema thin wrapper over `audit.log_provider_action`. SECURITY INVOKER, delegates auth identity through per-request `request.jwt.claims` GUC. Lets supabase-js `.rpc()` reach the audit writer without exposing the audit schema in the Data API. Versioned (`_v1`) for forward-compatible deprecation.
-- **0107** `REVOKE EXECUTE FROM anon` on the wrapper. Supabase's project-wide `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE TO {anon, authenticated, service_role}` auto-granted anon despite the 0106 `REVOKE FROM PUBLIC`. Inner audit function already rejects anon (`auth.uid()` NULL), but visible least-privilege wins.
-- **0108** `GRANT UPDATE ON crm.enrolments` + `GRANT INSERT ON crm.disputes` to `authenticated`. The bug: migration 0096 shipped policies (`provider_update_enrolments`, `provider_insert_own_disputes`) without the underlying GRANTs, so PostgreSQL short-circuited every write with `42501 permission denied` before RLS even evaluated. Demo provider's enrolments still had seed-time `updated_at` values, confirming Charlotte's "owner-tested" outcome marking never persisted. Fix grants what 0096's comment promised. Row scope still enforced by 0096 policies (re-ran the RLS proof post-grant — cross-tenant writes still return zero rows / RLS rejection).
-
-Server Action:
-
-- **`app/app/provider/leads/[id]/actions.ts`** — `markOutcomeAction` now: SELECTs before-state, updates, calls `public.log_provider_action_v1` with before/after/context. Surfaces audit failure to caller (returns `ok:false`) rather than swallowing. Idempotent on identical-state retry (early return if `before == after`). The atomic UPDATE+audit refactor (single SQL function) is flagged below for Charlotte's call.
-
-RLS proof + runbook:
-
-- **`supabase/data-ops/020_rls_proof_2026_05_09.sql`** — 14 assertions covering helper return value, baseline own-data SELECT, cross-tenant SELECT on 6 tables (submissions, routing_log, enrolments, fastrack_submissions, providers, provider_users), cross-tenant UPDATE on enrolments, cross-tenant INSERT on disputes, audit `actor_provider_id` spoof-rejection, `portal_enabled=false` helper-NULL + table-empty pair. Auth simulated via `SET LOCAL ROLE authenticated` + `set_config('request.jwt.claims', ...)`. All side effects rolled back; one audit-id sequence gap (~3-4 ids) consumed during proof iteration.
-- **`docs/rls-proof-2026-05-09.md`** — runbook + result table. 14/14 PASS. Documents what the proof proves and what it doesn't.
-
-Changelog:
-
-- **`docs/changelog.md`** — Session 38 block at top covering 0106/0107/0108 + the missing-GRANT bug.
+- `/provider/account`: full team-management Card. TeamPanel client component, server-side TeamUserRow loading, `inviteProviderUserAction` Server Action gates on caller `role='provider_admin'`. Re-issue invite per row, plus inline invite form for admins.
+- Public help: `/help/getting-started` (phone-first guidance, per-device passkey expectations, concierge "we'll walk you through it" offer). New `/help` layout. Linked from the provider invite email, `/provider/support`, and `/passkey-login` (new footer with first-time-access link + lost-device support).
+- Provider portal UX: at-a-glance sidebar click affordance fixed (`key={initialFilter}` on `LeadsTable` so URL changes force remount). Hero strip removed in favour of a small "Past 30 days enrolments" badge top-right. Action-needed pill made compact dark red with clear active/inactive ring state.
+- `/admin/data-ops` hub: 024 (Brevo SW_REFERRAL_URL + SW_FASTRACK_URL backfill, 174 audience, 160 mutated) and 025 (client_nonce on funded in-funnel leads). 025 panel auto-hides via `public.count_client_nonce_pending()` RPC (migration 0113). Each panel mirrors with dry-run + confirm-gated apply + before/after spot-checks. 024 ran twice — first pass wrote the `?ref`-only shape, second pass rewrote 160 to the full `?ref&course&m` shape after Charlotte caught the rendering gap.
+- `/admin/leads/[id]`: new CopyableUrl widget for per-lead fastrack + referral URLs. Inline "why not available" reason when client_nonce or referral_code missing (pre-0087 funded vs self-funded). Intake fields (`preferred_intake_id`, `acceptable_intake_ids`) surfaced on Course + qualification card.
+- `_shared/route-lead.ts buildFastrackUrl()`: rewritten to emit the full `?ref=<n>&course=<slug>&m=<0|1>` shape that the funded thank-you page actually consumes. All 17 Brevo-consuming Edge Functions redeployed twice (once for `BREVO_TIMEOUT_MS` 5→15s + 024 inter-write 100→150ms, once for the URL fix).
+- `fastrack-receive`:
+  - Step 10 added: notifies every active provider_user when a clean fastrack lands. Skips the auto-DQ paths (`cohort_decline`, `l3_mismatch_self_reported`). End-to-end click-tested.
+  - Step 8/9 divergence closed: sheet's `status="Lost"` write is now gated on the DB flip actually succeeding (`rowsAffected > 0`). UPDATE-matched-0-rows is no longer silent.
+- Migration 0114: `GRANT SELECT, INSERT ON crm.lead_notes TO functions_writer` + sequence grant. Root cause for lead #375's drift (RLS policy targeted `functions_writer` but only `authenticated` had the table-level grant; PG evaluates GRANT before RLS).
+- Republish provider sheet from DB: new `republish-provider-sheet` Edge Function + UI panel on Data health (`/admin/errors`). Provider picker dropdown, deep-link via `?republish=<provider_id>`. Slim link on `/admin/providers/[id]` pointing to it. Provider page stays focused on provider info; reconciliation tooling lives in one place.
+- Data health: state-aware "Open Data ops" banner (only shows when `count_client_nonce_pending > 0`). "Resolved (last 5 days)" table removed — page is a live to-do, not an audit trail.
+- Brevo cost-of-load mitigation: `BREVO_TIMEOUT_MS` raised 5s → 15s; 024 backfill inter-write delay 100ms → 150ms (was AT Brevo's 10/s ceiling, starved a concurrent route-lead.ts upsert into lead #370's dead-letter).
+- Memory entries locked:
+  - `feedback_data_ops_admin_panel_pattern.md`: default new backfills to Edge Function + `/admin/data-ops` panel, not local scripts.
+  - `feedback_url_features_click_test_before_shipped.md`: any feature emitting a URL needs an actual browser click on the destination before "shipped".
+  - `feedback_rls_policy_needs_table_grant.md`: every `CREATE POLICY ... TO <role>` needs a paired `GRANT` on the same table for that role. Second time this class has bitten (Session 38 was the first).
 
 ## Next steps
 
-1. **Charlotte: re-test outcome marking on the demo portal.** Pre-0108, `markOutcomeAction` was silently failing. Post-0108, it should persist. Click 1-2 outcomes in the demo provider portal, confirm `crm.enrolments.updated_at` advances and `audit.actions` gets a new `surface='provider'` row. Quick query: `SELECT id, status, status_updated_at, updated_at FROM crm.enrolments WHERE provider_id='demo-provider-ltd' ORDER BY updated_at DESC LIMIT 5;`. If the audit row also appears with `actor_provider_id='demo-provider-ltd'` and `action='mark_outcome'`, the wrapper + grants are confirmed end-to-end.
-
-2. **Decide an alternative review for Clara's gating condition #3.** The condition was originally framed as a multi-agent cloud diff review that this setup doesn't have. Two workable substitutes: (a) I delegate a focused single-agent code review across migrations 0091-0108 + the `app/app/provider/**` portal routes via the Agent tool with a clear "look for non-reversible migrations, RLS gaps, secret leaks, design-doc-vs-migration drift" brief; (b) Charlotte reads the diff herself. Either clears condition #3 in spirit. Charlotte to call which.
-
-3. **Decide: atomic outcome-marking refactor.** The current `markOutcomeAction` is SELECT → UPDATE → audit RPC, three round-trips. Failure mode: if audit RPC fails after UPDATE succeeds, the user sees an error, retries, but on retry the early-return-if-identical-state path skips audit — leaving a permanent ROPA gap. The proper shape is a single SQL function (e.g. `crm.provider_mark_outcome(submission_id, status, lost_reason)`) that does UPDATE + audit in one transaction with ROLLBACK on failure. Recommendation: ship the atomic refactor before EMS cutover — it's ~30-60 min and removes a real (rare) ROPA gap. Ask Charlotte to confirm before I write 0109.
-
-4. **Disable email OTP at Supabase project level** (Supabase dashboard → Authentication → Providers → Email → disable). Stops `signInWithOtp` working against any provider auth user, even though we never call it ourselves. Defence-in-depth, carried over from Session 37.
-
-5. **Cleanup duplicate secret stores** (Charlotte action, ~5 min): delete `PROVIDER_INVITE_SECRET` from Supabase Edge Function secrets dashboard, delete `PROVIDER_INVITE_SECRET` + `AUDIT_SHARED_SECRET` from Netlify env. Vault-RPC bypasses both now. Carried over from Session 37.
-
-6. **P4 admin polish** (~1-2h): last-login column on `/admin/providers`, "providers without recent login" tile on `/admin` home, provider-side activity panel on `/admin/leads/[id]`, Brevo "new lead routed" template updated to deep-link `/provider/leads/[id]`. Templates dormant until Brevo IDs set.
-
-7. **EMS cutover sequence** (target mid-next-week, gated on step 1 + 2 clearing). Day 0 invite, days 0-14 parallel sheet + portal, day 14 emails switch to portal-only, day 21 sheet append disabled. Clara's optional PPA clarification paragraph folds into addendum stack ticket [869d61kft](https://app.clickup.com/t/869d61kft) when it next goes out.
-
-8. **SwitchLeads provider-facing Brevo template drafts** (when auto-flip cron re-arms): `BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING` (day-12), day-14 confirmation, day-19 dispute reminder. Charlotte voice (`charlotte-voice.md`), no PII (count + portal link only). Owner approves before live.
-
-9. **Re-arm auto-flip + day-12 warning crons** when prerequisites clear: Wren's day-12 template + Mira's activity-gate framework + provider heads-up emails (Nell). Clara's PPA review now cleared. One SQL block re-schedules both.
-
-10. **Verify Mable's fastrack frontend redirect** for cohort_decline + l3_mismatch. Watch `leads.dead_letter` 24-48h for any `edge_function_brevo_upsert` rows with payload `switchable-waitlist-enrichment` carrying `parent_ref` + `source_form='fastrack-cohort-decline'` or `'fastrack-l3-mismatch'`. Clean = working.
-
-11. **Pre-fill enrichment form via backend lookup** (smart-to-have, Mable's flag). When `/waitlist/` loads with `?parent=<client_nonce>`, currently re-asks for phone (sloppy to pass PII via URL). Cleaner: small new Edge Function `enrichment-prefill` reads parent submission by client_nonce, returns public-safe pre-fillable fields. Lifts enrichment completion rate. No deadline.
-
-12. **Re-run `data-ops/018` for any rows written between SQL run and Mable's form-side fix** (Mable Session 5 push, 2026-05-09 evening). Quick query: `SELECT id, dq_reason, created_at FROM leads.submissions WHERE dq_reason IN ('age', 'location', 'level', 'qual') AND created_at > '<data-ops/018 run time>'`. If non-zero, re-run the same UPDATE block. After this second pass, `data-ops/018` retires.
-
-13. **Provider portal Conditional Mediation** (UX polish, ~30 min). Wire `useBrowserAutofill: true` on `/passkey-login` so a saved passkey shows up as autofill. Currently disabled (caused user confusion in Session 37).
+1. **Owner: mark lead #375 (Lisa Parker) Lost manually** via `/admin/leads/375`. Sheet is already at Lost; admin action brings DB inline and clears the dead-letter row. Migration 0114 means new fastrack DQs won't drift the same way.
+2. **Daily proactive sheet ↔ DB drift cron** (the detection counterpart to the recovery tool). Needs a `read_all_status` mode on `provider-sheet-appender-v2.gs` (deployed per provider sheet — EMS, WYK, CD, demo), a new Edge Function `sheet-drift-reconcile-daily`, pg_cron schedule, alerting via dead_letter + summary email.
+3. **Provider portal remaining asks (queued from earlier in session, none blocking)**: view-as-provider preview for admin, cohort start date + course name filter options on `/provider/leads`, free-text outcome reasons, lead source breakdown, notification preferences split (vital vs optional).
 
 ## Decisions and open questions
 
-### Decided this session
+**Decisions made:**
 
-- **Public-schema wrapper over schema-exposure** (option b from the audit-bridge decision tree). Adding `public.log_provider_action_v1` keeps the audit schema closed and gives a stable surface to deprecate without dragging the schema with it. Versioned (`_v1`) so future shape changes ship `_v2` with a deprecation window per data-infrastructure §12.
-- **Server Action surfaces audit failure** (not swallow + log). If audit write fails after UPDATE succeeds, `markOutcomeAction` returns `ok:false` so the caller sees the failure rather than the row landing without audit evidence. Trade-off: idempotent retry of the same state skips audit (early-return path). The atomic refactor in next-step #3 fixes this properly.
-- **0108 grants surfaced bug, not policy intent change.** The 0096 comment explicitly described the GRANT shape ("server-side Server Actions are the trust boundary, full-table UPDATE granted"); the GRANT was just never written. 0108 implements the promised state, doesn't change policy intent.
+- **One-off data fixes belong on `/admin/data-ops`, not local scripts.** Charlotte affirmed after the 024 backfill landed: local Deno scripts hit Brevo-key-not-revealable + IPv6-only direct DB host friction; Edge Functions sidestep both. Pattern: Edge Function (auth via vault `AUDIT_SHARED_SECRET`) + admin page panel (dry-run, confirm-gated apply, spot-checks).
+- **DB reconciliation tooling lives in Data health, not on individual provider pages.** Charlotte: "any db reconciliation needs to live in data health not be spread out between providers". Short link from provider page deep-links to Data health.
+- **Click-test every URL feature end-to-end before claiming shipped.** The SW_FASTRACK_URL shape bug shipped 2026-05-09 and ran for two days because nobody clicked one of the URLs. Memory entry locks the rule.
+- **Sheet writes gated on DB writes.** DB is single source of truth for status. Sheet can't flip Lost without DB flipping first.
 
-### Open questions
-
-- **Atomic outcome-marking refactor before EMS cutover?** See next step #3. Recommendation: yes. ~30-60 min, removes the ROPA gap on audit failure.
-- **Demo provider re-test confirms 0108 fix end-to-end?** See next step #1. Until Charlotte clicks an outcome and the DB confirms, the fix is verified at the SQL layer only.
+**Open questions:** none currently. All in-flight items have owners or are queued.
 
 ## Watch items
 
-- 🟡 **Demo provider outcome marking** — pre-0108, never persisted. Post-0108, expected to work. Confirm via the query in next step #1 after Charlotte clicks an outcome.
-- 🟡 **Audit row format from the new wrapper** — first real audit-via-wrapper row will land when Charlotte tests outcome marking. Verify `surface='provider'`, `actor_provider_id` in `context`, `before`/`after` populated.
-- 🟡 First overnight runs of the new daily 04:45 UTC `brevo-attribute-reconcile-daily` cron (from Session 36). First scheduled fire 2026-05-10. Should produce zero new dead_letter rows.
-- 🟡 Mable's frontend redirect ship for fastrack `cohort_decline` + `l3_mismatch`. If any payload arrives with `parent_ref` but lookup fails, `leads.dead_letter source=edge_function_brevo_upsert` will surface it.
-- 🟡 PostgREST schema cache may take a moment to pick up 0108 grants. If Charlotte's first outcome click still fails with permission denied, wait ~30s and retry.
-- 🟢 Provider portal RLS — proven 14/14 against demo + EMS. Cross-tenant reads/writes blocked at row level.
+- Lead #375 still at status=open in DB (sheet says Lost). Resolve via admin lead detail page.
+- 024 backfill spot-checks confirmed clean post-rewrite (174 audience / 160 mutated / 0 errors on the second apply). No re-run needed unless `buildReferralUrl` / `buildFastrackUrl` wiring changes again.
+- 025 backfill panel will hide automatically once owner runs apply. As of session close it's still pending visibility — run dry-run to confirm count.
+- The fastrack-notify Brevo email goes via `switchleads` brand transactional. Confirm Brevo deliverability stays clean on first few fastrack events post-launch.
+- Daily drift cron is the planned proactive detection. Until it lands, sheet/DB drift detection is operator-discretion (run the republish tool from Data health when you suspect something).
 
 ## Next session
 
-- **Folder:** platform/
-- **First task:** Confirm Charlotte's demo retest + audit row format (from watch items above), then write 0109 atomic-outcome-mark function if Charlotte greenlights it. Then resolve Clara's gating condition #3 via the route Charlotte picks (delegated review or her own read), then EMS cutover sequence kicks off.
-- **Cross-project:** No new outgoing pushes needed. Clara's gating conditions #1 and #2 cleared; condition #3 is open pending the substitute-review decision in next-step #2.
+- **Folder:** `platform`
+- **First task:** Build the daily sheet ↔ DB drift reconcile cron. Start with adding `read_all_status` mode to `provider-sheet-appender-v2.gs`, owner redeploys on each sheet, then build the `sheet-drift-reconcile-daily` Edge Function + pg_cron schedule + dead_letter surface.
+- **Cross-project:** switchable/email handoff pushed (Wren's Brevo backfill ask actioned, 174 audience / 160 mutated / 0 errors, pre-broadcast gate cleared).
