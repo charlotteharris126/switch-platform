@@ -35,6 +35,41 @@ export interface BackfillSummary {
 export type BackfillResult = BackfillSummary | { ok: false; error: string };
 
 export async function runBackfillAction(args: { apply: boolean }): Promise<BackfillResult> {
+  return callBackfillFunction("backfill-referral-fastrack-urls", args) as Promise<BackfillResult>;
+}
+
+// --- Client-nonce backfill -------------------------------------------------
+
+export interface NonceSpotCheck {
+  id: number;
+  email: string | null;
+  full_name: string;
+  funding_category: string | null;
+  submitted_at: string;
+  new_nonce: string;
+  fastrack_url: string;
+}
+
+export interface NonceBackfillSummary {
+  ok: true;
+  mode: "dry_run" | "apply";
+  audience_size: number;
+  mutated: number;
+  spot_checks: NonceSpotCheck[];
+}
+
+export type NonceBackfillResult = NonceBackfillSummary | { ok: false; error: string };
+
+export async function runNonceBackfillAction(args: { apply: boolean }): Promise<NonceBackfillResult> {
+  return callBackfillFunction("backfill-client-nonce", args) as Promise<NonceBackfillResult>;
+}
+
+// --- Shared call helper ----------------------------------------------------
+
+async function callBackfillFunction(
+  functionName: string,
+  args: { apply: boolean },
+): Promise<{ ok: true; [k: string]: unknown } | { ok: false; error: string }> {
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user || !isAdmin(userData.user.email)) {
@@ -59,7 +94,7 @@ export async function runBackfillAction(args: { apply: boolean }): Promise<Backf
 
   let resp: Response;
   try {
-    resp = await fetch(`${supabaseUrl}/functions/v1/backfill-referral-fastrack-urls`, {
+    resp = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -81,5 +116,5 @@ export async function runBackfillAction(args: { apply: boolean }): Promise<Backf
     };
   }
 
-  return body as unknown as BackfillSummary;
+  return body as { ok: true; [k: string]: unknown };
 }

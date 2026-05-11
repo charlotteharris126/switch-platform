@@ -493,3 +493,6 @@ verify_jwt = false
 
 [functions.backfill-referral-fastrack-urls]
 verify_jwt = false
+
+[functions.backfill-client-nonce]
+verify_jwt = false

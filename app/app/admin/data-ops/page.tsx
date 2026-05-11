@@ -5,6 +5,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Run024Panel } from "./run-024-panel";
+import { RunClientNoncePanel } from "./run-client-nonce-panel";
 
 export default function DataOpsPage() {
   return (
@@ -76,6 +77,72 @@ export default function DataOpsPage() {
           </div>
           <div className="border-t border-[#dde3e6] pt-4">
             <Run024Panel />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">
+            025: Backfill client_nonce on funded in-funnel leads
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="text-xs text-[#5a6a72] space-y-2 leading-relaxed">
+            <p>
+              <span className="font-semibold text-[#11242e]">Why:</span>{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">
+                leads.submissions.client_nonce
+              </code>{" "}
+              landed on 2026-05-07 (migration 0087). Funded leads submitted
+              before that date have no nonce, so their per-lead fastrack URL
+              on{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">
+                /admin/leads/[id]
+              </code>{" "}
+              renders as &quot;not available&quot;. Backfill stamps a fresh
+              UUID into each qualifying row so the link works.
+            </p>
+            <p>
+              <span className="font-semibold text-[#11242e]">Audience:</span>{" "}
+              funded leads (gov / loan) where{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">
+                client_nonce
+              </code>{" "}
+              is null,{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">
+                is_dq
+              </code>{" "}
+              is not true, and the lead isn&apos;t already{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">
+                enrolled
+              </code>{" "}
+              /{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">
+                presumed_enrolled
+              </code>
+              . All other statuses (open, calling, meeting booked, lost,
+              cannot_reach) are in scope.
+            </p>
+            <p>
+              <span className="font-semibold text-[#11242e]">Idempotent.</span>{" "}
+              Single atomic{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">
+                UPDATE ... RETURNING
+              </code>{" "}
+              with the same filter. Re-running is a no-op once the audience
+              is empty. New funded submissions get their nonce at form-submit
+              time, untouched by this.
+            </p>
+            <p>
+              <span className="font-semibold text-[#11242e]">No Brevo writes.</span>{" "}
+              This backfill only touches the DB. To push the new nonces into
+              existing Brevo contacts&apos; SW_FASTRACK_URL attribute, re-run
+              the 024 backfill above after this one completes.
+            </p>
+          </div>
+          <div className="border-t border-[#dde3e6] pt-4">
+            <RunClientNoncePanel />
           </div>
         </CardContent>
       </Card>
