@@ -306,11 +306,11 @@ function renderInviteEmail(args: {
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #0f172a;">
   <p style="margin: 0 0 16px;">Hi,</p>
   <p style="margin: 0 0 16px;">You've been invited to set up portal access for <strong>${escapeHtml(args.company)}</strong> on SwitchLeads.</p>
-  <p style="margin: 0 0 16px;">Click the button below on the device you want to log in from. Your browser will ask you to register a passkey (Touch ID, Face ID, Windows Hello, or a security key). That becomes your way in from now on. No passwords, no codes.</p>
+  <p style="margin: 0 0 16px;">Click the button below to choose a password. From then on, you'll sign in with your email + that password, and we'll email you a 6-digit code on fresh devices to confirm it's you.</p>
   <p style="margin: 24px 0;">
-    <a href="${escapeHtml(args.inviteUrl)}" style="display: inline-block; background: #0f172a; color: #ffffff; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600;">Set up your passkey</a>
+    <a href="${escapeHtml(args.inviteUrl)}" style="display: inline-block; background: #0f172a; color: #ffffff; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600;">Set up your password</a>
   </p>
-  <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">First time using a passkey, or want to know what to expect once you're in? Read the <a href="${escapeHtml(args.helpUrl)}" style="color: #0f172a; font-weight: 600;">getting-started guide</a> (4-min read).</p>
+  <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">Want to know what to expect once you're in? Read the <a href="${escapeHtml(args.helpUrl)}" style="color: #0f172a; font-weight: 600;">getting-started guide</a> (4-min read).</p>
   <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">This link expires at <strong>${escapeHtml(expiresText)}</strong> and only works once. If it expires before you use it, ask the SwitchLeads team for a new one.</p>
   <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">If you weren't expecting this invite, you can ignore the email. The link does nothing on its own and dies after the time above.</p>
   <p style="margin: 24px 0 0; color: #94a3b8; font-size: 12px;">SwitchLeads, provider portal access.</p>
