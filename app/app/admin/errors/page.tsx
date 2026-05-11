@@ -382,12 +382,9 @@ export default async function ErrorsPage() {
 
   const now = Date.now();
   const unresolved = rows.filter((r) => !r.replayed_at);
-  // Recent resolved capped to past 5 days. Beyond that it's audit history,
-  // not "did I dismiss this?" memory aid — query the DB directly if needed.
-  const fiveDaysAgo = now - 5 * 24 * 3600 * 1000;
-  const resolved = rows.filter(
-    (r) => r.replayed_at && new Date(r.replayed_at).getTime() >= fiveDaysAgo,
-  );
+  // Resolved rows are kept in the DB (replayed_at stamped) but no longer
+  // shown on this page — it's a live to-do list for ad-hoc fixes, not
+  // an audit trail. Query the DB directly if older history is needed.
   const over7d = unresolved.filter(
     (r) => now - new Date(r.received_at).getTime() > 7 * 24 * 3600 * 1000
   ).length;
@@ -434,7 +431,7 @@ export default async function ErrorsPage() {
         windowStartDate={reconcileCutoffDate}
       />
 
-      <ErrorsSectionHeader unresolvedCount={unresolved.length} resolvedCount={resolved.length} over7dCount={over7d} />
+      <ErrorsSectionHeader unresolvedCount={unresolved.length} over7dCount={over7d} />
 
       {unresolved.length === 0 ? (
         <Card className="border-emerald-200 bg-emerald-50">
@@ -596,51 +593,6 @@ export default async function ErrorsPage() {
         </>
       )}
 
-      {resolved.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Resolved (last 5 days)</CardTitle>
-            <p className="text-xs text-[#5a6a72] mt-1">For short-term audit reference only. Older history lives in the database.</p>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Lead</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Received</TableHead>
-                  <TableHead>Resolved</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {resolved.slice(0, 50).map((r) => {
-                  const sid =
-                    r.replay_submission_id ??
-                    (r.raw_payload as { submission_id?: number } | null)?.submission_id ??
-                    null;
-                  const lead = sid != null ? subsById.get(sid) : undefined;
-                  return (
-                    <TableRow key={r.id} className="opacity-70">
-                      <TableCell className="text-xs">
-                        {sid != null ? (
-                          <Link href={`/leads/${sid}`} className="text-[#143643] hover:text-[#cd8b76] font-semibold">
-                            {formatLeadName(lead)}
-                          </Link>
-                        ) : (
-                          <span className="text-[#5a6a72]">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs">{r.source}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDateTime(r.received_at)}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDateTime(r.replayed_at)}</TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
@@ -807,11 +759,9 @@ function Metric({ label, value, highlight }: { label: string; value: number; hig
 
 function ErrorsSectionHeader({
   unresolvedCount,
-  resolvedCount,
   over7dCount,
 }: {
   unresolvedCount: number;
-  resolvedCount: number;
   over7dCount: number;
 }) {
   return (
@@ -819,10 +769,10 @@ function ErrorsSectionHeader({
       <h2 className="text-sm font-bold text-[#11242e] uppercase tracking-[2px] mb-1">Errors</h2>
       <p className="text-xs text-[#5a6a72]">
         {unresolvedCount === 0 ? (
-          <>No unresolved errors. {resolvedCount > 0 ? `${resolvedCount} resolved (audit trail below)` : null}</>
+          <>No unresolved errors.</>
         ) : (
           <>
-            {unresolvedCount} unresolved · {resolvedCount} resolved
+            {unresolvedCount} unresolved
             {over7dCount > 0 && <span className="text-[#b3412e]"> · {over7dCount} over 7 days old</span>}
           </>
         )}
