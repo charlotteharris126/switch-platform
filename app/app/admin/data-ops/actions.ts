@@ -64,119 +64,11 @@ export async function runNonceBackfillAction(args: { apply: boolean }): Promise<
   return callBackfillFunction("backfill-client-nonce", args) as Promise<NonceBackfillResult>;
 }
 
-// --- Sheet ↔ DB reconcile --------------------------------------------------
-
-export interface ReconcileProposedChange {
-  submission_id: number;
-  kind: "db_open_sheet_terminal" | "db_terminal_sheet_other" | "db_missing_sheet_terminal";
-  from_status: string;
-  to_status: string;
-  lost_reason: string | null;
-}
-
-export interface ReconcileSheetToDbSummary {
-  ok: true;
-  mode: "dry_run" | "apply";
-  provider_id: string;
-  company_name: string | null;
-  drift_eligible_total: number;
-  drift_skipped_ambiguous: number;
-  drift_skipped_no_signal: number;
-  drift_skipped_db_fresher: number;
-  drift_skipped_target_disallowed: number;
-  proposed_changes: ReconcileProposedChange[];
-  applied_count: number;
-  errors: string[];
-  audit_entries: number[];
-}
-
-export type ReconcileSheetToDbResult = ReconcileSheetToDbSummary | { ok: false; error: string };
-
-export async function reconcileSheetToDbAction(args: {
-  provider_id: string;
-  apply: boolean;
-  submission_ids?: number[];
-}): Promise<ReconcileSheetToDbResult> {
-  return callEdgeFunction("reconcile-sheet-to-db", {
-    provider_id: args.provider_id,
-    apply: args.apply,
-    ...(args.submission_ids ? { submission_ids: args.submission_ids } : {}),
-  }) as Promise<ReconcileSheetToDbResult>;
-}
-
-export interface RepublishSpotCheck {
-  submission_id: number;
-  status_db: string;
-  lost_reason_db: string | null;
-  fastracked: boolean;
-}
-
-export interface RepublishSheetSummary {
-  ok: true;
-  mode: "dry_run" | "apply";
-  provider_id: string;
-  company_name: string | null;
-  leads_total: number;
-  leads_written: number;
-  leads_skipped_no_appender_ack: number;
-  errors: number;
-  error_messages: string[];
-  spot_checks: RepublishSpotCheck[];
-}
-
-export type RepublishSheetResult = RepublishSheetSummary | { ok: false; error: string };
-
-export async function republishSheetAction(args: {
-  provider_id: string;
-  apply: boolean;
-}): Promise<RepublishSheetResult> {
-  return callEdgeFunction("republish-provider-sheet", {
-    provider_id: args.provider_id,
-    apply: args.apply,
-  }) as Promise<RepublishSheetResult>;
-}
-
-export interface ProviderOption {
-  provider_id: string;
-  company_name: string;
-  is_demo: boolean;
-  has_sheet: boolean;
-}
-
-export async function listProvidersForReconcileAction(): Promise<ProviderOption[]> {
-  const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user || !isAdmin(userData.user.email)) return [];
-
-  const admin = createAdminClient();
-  const { data, error } = await admin
-    .schema("crm")
-    .from("providers")
-    .select("provider_id, company_name, is_demo, sheet_webhook_url")
-    .eq("active", true)
-    .order("is_demo", { ascending: true })
-    .order("company_name", { ascending: true });
-  if (error || !data) return [];
-  return data.map((p: { provider_id: string; company_name: string; is_demo: boolean; sheet_webhook_url: string | null }) => ({
-    provider_id: p.provider_id,
-    company_name: p.company_name,
-    is_demo: p.is_demo,
-    has_sheet: p.sheet_webhook_url != null,
-  }));
-}
-
 // --- Shared call helper ----------------------------------------------------
 
 async function callBackfillFunction(
   functionName: string,
   args: { apply: boolean },
-): Promise<{ ok: true; [k: string]: unknown } | { ok: false; error: string }> {
-  return callEdgeFunction(functionName, { apply: args.apply });
-}
-
-async function callEdgeFunction(
-  functionName: string,
-  body: Record<string, unknown>,
 ): Promise<{ ok: true; [k: string]: unknown } | { ok: false; error: string }> {
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
@@ -208,7 +100,7 @@ async function callEdgeFunction(
         "content-type": "application/json",
         "x-audit-key": secretData,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ apply: args.apply }),
     });
   } catch (err) {
     return { ok: false, error: `Network error: ${err instanceof Error ? err.message : String(err)}` };

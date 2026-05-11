@@ -15,16 +15,19 @@
 //   4. Apply runs the chosen direction. Audit log captures every change.
 //   5. Re-run dry-run to confirm drift_eligible_total = 0.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import {
-  type ProviderOption,
   type ReconcileProposedChange,
   type ReconcileSheetToDbResult,
   type RepublishSheetResult,
-  listProvidersForReconcileAction,
   reconcileSheetToDbAction,
   republishSheetAction,
-} from "./actions";
+} from "./reconcile-actions";
+
+export interface ReconcileProvider {
+  provider_id: string;
+  company_name: string;
+}
 
 const KIND_LABEL: Record<ReconcileProposedChange["kind"], string> = {
   db_open_sheet_terminal: "DB still open, sheet moved on",
@@ -32,9 +35,14 @@ const KIND_LABEL: Record<ReconcileProposedChange["kind"], string> = {
   db_missing_sheet_terminal: "No DB enrolment row, sheet has terminal",
 };
 
-export function ReconcileSheetPanel() {
-  const [providers, setProviders] = useState<ProviderOption[]>([]);
-  const [providerId, setProviderId] = useState<string>("");
+export function ReconcileSheetPanel({
+  providers,
+  initialProviderId,
+}: {
+  providers: ReconcileProvider[];
+  initialProviderId: string;
+}) {
+  const [providerId, setProviderId] = useState<string>(initialProviderId);
   const [pending, startTransition] = useTransition();
   const [pendingMode, setPendingMode] = useState<
     | "dry_run"
@@ -48,14 +56,6 @@ export function ReconcileSheetPanel() {
   const [republishResult, setRepublishResult] = useState<RepublishSheetResult | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [confirmApply, setConfirmApply] = useState<"sheet_to_db" | "db_to_sheet" | null>(null);
-
-  useEffect(() => {
-    listProvidersForReconcileAction().then((list) => {
-      const filtered = list.filter((p) => p.has_sheet);
-      setProviders(filtered);
-      if (filtered.length > 0 && !providerId) setProviderId(filtered[0].provider_id);
-    });
-  }, [providerId]);
 
   function resetResults() {
     setDryRunResult(null);
@@ -145,10 +145,10 @@ export function ReconcileSheetPanel() {
           disabled={pending || providers.length === 0}
           className="border border-slate-300 rounded-md px-3 py-1.5 text-sm bg-white"
         >
-          {providers.length === 0 && <option value="">Loading…</option>}
+          {providers.length === 0 && <option value="">No providers</option>}
           {providers.map((p) => (
             <option key={p.provider_id} value={p.provider_id}>
-              {p.company_name}{p.is_demo ? " (demo)" : ""}
+              {p.company_name}
             </option>
           ))}
         </select>

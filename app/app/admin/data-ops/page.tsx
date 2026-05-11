@@ -12,7 +12,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Run024Panel } from "./run-024-panel";
 import { RunClientNoncePanel } from "./run-client-nonce-panel";
-import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -51,50 +50,15 @@ export default async function DataOpsPage() {
       {!showNoncePanel && (
         <Card className="border-emerald-200 bg-emerald-50">
           <CardContent className="pt-4 text-xs text-emerald-900">
-            <strong>Nothing pending in the named-backfill queue.</strong> All
-            known data-ops fixes are complete. New panels will appear here
-            when a future fix is scaffolded. The standing reconcile panel
-            below is always available.
+            <strong>Nothing pending.</strong> All known data-ops fixes are
+            complete. New panels will appear here when a future fix is
+            scaffolded. For ongoing sheet ↔ DB drift cure, see the{" "}
+            <a href="/errors" className="font-semibold underline-offset-2 hover:underline">
+              Sheet ↔ DB reconcile card on Data health
+            </a>.
           </CardContent>
         </Card>
       )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">
-            Sheet ↔ DB reconcile (standing tool, any provider)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="text-xs text-[#5a6a72] space-y-2 leading-relaxed">
-            <p>
-              <span className="font-semibold text-[#11242e]">Why:</span>{" "}
-              Daily 06:00 UTC drift cron (when migration 0115 is applied)
-              detects DB ↔ sheet drift and writes <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">leads.dead_letter</code> rows.
-              This panel is the cure for both directions — either when a
-              provider has been editing the sheet outside the
-              sheet-edit-mirror path, or when admin/portal has been
-              editing the DB and the sheet hasn&apos;t caught up.
-            </p>
-            <p>
-              <span className="font-semibold text-[#11242e]">Read-only check first:</span>{" "}
-              picking a provider and clicking <em>Check drift</em> reads
-              the live sheet and the DB. Nothing is written until you pick
-              a direction and confirm.
-            </p>
-            <p>
-              <span className="font-semibold text-[#11242e]">DB is canonical for everything except consent.</span>{" "}
-              Sheet, Brevo attributes and portal are all surfaces over the
-              DB. When in doubt about a drift row, pick the side whose
-              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">status_updated_at</code>
-              {" "}is fresher. Per-row override available before apply.
-            </p>
-          </div>
-          <div className="border-t border-[#dde3e6] pt-4">
-            <ReconcileSheetPanel />
-          </div>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>

@@ -15,7 +15,7 @@ import { formatDateTime, formatAgo } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { ResolveButton } from "./resolve-button";
 import { BulkResolveButton } from "./bulk-resolve";
-import { RepublishSheetPanel } from "./republish-sheet-panel";
+import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
 
 interface DeadLetterRow {
   id: number;
@@ -462,18 +462,32 @@ export default async function ErrorsPage({
       {sheetProviders.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">Sheet drift recovery</CardTitle>
+            <CardTitle className="text-sm">Sheet ↔ DB reconcile</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-[#5a6a72] leading-relaxed">
-              On-demand DB → sheet republish. Re-writes status, lost reason,
-              and fastrack columns for every routed lead using the
-              DB&apos;s current state. Use when you suspect drift (e.g.
-              after a failed status flip, or after manually fixing a lead).
-              Idempotent — re-running is safe. Daily proactive detection is
-              a follow-up.
+              Pick a provider, click <em>Check drift</em> — the function reads the
+              live sheet, compares against DB, and lists any rows that differ.
+              Two cure directions on offer:
             </p>
-            <RepublishSheetPanel
+            <ul className="text-xs text-[#5a6a72] list-disc list-inside space-y-1 leading-relaxed">
+              <li>
+                <span className="font-semibold text-[#11242e]">Apply sheet → DB</span>{" "}
+                when the provider&apos;s been editing the sheet and DB hasn&apos;t caught up
+                (the WYK 2026-05-09 pattern). Updates <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">crm.enrolments</code>{" "}
+                with audit log + Brevo resync.
+              </li>
+              <li>
+                <span className="font-semibold text-[#11242e]">Push DB → sheet</span>{" "}
+                when admin/portal has been editing DB and the sheet is stale. Re-writes
+                status, lost reason, and fastrack columns from DB state.
+              </li>
+            </ul>
+            <p className="text-xs text-[#5a6a72] leading-relaxed">
+              Idempotent. Daily 06:00 UTC cron logs new drift to dead_letter and
+              emails the owner.
+            </p>
+            <ReconcileSheetPanel
               providers={sheetProviders}
               initialProviderId={initialRepublishProvider}
             />
