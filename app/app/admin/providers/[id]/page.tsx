@@ -16,6 +16,7 @@ import { EditProviderForm } from "./edit-provider-form";
 import { ProviderTabs } from "./tabs";
 import { SendPortalInvite } from "./send-portal-invite";
 import { ProviderUsersList, type ProviderUserRow } from "./provider-users-list";
+import { RepublishSheetPanel } from "./republish-sheet-panel";
 
 export default async function ProviderDetailPage({
   params,
@@ -100,6 +101,24 @@ export default async function ProviderDetailPage({
       </div>
 
       <ProviderTabs providerId={provider.provider_id} active="overview" />
+
+      {provider.sheet_webhook_url && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Sheet drift recovery</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-[#5a6a72] leading-relaxed">
+              On-demand DB → sheet republish. Re-writes status + fastrack
+              columns for every routed lead using the DB&apos;s current state,
+              making the DB authoritative. Run when you suspect drift (e.g.
+              after a failed status flip, or after manually fixing an
+              enrolment). Idempotent — re-running is safe.
+            </p>
+            <RepublishSheetPanel providerId={provider.provider_id} />
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
