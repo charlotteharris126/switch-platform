@@ -219,27 +219,14 @@ interface RunSummary {
 async function run(apply: boolean): Promise<RunSummary> {
   const audience = await loadAudienceMap();
 
-  // Walk the first batch BEFORE the run to seed spot-check candidates.
-  const firstBatch = await listBrevoContacts(0);
-
-  const spotEmails: string[] = [];
-  for (const c of firstBatch) {
-    if (!c.email) continue;
-    if (audience.has(c.email.toLowerCase())) spotEmails.push(c.email);
-    if (spotEmails.length >= SPOT_CHECK_COUNT) break;
-  }
-  const spotChecks: SpotCheck[] = [];
-  for (const email of spotEmails) {
-    const c = await getBrevoContact(email);
-    const desired = audience.get(email.toLowerCase())!;
-    spotChecks.push({
-      email,
-      before_referral: c ? readAttrString(c, "SW_REFERRAL_URL") : "",
-      before_fastrack: c ? readAttrString(c, "SW_FASTRACK_URL") : "",
-      desired_referral: desired.desired_referral_url,
-      desired_fastrack: desired.desired_fastrack_url,
-    });
-  }
+  // Pass 1: walk Brevo contacts and partition into "would-change" vs
+  // "already-matching", remembering the first SPOT_CHECK_COUNT of each
+  // for the spot-check panel. We seed spot-check candidates DURING the
+  // mutation pass so we don't double-walk Brevo's contact list. The
+  // candidates we pick from the first traversal are then re-fetched
+  // after-the-fact for the after-state (apply mode).
+  const mismatchedSpot: SpotCheck[] = [];
+  const matchedSpot: SpotCheck[] = [];
 
   let processed = 0;
   let mutated = 0;
@@ -249,8 +236,7 @@ async function run(apply: boolean): Promise<RunSummary> {
   const errorMessages: string[] = [];
 
   let offset = 0;
-  // Reuse firstBatch on the first pass so we don't re-fetch.
-  let batch = firstBatch;
+  let batch = await listBrevoContacts(offset);
 
   while (true) {
     if (batch.length === 0) break;
@@ -269,9 +255,33 @@ async function run(apply: boolean): Promise<RunSummary> {
         continue;
       }
 
-      if (attrsMatch(contact, desired)) {
+      const matches = attrsMatch(contact, desired);
+
+      // Capture spot-check samples during the walk: prioritise mismatches
+      // (showing real diffs is more useful) but keep a couple of matches
+      // as a sanity-check that already-current contacts are recognised.
+      if (matches) {
+        if (matchedSpot.length < SPOT_CHECK_COUNT) {
+          matchedSpot.push({
+            email: contact.email,
+            before_referral: readAttrString(contact, "SW_REFERRAL_URL"),
+            before_fastrack: readAttrString(contact, "SW_FASTRACK_URL"),
+            desired_referral: desired.desired_referral_url,
+            desired_fastrack: desired.desired_fastrack_url,
+          });
+        }
         skippedMatching++;
         continue;
+      }
+
+      if (mismatchedSpot.length < SPOT_CHECK_COUNT) {
+        mismatchedSpot.push({
+          email: contact.email,
+          before_referral: readAttrString(contact, "SW_REFERRAL_URL"),
+          before_fastrack: readAttrString(contact, "SW_FASTRACK_URL"),
+          desired_referral: desired.desired_referral_url,
+          desired_fastrack: desired.desired_fastrack_url,
+        });
       }
 
       if (!apply) {
@@ -307,6 +317,10 @@ async function run(apply: boolean): Promise<RunSummary> {
     offset += batch.length;
     batch = await listBrevoContacts(offset);
   }
+
+  // Combine mismatched + matched into a single ordered list. Mismatched
+  // first so the operator sees real diffs at the top.
+  const spotChecks: SpotCheck[] = [...mismatchedSpot, ...matchedSpot];
 
   // Re-fetch spot-check emails to capture after-state.
   if (apply) {
