@@ -7,11 +7,11 @@
 import { LoginForm } from "./login-form";
 
 interface Props {
-  searchParams: Promise<{ next?: string; just_set?: string; error?: string }>;
+  searchParams: Promise<{ next?: string; just_set?: string; reset?: string; error?: string }>;
 }
 
 export default async function ProviderLoginPage({ searchParams }: Props) {
-  const { next, just_set, error } = await searchParams;
+  const { next, just_set, reset, error } = await searchParams;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-10">
@@ -21,6 +21,11 @@ export default async function ProviderLoginPage({ searchParams }: Props) {
         {just_set === "1" && (
           <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-md p-3 text-sm text-emerald-900">
             Password set. Sign in below.
+          </div>
+        )}
+        {reset === "success" && (
+          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-md p-3 text-sm text-emerald-900">
+            Password changed. Sign in with your new password below.
           </div>
         )}
         {error === "session_expired" && (
@@ -33,9 +38,17 @@ export default async function ProviderLoginPage({ searchParams }: Props) {
           confirm it&apos;s you on this device.
         </p>
         <LoginForm next={next ?? null} />
+        <div className="mt-4 text-xs text-center">
+          <a
+            href="/reset-password"
+            className="text-slate-600 underline-offset-2 hover:underline hover:text-slate-900"
+          >
+            Forgot your password?
+          </a>
+        </div>
         <div className="mt-6 pt-4 border-t border-slate-100 text-xs text-slate-500">
           <p>
-            Trouble?{" "}
+            Other trouble?{" "}
             <a
               href="mailto:support@switchleads.co.uk"
               className="font-semibold text-slate-700 underline-offset-2 hover:underline"

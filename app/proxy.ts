@@ -70,10 +70,12 @@ export async function proxy(request: NextRequest) {
   // Auth paths are shared. No rewrite, no auth gate.
   if (isSharedAuthPath(pathname)) return sessionResponse;
 
-  // Not signed in → /login.
+  // Not signed in → surface-aware login redirect. Admins land on the
+  // password+TOTP login at /login; providers land on the password+email-
+  // OTP login at /provider-login.
   if (!user) {
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    url.pathname = surface === "provider" ? "/provider-login" : "/login";
     url.searchParams.set("next", pathname);
     return copyCookies(sessionResponse, NextResponse.redirect(url));
   }

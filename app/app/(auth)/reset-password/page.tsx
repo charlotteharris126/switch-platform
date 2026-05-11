@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { AuthCard } from "@/components/auth-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,12 @@ export default async function ResetPasswordPage({
   const { error, sent } = await searchParams;
   const errorMessage = error ? (ERROR_MESSAGES[error] ?? error) : null;
 
+  // Detect which surface the user came from so "Back to sign in" lands
+  // them at the right login. proxy.ts stamps x-surface on every request.
+  const headerList = await headers();
+  const surface = headerList.get("x-surface");
+  const backHref = surface === "provider" ? "/provider-login" : "/login";
+
   if (sent === "true") {
     return (
       <AuthCard
@@ -26,7 +33,7 @@ export default async function ResetPasswordPage({
         <p className="text-sm text-slate-600 mb-6">
           The link works once and expires after an hour.
         </p>
-        <Link href="/login">
+        <Link href={backHref}>
           <Button variant="ghost" className="w-full">
             Back to sign in
           </Button>
@@ -54,7 +61,7 @@ export default async function ResetPasswordPage({
         </Button>
       </form>
 
-      <Link href="/login" className="block text-xs text-slate-500 text-center mt-6 hover:underline">
+      <Link href={backHref} className="block text-xs text-slate-500 text-center mt-6 hover:underline">
         Back to sign in
       </Link>
     </AuthCard>
