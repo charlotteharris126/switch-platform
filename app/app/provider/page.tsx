@@ -15,13 +15,12 @@
 // has admin-gated RLS that the authenticated session doesn't satisfy on
 // self-lookup.
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ProviderShell } from "./provider-shell";
-import { DurationTimer } from "./duration-timer";
-import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
+import { ProviderHomeView } from "./home-view";
+import type { LeadStatus } from "@/lib/lead-status";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 
 interface ProviderUserRow {
@@ -63,24 +62,13 @@ interface RecentEnrolmentRow {
 interface RoutedIdRow {
   id: number;
   routed_at: string | null;
+  utm_source: string | null;
 }
 
 interface FastrackTimedRow {
   parent_submission_id: number;
   submitted_at: string;
 }
-
-const STATUS_TONE: Record<LeadStatus, string> = {
-  open: "bg-slate-100 text-slate-700 border-slate-200",
-  attempt_1_no_answer: "bg-amber-50 text-amber-700 border-amber-200",
-  attempt_2_no_answer: "bg-amber-100 text-amber-800 border-amber-300",
-  attempt_3_no_answer: "bg-orange-100 text-orange-800 border-orange-300",
-  enrolment_meeting_booked: "bg-blue-50 text-blue-700 border-blue-200",
-  enrolled: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  presumed_enrolled: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  lost: "bg-rose-50 text-rose-700 border-rose-200",
-  cannot_reach: "bg-rose-50 text-rose-700 border-rose-200",
-};
 
 export default async function ProviderHomePage() {
   const supabase = await createClient();
@@ -118,7 +106,7 @@ export default async function ProviderHomePage() {
       supabase
         .schema("leads")
         .from("submissions")
-        .select("id, routed_at")
+        .select("id, routed_at, utm_source")
         .not("routed_at", "is", null)
         .is("archived_at", null)
         .is("parent_submission_id", null),
@@ -213,6 +201,33 @@ export default async function ProviderHomePage() {
     recentEnrolBySub.set(e.submission_id, e);
   }
 
+  // Lead source breakdown — last 30 days routed leads grouped by
+  // utm_source (empty/null bucketed as "direct"). Top 5 sources by
+  // count. ProviderHomeView renders the bars; we just shape the data.
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const sourceCounts = new Map<string, number>();
+  for (const r of allRouted) {
+    if (!r.routed_at || new Date(r.routed_at).getTime() < thirtyDaysAgo) continue;
+    const source = r.utm_source && r.utm_source.trim() !== "" ? r.utm_source.trim() : "direct";
+    sourceCounts.set(source, (sourceCounts.get(source) ?? 0) + 1);
+  }
+  const sourceBreakdown = [...sourceCounts.entries()]
+    .map(([source, count]) => ({ source, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  const recentLeads = recentSubs.map((s) => {
+    const enrol = recentEnrolBySub.get(s.id);
+    const name = [s.first_name, s.last_name].filter(Boolean).join(" ") || s.email || `Lead ${s.id}`;
+    return {
+      id: s.id,
+      name,
+      course_id: s.course_id,
+      routed_at: s.routed_at,
+      status: (enrol?.status ?? "open") as LeadStatus,
+    };
+  });
+
   return (
     <ProviderShell active="home">
       <RealtimeRefresh
@@ -223,220 +238,24 @@ export default async function ProviderHomePage() {
         ]}
         channel="rt-provider-home"
       />
-      <div className="max-w-7xl mx-auto p-6 space-y-6">
-        {/* Greeting + 30-day enrol badge */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-xs uppercase tracking-widest text-slate-500 font-semibold">
-              {provider?.company_name ?? pu.provider_id}
-            </p>
-            <h1 className="text-2xl font-semibold text-slate-900 mt-1">
-              Welcome back, {pu.display_name ?? pu.contact_email}
-            </h1>
-          </div>
-          <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shrink-0">
-            <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
-              Enrolments, past 30 days
-            </p>
-            <p className="text-3xl font-semibold tabular-nums text-slate-900 leading-none mt-1">
-              {enrolledLast30d}
-            </p>
-          </div>
-        </div>
-
-        {/* Action queue. four uniform cards, always rendered. When the
-            count is 0 the card flips to a calm emerald "all clear" state
-            so the layout stays predictable and good news is visible.
-            Order: fastrack leads → callback requests → open never called
-            → call attempts need retrying. */}
-        <section>
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-            Needs your attention
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <ActionCard
-              href="/provider/leads?status=fastrack"
-              tone="violet"
-              count={fastrackReadyCount}
-              label="fastrack leads"
-              labelSingular="fastrack lead"
-              hint="Cohort confirmed, ready to enrol"
-              doneHint="No fastracks waiting"
-              oldestSince={oldestFastrackSince}
-            />
-            <ActionCard
-              href="/provider/leads?status=callback"
-              tone="rose"
-              count={callbackCount}
-              label="callback requests"
-              labelSingular="callback request"
-              hint="Switchable flagged for follow-up"
-              doneHint="No callbacks pending"
-              oldestSince={oldestCallbackSince}
-            />
-            <ActionCard
-              href="/provider/leads?status=open"
-              tone="amber"
-              count={counts.open}
-              label="open leads never called"
-              labelSingular="open lead never called"
-              hint="No contact attempt yet"
-              doneHint="Every open lead's been tried"
-              oldestSince={oldestOpenSince}
-            />
-            <ActionCard
-              href="/provider/leads?status=action"
-              tone="orange"
-              count={staleAttemptCount}
-              label="call attempts need retrying"
-              labelSingular="call attempt needs retrying"
-              hint="Last call was 48h+ ago"
-              doneHint="No stale attempts"
-              oldestSince={oldestStaleAttemptSince}
-            />
-          </div>
-        </section>
-
-        {/* Pipeline pills */}
-        <section>
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your pipeline</h2>
-            <Link
-              href="/provider/leads"
-              className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-            >
-              See all leads &rarr;
-            </Link>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <PipelinePill label="Open" value={counts.open} tone="slate" href="/provider/leads?status=open" />
-            <PipelinePill label="Calling" value={counts.attempts} tone="amber" href="/provider/leads?status=calling" />
-            <PipelinePill label="Meeting booked" value={counts.meeting_booked} tone="blue" href="/provider/leads?status=meeting" />
-          </div>
-        </section>
-
-        {/* Recent activity */}
-        <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="flex items-baseline justify-between px-6 pt-5 pb-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Recently routed to you</h2>
-              <p className="text-xs text-slate-500 mt-0.5">The last five leads. Click for full details.</p>
-            </div>
-            <Link
-              href="/provider/leads"
-              className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-            >
-              See all &rarr;
-            </Link>
-          </div>
-          {recentSubs.length === 0 ? (
-            <p className="px-6 py-10 text-sm text-slate-500 text-center">
-              No leads yet. New leads land here as they come in.
-            </p>
-          ) : (
-            <ul className="divide-y divide-slate-100 border-t border-slate-100">
-              {recentSubs.map((s) => {
-                const enrol = recentEnrolBySub.get(s.id);
-                const status = (enrol?.status ?? "open") as LeadStatus;
-                const name = [s.first_name, s.last_name].filter(Boolean).join(" ") || s.email || `Lead ${s.id}`;
-                return (
-                  <li key={s.id} className="hover:bg-slate-50 transition-colors">
-                    <Link href={`/provider/leads/${s.id}`} className="flex items-center justify-between px-6 py-3 gap-3 cursor-pointer">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-900 truncate">{name}</p>
-                        <p className="text-xs text-slate-500 truncate">{s.course_id ?? "-"}</p>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <span className="text-xs text-slate-500 tabular-nums">
-                          <DurationTimer since={s.routed_at} />
-                        </span>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${STATUS_TONE[status] ?? "bg-slate-100 text-slate-700 border-slate-200"}`}>
-                          {STATUS_LABEL[status] ?? status}
-                        </span>
-                      </div>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-      </div>
+      <ProviderHomeView
+        providerLabel={provider?.company_name ?? pu.provider_id}
+        greetingName={pu.display_name ?? pu.contact_email}
+        enrolledLast30d={enrolledLast30d}
+        counts={counts}
+        callbackCount={callbackCount}
+        fastrackReadyCount={fastrackReadyCount}
+        staleAttemptCount={staleAttemptCount}
+        oldestCallbackSince={oldestCallbackSince}
+        oldestFastrackSince={oldestFastrackSince}
+        oldestOpenSince={oldestOpenSince}
+        oldestStaleAttemptSince={oldestStaleAttemptSince}
+        recentLeads={recentLeads}
+        sourceBreakdown={sourceBreakdown}
+        leadsBase="/provider"
+        leadDetailPrefix="/provider/leads/"
+      />
     </ProviderShell>
-  );
-}
-
-function ActionCard({
-  href,
-  tone,
-  count,
-  label,
-  labelSingular,
-  hint,
-  doneHint,
-  oldestSince,
-}: {
-  href: string;
-  tone: "rose" | "violet" | "amber" | "orange";
-  count: number;
-  /** Plural label for count !== 1. */
-  label: string;
-  /** Singular form, used when count === 1. */
-  labelSingular: string;
-  /** Hint shown when count > 0. */
-  hint: string;
-  /** Hint shown when count === 0 (alongside the emerald "all done" state). */
-  doneHint: string;
-  /** ISO timestamp of the oldest item in this bucket. Renders a live timer if set. */
-  oldestSince?: string | null;
-}) {
-  const isDone = count === 0;
-
-  // When done, swap the per-card tone for emerald to signal "good, nothing
-  // for you here". When active, use the configured tone.
-  const palette: Record<string, string> = {
-    rose: "bg-rose-50 border-rose-200 hover:border-rose-300 hover:bg-rose-100 text-rose-900",
-    violet:
-      "bg-violet-50 border-violet-200 hover:border-violet-300 hover:bg-violet-100 text-violet-900",
-    amber:
-      "bg-amber-50 border-amber-200 hover:border-amber-300 hover:bg-amber-100 text-amber-900",
-    orange:
-      "bg-orange-50 border-orange-200 hover:border-orange-300 hover:bg-orange-100 text-orange-900",
-    emerald:
-      "bg-emerald-50 border-emerald-200 hover:border-emerald-300 hover:bg-emerald-100 text-emerald-900",
-  };
-  const numTone: Record<string, string> = {
-    rose: "text-rose-700",
-    violet: "text-violet-700",
-    amber: "text-amber-700",
-    orange: "text-orange-700",
-    emerald: "text-emerald-700",
-  };
-  const effectiveTone = isDone ? "emerald" : tone;
-  const displayLabel = count === 1 ? labelSingular : label;
-
-  return (
-    <Link
-      href={href}
-      className={`block p-4 rounded-xl border ${palette[effectiveTone]} transition-colors cursor-pointer`}
-    >
-      <div className="flex items-baseline justify-between gap-2">
-        <p className={`text-3xl font-semibold tabular-nums leading-none ${numTone[effectiveTone]}`}>
-          {isDone ? "✓" : count}
-        </p>
-        <span className="text-xs font-semibold opacity-80">
-          {isDone ? "All clear" : "Review →"}
-        </span>
-      </div>
-      <p className="text-sm font-medium mt-2">{displayLabel}</p>
-      <p className="text-xs opacity-75 mt-0.5">{isDone ? doneHint : hint}</p>
-      {!isDone && oldestSince && (
-        <p className="text-[11px] mt-1.5 font-medium opacity-80 tabular-nums">
-          Oldest waiting{" "}
-          <DurationTimer since={oldestSince} variant="full" />
-        </p>
-      )}
-    </Link>
   );
 }
 
@@ -452,37 +271,6 @@ function oldestIso(values: string[]): string | null {
     }
   }
   return oldest;
-}
-
-function PipelinePill({
-  label,
-  value,
-  tone,
-  href,
-}: {
-  label: string;
-  value: number;
-  tone: "slate" | "amber" | "blue" | "emerald";
-  href: string;
-}) {
-  const palette: Record<string, string> = {
-    slate:
-      "bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm text-slate-900",
-    amber:
-      "bg-amber-50 border-amber-200 hover:border-amber-300 hover:shadow-sm text-amber-900",
-    blue: "bg-blue-50 border-blue-200 hover:border-blue-300 hover:shadow-sm text-blue-900",
-    emerald:
-      "bg-emerald-50 border-emerald-200 hover:border-emerald-300 hover:shadow-sm text-emerald-900",
-  };
-  return (
-    <Link
-      href={href}
-      className={`block p-4 rounded-xl border ${palette[tone]} transition-all cursor-pointer`}
-    >
-      <p className="text-xs uppercase tracking-wide font-semibold opacity-70">{label}</p>
-      <p className="text-2xl font-semibold tabular-nums mt-1 leading-none">{value}</p>
-    </Link>
-  );
 }
 
 function countByStatus(rows: EnrolmentCountRow[]) {

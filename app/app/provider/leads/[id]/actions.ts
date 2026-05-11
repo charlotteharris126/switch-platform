@@ -36,7 +36,15 @@ interface Args {
   submissionId: number;
   status: string;
   lostReason?: string | null;
+  // Optional free-text note captured alongside the structured reason.
+  // Provider portal exposes this for Lost / Cannot reach outcomes —
+  // structured reason stays in lost_reason for analytics; this note
+  // adds nuance ("learner says next year", "moved house"). Stored in
+  // crm.enrolments.outcome_note (migration 0116).
+  outcomeNote?: string | null;
 }
+
+const OUTCOME_NOTE_MAX = 500;
 
 type Result = { ok: true } | { ok: false; error: string };
 
@@ -59,7 +67,7 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
   const { data: existingRow, error: readError } = await supabase
     .schema("crm")
     .from("enrolments")
-    .select("id, status, lost_reason")
+    .select("id, status, lost_reason, outcome_note")
     .eq("submission_id", args.submissionId)
     .maybeSingle();
 
@@ -90,10 +98,36 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     newLostReason = args.lostReason;
   }
 
-  const before = { status: existingRow.status, lost_reason: existingRow.lost_reason };
-  const after = { status: targetStatus, lost_reason: newLostReason };
+  // outcome_note is only persisted for terminal states. For Enrolled /
+  // Meeting booked / attempt_X, ignore any incoming note string —
+  // structured progression is the context for those, not a frozen note.
+  // For Lost / Cannot reach we accept the note (trimmed, length-capped).
+  const acceptsNote = targetStatus === "lost" || targetStatus === "cannot_reach";
+  let newOutcomeNote: string | null = null;
+  if (acceptsNote) {
+    const raw = typeof args.outcomeNote === "string" ? args.outcomeNote.trim() : "";
+    if (raw.length > OUTCOME_NOTE_MAX) {
+      return { ok: false, error: `Note too long (max ${OUTCOME_NOTE_MAX} characters).` };
+    }
+    newOutcomeNote = raw.length > 0 ? raw : null;
+  }
 
-  if (before.status === after.status && before.lost_reason === after.lost_reason) {
+  const before = {
+    status: existingRow.status,
+    lost_reason: existingRow.lost_reason,
+    outcome_note: existingRow.outcome_note ?? null,
+  };
+  const after = {
+    status: targetStatus,
+    lost_reason: newLostReason,
+    outcome_note: newOutcomeNote,
+  };
+
+  if (
+    before.status === after.status
+    && before.lost_reason === after.lost_reason
+    && before.outcome_note === after.outcome_note
+  ) {
     return { ok: true };
   }
 
@@ -108,6 +142,7 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     .update({
       status: targetStatus,
       lost_reason: newLostReason,
+      outcome_note: newOutcomeNote,
       status_updated_at: nowIso,
       updated_at: nowIso,
       callback_requested_at: null,

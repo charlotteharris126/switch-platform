@@ -59,6 +59,7 @@ interface EnrolmentRow {
   id: number;
   status: string;
   lost_reason: string | null;
+  outcome_note: string | null;
   status_updated_at: string;
   callback_requested_at: string | null;
 }
@@ -131,7 +132,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     supabase
       .schema("crm")
       .from("enrolments")
-      .select("id,status,lost_reason,status_updated_at,callback_requested_at")
+      .select("id,status,lost_reason,outcome_note,status_updated_at,callback_requested_at")
       .eq("submission_id", submissionId)
       .maybeSingle<EnrolmentRow>(),
     supabase
@@ -287,6 +288,11 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
                       ? new Date(submission.routed_at).toLocaleDateString("en-GB")
                       : "-"}
                 </p>
+                {enrol?.outcome_note && (status === "lost" || status === "cannot_reach") && (
+                  <p className="text-xs text-slate-700 mt-2 italic border-l-2 border-slate-300 pl-2">
+                    &quot;{enrol.outcome_note}&quot;
+                  </p>
+                )}
               </div>
             </div>
 

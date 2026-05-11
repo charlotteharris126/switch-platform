@@ -43,6 +43,8 @@ interface SubmissionRow {
   funding_category: string | null;
   routed_at: string | null;
   re_submission_count: number | null;
+  preferred_intake_id: string | null;
+  acceptable_intake_ids: string[] | null;
 }
 
 interface EnrolmentRow {
@@ -71,7 +73,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     supabase
       .schema("leads")
       .from("submissions")
-      .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count")
+      .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids")
       .not("routed_at", "is", null)
       .is("archived_at", null)
       .is("parent_submission_id", null)
@@ -118,6 +120,8 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       status_updated_at: enrol?.status_updated_at ?? null,
       has_fastrack: fastrackParentIds.has(s.id),
       callback_pending: enrol?.callback_requested_at != null,
+      preferred_intake_id: s.preferred_intake_id,
+      acceptable_intake_ids: s.acceptable_intake_ids,
     };
   });
 

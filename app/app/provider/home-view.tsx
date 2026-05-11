@@ -34,6 +34,11 @@ const STATUS_TONE: Record<LeadStatus, string> = {
   cannot_reach: "bg-rose-50 text-rose-700 border-rose-200",
 };
 
+export interface SourceCount {
+  source: string;
+  count: number;
+}
+
 export interface HomeViewProps {
   providerLabel: string;
   greetingName: string;
@@ -51,6 +56,10 @@ export interface HomeViewProps {
   oldestOpenSince: string | null;
   oldestStaleAttemptSince: string | null;
   recentLeads: RecentLead[];
+  // Where the provider's recent (last 30 days) leads came from. Top
+  // sources by count. Each provider only sees their own breakdown.
+  // Sources are utm_source values, with empty/null bucketed as "direct".
+  sourceBreakdown: SourceCount[];
   // Where the action-queue, pipeline-pill, and "see all" links go. Real
   // provider pages pass "/provider", admin preview passes
   // "/preview/<provider_id>".
@@ -74,9 +83,11 @@ export function ProviderHomeView({
   oldestOpenSince,
   oldestStaleAttemptSince,
   recentLeads,
+  sourceBreakdown,
   leadsBase,
   leadDetailPrefix,
 }: HomeViewProps) {
+  const sourceTotal = sourceBreakdown.reduce((sum, s) => sum + s.count, 0);
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -162,6 +173,37 @@ export function ProviderHomeView({
           <PipelinePill label="Meeting booked" value={counts.meeting_booked} tone="blue" href={`${leadsBase}/leads?status=meeting`} />
         </div>
       </section>
+
+      {sourceTotal > 0 && (
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
+            Where your last 30 days of leads came from
+          </h2>
+          <div className="bg-white border border-slate-200 rounded-xl p-4">
+            <ul className="space-y-2">
+              {sourceBreakdown.map((s) => {
+                const pct = sourceTotal > 0 ? Math.round((s.count / sourceTotal) * 100) : 0;
+                return (
+                  <li key={s.source} className="flex items-center gap-3 text-sm">
+                    <span className="w-32 text-slate-700 capitalize truncate">{s.source}</span>
+                    <span className="tabular-nums text-slate-900 w-10 text-right">{s.count}</span>
+                    <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-slate-700"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="tabular-nums text-slate-500 text-xs w-10 text-right">{pct}%</span>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="text-[10px] text-slate-400 mt-3">
+              Source recorded at form submission (UTM tag). &quot;Direct&quot; means the learner found us without a tracked campaign.
+            </p>
+          </div>
+        </section>
+      )}
 
       <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="flex items-baseline justify-between px-6 pt-5 pb-3">

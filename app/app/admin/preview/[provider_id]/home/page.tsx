@@ -41,6 +41,7 @@ interface RecentEnrolmentRow {
 interface RoutedIdRow {
   id: number;
   routed_at: string | null;
+  utm_source: string | null;
 }
 
 interface FastrackTimedRow {
@@ -88,7 +89,7 @@ export default async function PreviewHomePage({ params }: Props) {
     admin
       .schema("leads")
       .from("submissions")
-      .select("id, routed_at")
+      .select("id, routed_at, utm_source")
       .eq("primary_routed_to", providerId)
       .not("routed_at", "is", null)
       .is("archived_at", null)
@@ -163,6 +164,20 @@ export default async function PreviewHomePage({ params }: Props) {
   );
   const oldestStaleAttemptSince = oldestIso(staleAttempts.map((e) => e.status_updated_at));
 
+  // Lead source breakdown — last 30 days routed leads, by utm_source
+  // (empty/null bucketed as "direct"). Top 5.
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const sourceCounts = new Map<string, number>();
+  for (const r of allRouted) {
+    if (!r.routed_at || new Date(r.routed_at).getTime() < thirtyDaysAgo) continue;
+    const source = r.utm_source && r.utm_source.trim() !== "" ? r.utm_source.trim() : "direct";
+    sourceCounts.set(source, (sourceCounts.get(source) ?? 0) + 1);
+  }
+  const sourceBreakdown = [...sourceCounts.entries()]
+    .map(([source, count]) => ({ source, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
   const recentLeads = recentSubs.map((s) => {
     const enrol = recentEnrolBySub.get(s.id);
     const name = [s.first_name, s.last_name].filter(Boolean).join(" ") || s.email || `Lead ${s.id}`;
@@ -199,6 +214,7 @@ export default async function PreviewHomePage({ params }: Props) {
           oldestOpenSince={oldestOpenSince}
           oldestStaleAttemptSince={oldestStaleAttemptSince}
           recentLeads={recentLeads}
+          sourceBreakdown={sourceBreakdown}
           leadsBase={`/preview/${encoded}`}
           leadDetailPrefix="/admin/leads/"
         />

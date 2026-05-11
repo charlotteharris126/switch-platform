@@ -51,17 +51,24 @@ interface Props {
     submissionId: number;
     status: string;
     lostReason?: string | null;
+    outcomeNote?: string | null;
   }) => Promise<{ ok: boolean; error?: string }>;
 }
+
+const OUTCOME_NOTE_MAX = 500;
 
 export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
   const [pending, startTransition] = useTransition();
   const [pendingValue, setPendingValue] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showLost, setShowLost] = useState(false);
   const [lostReason, setLostReason] = useState<LostReason>(
     lostReasonsFor(currentStatus)[0] ?? "other",
   );
+  // Closeout picker state: which terminal status is being collected
+  // (lost / cannot_reach), and the free-text note that goes with it.
+  const [showCloseout, setShowCloseout] = useState<"lost" | "cannot_reach" | null>(null);
+  const [outcomeNote, setOutcomeNote] = useState("");
+
 
   const lostReasons = lostReasonsFor(currentStatus);
   const isOnPath = STEPPER_PATH.includes(currentStatus);
@@ -70,15 +77,22 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
   function fire(value: LeadStatus, reason?: LostReason) {
     setError(null);
     setPendingValue(value);
+    const noteToSend = value === "lost" || value === "cannot_reach"
+      ? outcomeNote.trim() || null
+      : null;
     startTransition(async () => {
       const result = await onMark({
         submissionId,
         status: value,
         lostReason: value === "lost" ? reason ?? null : null,
+        outcomeNote: noteToSend,
       });
       if (!result.ok) setError(result.error ?? "Failed to update");
       setPendingValue(null);
-      if (value === "lost") setShowLost(false);
+      if (result.ok) {
+        setOutcomeNote("");
+        setShowCloseout(null);
+      }
     });
   }
 
@@ -116,11 +130,11 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
             label="Mark lost…"
             pending={pending && pendingValue === "lost"}
             disabled={pending}
-            onClick={() => setShowLost((v) => !v)}
+            onClick={() => setShowCloseout((v) => v === "lost" ? null : "lost")}
             tone="rose"
           />
         </div>
-        {renderLostPicker()}
+        {renderClosePicker()}
         {error && renderError()}
       </div>
     );
@@ -249,10 +263,10 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
         <div className="flex flex-wrap gap-2">
           {isAllowedTransition(currentStatus, "cannot_reach") && (
             <SecondaryButton
-              label="Cannot reach"
+              label="Cannot reach…"
               pending={pending && pendingValue === "cannot_reach"}
               disabled={pending}
-              onClick={() => fire("cannot_reach")}
+              onClick={() => setShowCloseout((v) => v === "cannot_reach" ? null : "cannot_reach")}
               tone="amber"
             />
           )}
@@ -261,29 +275,34 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
               label="Mark lost…"
               pending={pending && pendingValue === "lost"}
               disabled={pending}
-              onClick={() => setShowLost((v) => !v)}
+              onClick={() => setShowCloseout((v) => v === "lost" ? null : "lost")}
               tone="rose"
             />
           )}
         </div>
       </div>
 
-      {renderLostPicker()}
+      {renderClosePicker()}
       {error && renderError()}
     </div>
   );
 
+  function renderClosePicker() {
+    if (showCloseout === "lost") return renderLostPicker();
+    if (showCloseout === "cannot_reach") return renderCannotReachPicker();
+    return null;
+  }
+
   function renderLostPicker() {
-    if (!showLost) return null;
     return (
-      <div className="p-3 bg-rose-50 border border-rose-200 rounded-md">
+      <div className="p-3 bg-rose-50 border border-rose-200 rounded-md space-y-2">
         <label className="block text-xs font-semibold text-rose-900 uppercase tracking-wide">
           Why was this lost?
         </label>
         <select
           value={lostReason}
           onChange={(e) => setLostReason(e.target.value as LostReason)}
-          className="mt-1 w-full border border-rose-300 rounded-md px-2 py-1.5 text-sm bg-white cursor-pointer"
+          className="w-full border border-rose-300 rounded-md px-2 py-1.5 text-sm bg-white cursor-pointer"
         >
           {lostReasons.map((r) => (
             <option key={r} value={r}>
@@ -291,14 +310,61 @@ export function OutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
             </option>
           ))}
         </select>
+        {renderOutcomeNoteField("rose")}
         <button
           type="button"
           onClick={() => fire("lost", lostReason)}
           disabled={pending}
-          className="mt-2 px-3 py-1.5 bg-rose-600 text-white rounded-md text-sm font-semibold hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          className="px-3 py-1.5 bg-rose-600 text-white rounded-md text-sm font-semibold hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
         >
           {pending && pendingValue === "lost" ? "Marking lost…" : "Mark lost"}
         </button>
+      </div>
+    );
+  }
+
+  function renderCannotReachPicker() {
+    return (
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded-md space-y-2">
+        <p className="text-xs font-semibold text-amber-900 uppercase tracking-wide">
+          Mark cannot reach
+        </p>
+        <p className="text-xs text-amber-800">
+          Used after several unanswered attempts. If the learner re-engages you can still move them on.
+        </p>
+        {renderOutcomeNoteField("amber")}
+        <button
+          type="button"
+          onClick={() => fire("cannot_reach")}
+          disabled={pending}
+          className="px-3 py-1.5 bg-amber-600 text-white rounded-md text-sm font-semibold hover:bg-amber-700 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer transition-colors"
+        >
+          {pending && pendingValue === "cannot_reach" ? "Marking cannot reach…" : "Confirm cannot reach"}
+        </button>
+      </div>
+    );
+  }
+
+  function renderOutcomeNoteField(tone: "rose" | "amber") {
+    const accent = tone === "rose"
+      ? "text-rose-900 border-rose-300"
+      : "text-amber-900 border-amber-300";
+    return (
+      <div>
+        <label className="block text-xs font-semibold uppercase tracking-wide opacity-75">
+          Note (optional)
+        </label>
+        <textarea
+          value={outcomeNote}
+          onChange={(e) => setOutcomeNote(e.target.value.slice(0, OUTCOME_NOTE_MAX))}
+          placeholder="Anything specific worth recording? e.g. asked us to try again next month, moved house, switched provider mid-call."
+          rows={2}
+          maxLength={OUTCOME_NOTE_MAX}
+          className={`w-full border rounded-md px-2 py-1.5 text-sm bg-white ${accent}`}
+        />
+        <p className="text-[10px] text-slate-500 mt-1 text-right tabular-nums">
+          {outcomeNote.length} / {OUTCOME_NOTE_MAX}
+        </p>
       </div>
     );
   }

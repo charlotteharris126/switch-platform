@@ -28,6 +28,10 @@ export interface LeadRow {
   status_updated_at: string | null;
   has_fastrack: boolean;
   callback_pending: boolean;
+  // Intake fields populated by lead payload v1.2. Used for the cohort
+  // filter dropdown. Null for single-cohort / rolling-intake leads.
+  preferred_intake_id: string | null;
+  acceptable_intake_ids: string[] | null;
 }
 
 export type Filter =
@@ -122,6 +126,8 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
   const allowBulk = onBulkMark !== undefined;
   const [filter, setFilter] = useState<Filter>(initialFilter);
   const [query, setQuery] = useState("");
+  const [courseFilter, setCourseFilter] = useState<string>("all");
+  const [cohortFilter, setCohortFilter] = useState<string>("all");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkPending, startBulkTransition] = useTransition();
   const [showLostPicker, setShowLostPicker] = useState(false);
@@ -131,6 +137,37 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
     | { kind: "error"; message: string }
     | null
   >(null);
+
+  // Distinct courses present on this provider's loaded rows. Drives the
+  // course filter dropdown. Sorted alphabetically for predictable order.
+  const courseOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) {
+      if (r.course_id) set.add(r.course_id);
+    }
+    return [...set].sort();
+  }, [rows]);
+
+  // Distinct intake IDs across preferred + acceptable. IDs follow the
+  // convention "<region>-<YYYY-MM-DD>" — parseIntakeDate pulls the date
+  // for sort + label. Single-cohort / rolling-intake leads have null
+  // intake fields and don't contribute to options (they pass any cohort
+  // filter trivially when "all" is selected; on a specific cohort
+  // they're excluded).
+  const cohortOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) {
+      if (r.preferred_intake_id) set.add(r.preferred_intake_id);
+      if (Array.isArray(r.acceptable_intake_ids)) {
+        for (const id of r.acceptable_intake_ids) set.add(id);
+      }
+    }
+    return [...set].sort((a, b) => {
+      const aDate = parseIntakeDate(a) ?? "";
+      const bDate = parseIntakeDate(b) ?? "";
+      return aDate.localeCompare(bDate);
+    });
+  }, [rows]);
 
   const counts = useMemo(() => {
     let action = 0;
@@ -176,6 +213,13 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
       } else if (filter === "cold") {
         if (!COLD.has(r.status)) return false;
       }
+      if (courseFilter !== "all" && r.course_id !== courseFilter) return false;
+      if (cohortFilter !== "all") {
+        const matchesPreferred = r.preferred_intake_id === cohortFilter;
+        const matchesAcceptable = Array.isArray(r.acceptable_intake_ids)
+          && r.acceptable_intake_ids.includes(cohortFilter);
+        if (!matchesPreferred && !matchesAcceptable) return false;
+      }
       if (q.length > 0) {
         const haystack = `${r.name} ${r.email ?? ""} ${r.course_id ?? ""}`.toLowerCase();
         if (!haystack.includes(q)) return false;
@@ -192,7 +236,7 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
       if (aFast !== bFast) return bFast - aFast;
       return 0;
     });
-  }, [rows, filter, query]);
+  }, [rows, filter, query, courseFilter, cohortFilter]);
 
   return (
     <div>
@@ -262,6 +306,50 @@ export function LeadsTable({ rows, initialFilter = "all", onBulkMark, linkPrefix
           </button>
         </div>
       </div>
+
+      {(courseOptions.length > 1 || cohortOptions.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2 mb-3 text-sm">
+          {courseOptions.length > 1 && (
+            <label className="flex items-center gap-1.5 text-slate-700">
+              <span className="text-xs text-slate-500">Course</span>
+              <select
+                value={courseFilter}
+                onChange={(e) => setCourseFilter(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
+              >
+                <option value="all">All courses ({courseOptions.length})</option>
+                {courseOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {cohortOptions.length > 0 && (
+            <label className="flex items-center gap-1.5 text-slate-700">
+              <span className="text-xs text-slate-500">Cohort</span>
+              <select
+                value={cohortFilter}
+                onChange={(e) => setCohortFilter(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
+              >
+                <option value="all">All cohorts ({cohortOptions.length})</option>
+                {cohortOptions.map((c) => (
+                  <option key={c} value={c}>{cohortLabel(c)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {(courseFilter !== "all" || cohortFilter !== "all") && (
+            <button
+              type="button"
+              onClick={() => { setCourseFilter("all"); setCohortFilter("all"); }}
+              className="text-xs text-slate-500 hover:text-slate-900 underline-offset-2 hover:underline cursor-pointer"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {filtered.length === 0 ? (
         <div className="text-center py-16 text-slate-500 text-sm bg-white border border-slate-200 rounded-xl">
@@ -598,6 +686,28 @@ function csvCell(value: string): string {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+}
+
+// Pull the YYYY-MM-DD date out of an intake id of the form
+// "<region>-<YYYY-MM-DD>". Returns null if the suffix isn't a date.
+function parseIntakeDate(intakeId: string | null | undefined): string | null {
+  if (!intakeId) return null;
+  const m = intakeId.match(/(\d{4}-\d{2}-\d{2})$/);
+  return m ? m[1] : null;
+}
+
+// Human-readable cohort label: "Starts 26 May 2026 · tees-valley".
+// Falls back to the raw id if the date can't be parsed.
+function cohortLabel(intakeId: string): string {
+  const date = parseIntakeDate(intakeId);
+  if (!date) return intakeId;
+  const region = intakeId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const friendly = new Date(date + "T00:00:00Z").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  return region ? `Starts ${friendly} · ${region}` : `Starts ${friendly}`;
 }
 
 function FilterPill({
