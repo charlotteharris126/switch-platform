@@ -103,7 +103,7 @@ export default async function ProviderDetailPage({
 
       <div className="text-xs text-[#5a6a72] flex items-center gap-4 flex-wrap">
         <div className="flex items-center gap-2">
-          <span>Want to dogfood their portal?</span>
+          <span>Want to see their portal as they would?</span>
           <Link
             href={`/preview/${encodeURIComponent(provider.provider_id)}/home`}
             className="font-semibold text-[#11242e] hover:underline underline-offset-2"

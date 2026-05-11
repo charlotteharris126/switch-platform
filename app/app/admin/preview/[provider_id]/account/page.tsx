@@ -2,9 +2,8 @@
 // /provider/account scoped to the target provider.
 //
 // Mirrors the cards rendered in /provider/account/page.tsx but inline-
-// renders the contents (no DisplayNameForm, no TeamPanel write surface,
-// no PasskeyList remove buttons) so preview mode can't accidentally fire
-// any Server Action.
+// renders the contents (no DisplayNameForm, no TeamPanel write surface)
+// so preview mode can't accidentally fire any Server Action.
 //
 // The viewer-role assumption: previews default to "as if you were a
 // provider_admin", since the admin-gated Business + Pricing cards are
@@ -42,15 +41,6 @@ interface TeamUserRow {
   last_login_at: string | null;
 }
 
-interface PasskeyRow {
-  id: number;
-  nickname: string | null;
-  device_type: string | null;
-  created_at: string;
-  last_used_at: string | null;
-  provider_user_id: number;
-}
-
 const ROLE_LABEL: Record<string, string> = {
   provider_admin: "Admin",
   provider_user: "User",
@@ -75,26 +65,15 @@ export default async function PreviewAccountPage({ params }: Props) {
     .maybeSingle<ProviderRow>();
   if (!provider) notFound();
 
-  const [teamResult, passkeysResult] = await Promise.all([
-    admin
-      .schema("crm")
-      .from("provider_users")
-      .select("id, contact_email, display_name, role, status, invited_at, last_login_at")
-      .eq("provider_id", providerId)
-      .neq("status", "removed")
-      .order("invited_at", { ascending: true }),
-    // Pull passkeys for every provider_user in one go, then group client-side.
-    admin
-      .schema("crm")
-      .from("provider_passkeys")
-      .select("id, nickname, device_type, created_at, last_used_at, provider_user_id, provider_users!inner(provider_id)")
-      .eq("provider_users.provider_id", providerId)
-      .is("disabled_at", null)
-      .order("created_at", { ascending: true }),
-  ]);
+  const { data: teamData } = await admin
+    .schema("crm")
+    .from("provider_users")
+    .select("id, contact_email, display_name, role, status, invited_at, last_login_at")
+    .eq("provider_id", providerId)
+    .neq("status", "removed")
+    .order("invited_at", { ascending: true });
 
-  const teamUsers = (teamResult.data ?? []) as TeamUserRow[];
-  const passkeys = (passkeysResult.data ?? []) as PasskeyRow[];
+  const teamUsers = (teamData ?? []) as TeamUserRow[];
 
   return (
     <>
@@ -152,33 +131,17 @@ export default async function PreviewAccountPage({ params }: Props) {
             )}
           </Card>
 
-          <Card title="Passkeys" subtitle="Every active passkey across the team.">
-            {passkeys.length === 0 ? (
-              <p className="text-sm text-slate-500">No active passkeys registered.</p>
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {passkeys.map((p) => {
-                  const owner = teamUsers.find((u) => u.id === p.provider_user_id);
-                  return (
-                    <li key={p.id} className="py-3 flex items-baseline justify-between gap-4 text-sm">
-                      <div className="min-w-0">
-                        <div className="text-slate-900 font-medium truncate">
-                          {p.nickname ?? p.device_type ?? "Passkey"}
-                        </div>
-                        <div className="text-xs text-slate-500 truncate">
-                          {owner ? owner.contact_email : `user #${p.provider_user_id}`}
-                        </div>
-                      </div>
-                      <div className="text-xs text-slate-500 whitespace-nowrap">
-                        {p.last_used_at
-                          ? `Used ${formatDate(p.last_used_at)}`
-                          : `Added ${formatDate(p.created_at)}`}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+          <Card title="Sign-in & security" subtitle="How they sign in to the portal.">
+            <p className="text-sm text-slate-700">
+              Provider users sign in with email and password. On a fresh
+              device or browser they enter a short code we email them.
+              Day-to-day, cookies keep them signed in.
+            </p>
+            <p className="text-xs text-slate-500 mt-3">
+              Forgotten password: handled via the &quot;Forgot password&quot;
+              link on the sign-in page. If they can&apos;t self-serve,
+              re-issue the invite from /admin/providers/{providerId}.
+            </p>
           </Card>
 
           <Card title="Your business" subtitle="Admin-only card on the real account page.">

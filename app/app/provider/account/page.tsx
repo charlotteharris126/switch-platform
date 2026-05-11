@@ -1,24 +1,21 @@
-// /provider/account. profile, provider info, passkeys.
+// /provider/account. profile, provider info, sign-in info, team.
 //
-// Reads provider_users + providers + provider_passkeys via the admin
-// (service-role) client. crm.provider_passkeys has no provider-context
-// RLS policy, so server-side scoping (provider_user_id match against the
-// caller's row) is the trust boundary for the passkey list.
+// Reads provider_users + providers via the admin (service-role) client
+// — crm.provider_users RLS is admin-only so the authenticated session
+// can't satisfy self-lookup.
 //
-// Self-service "add another passkey" is a separate WebAuthn ceremony with
-// new API routes. not in this initial pass. For now support issues a
-// fresh invite via /admin/providers/[id] when a provider needs an extra
-// device.
+// Sign-in is now email + password + email OTP on fresh devices. Passkey
+// infrastructure retired 2026-05-11; PasskeyList component and the
+// passkey query no longer rendered here.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ProviderShell } from "../provider-shell";
-import { PasskeyList } from "./passkey-list";
 import { DisplayNameForm } from "./display-name-form";
 import { TeamPanel, type TeamUserRow } from "./team-panel";
-import { removePasskeyAction, updateDisplayNameAction } from "./actions";
+import { updateDisplayNameAction } from "./actions";
 import { inviteProviderUserAction, removeProviderUserAction } from "./team-actions";
 
 interface ProviderUserRow {
@@ -47,15 +44,6 @@ interface ProviderRow {
   is_demo: boolean;
 }
 
-interface PasskeyRow {
-  id: number;
-  nickname: string | null;
-  device_type: string | null;
-  created_at: string;
-  last_used_at: string | null;
-  disabled_at: string | null;
-}
-
 const ROLE_LABEL: Record<string, string> = {
   provider_admin: "Admin",
   provider_user: "User",
@@ -82,21 +70,14 @@ export default async function ProviderAccountPage() {
     redirect("/provider-login?error=no_active_account");
   }
 
-  // provider + passkeys + team users in parallel. all depend on pu but not on each other.
-  const [providerResult, passkeyResult, teamResult] = await Promise.all([
+  // provider + team users in parallel.
+  const [providerResult, teamResult] = await Promise.all([
     admin
       .schema("crm")
       .from("providers")
       .select("company_name, contact_email, contact_phone, pilot_status, billing_model, pricing_model, per_enrolment_fee, percent_rate, min_fee, max_fee, free_enrolments_remaining, is_demo")
       .eq("provider_id", pu.provider_id)
       .maybeSingle<ProviderRow>(),
-    admin
-      .schema("crm")
-      .from("provider_passkeys")
-      .select("id, nickname, device_type, created_at, last_used_at, disabled_at")
-      .eq("provider_user_id", pu.id)
-      .is("disabled_at", null)
-      .order("created_at", { ascending: true }),
     admin
       .schema("crm")
       .from("provider_users")
@@ -107,7 +88,6 @@ export default async function ProviderAccountPage() {
   ]);
 
   const provider = providerResult.data;
-  const passkeyRowsRaw = passkeyResult.data;
   const teamRowsRaw = teamResult.data ?? [];
   const teamUsers: TeamUserRow[] = (teamRowsRaw as Array<{
     id: number;
@@ -128,24 +108,6 @@ export default async function ProviderAccountPage() {
     is_self: t.id === pu.id,
   }));
   const callerIsAdmin = pu.role === "provider_admin";
-
-  const passkeyRows = (passkeyRowsRaw ?? []) as PasskeyRow[];
-
-  // Best-effort "this device" tag: most-recently-used active passkey.
-  const mostRecent = [...passkeyRows].sort((a, b) => {
-    const aTime = a.last_used_at ? new Date(a.last_used_at).getTime() : 0;
-    const bTime = b.last_used_at ? new Date(b.last_used_at).getTime() : 0;
-    return bTime - aTime;
-  })[0];
-
-  const passkeys = passkeyRows.map((p) => ({
-    id: p.id,
-    nickname: p.nickname,
-    device_type: p.device_type,
-    created_at: p.created_at,
-    last_used_at: p.last_used_at,
-    is_current: mostRecent ? mostRecent.id === p.id : false,
-  }));
 
   return (
     <ProviderShell active="account">
@@ -172,14 +134,28 @@ export default async function ProviderAccountPage() {
         </Card>
 
         {/* Sign-in & security */}
-        <Card title="Sign-in & security" subtitle="Your registered passkeys.">
-          <PasskeyList passkeys={passkeys} onRemove={removePasskeyAction} />
-          <p className="text-xs text-slate-500 mt-4">
-            Need another device? Email{" "}
+        <Card title="Sign-in & security" subtitle="How you sign in to this portal.">
+          <p className="text-sm text-slate-700">
+            You sign in with your email and password. On a fresh device or
+            browser, we&apos;ll also email you a short code to confirm it&apos;s
+            you. Day to day you stay signed in.
+          </p>
+          <p className="text-xs text-slate-500 mt-3">
+            Forgot your password? Use the{" "}
+            <a
+              href="/reset-password"
+              className="font-medium text-slate-700 hover:text-slate-900 underline-offset-2 hover:underline"
+            >
+              Forgot password
+            </a>{" "}
+            link on the sign-in page.
+          </p>
+          <p className="text-xs text-slate-500 mt-2">
+            Anything else? Email{" "}
             <a href="mailto:support@switchleads.co.uk" className="font-medium text-slate-700 hover:text-slate-900 underline-offset-2 hover:underline">
               support@switchleads.co.uk
-            </a>{" "}
-            and we&apos;ll send a fresh invite link.
+            </a>
+            .
           </p>
         </Card>
 

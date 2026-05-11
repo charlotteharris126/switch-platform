@@ -338,7 +338,7 @@ function InviteForm({
       </div>
       {result?.kind === "ok" && (
         <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">
-          Invite sent. They&apos;ll get an email with a passkey enrolment link.
+          Invite sent. They&apos;ll get an email with a link to set their password.
         </div>
       )}
       {result?.kind === "error" && (

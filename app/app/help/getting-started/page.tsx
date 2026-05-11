@@ -1,13 +1,17 @@
 // Public first-time-access guide. Linked from the provider invite
-// email so a brand-new user can read it before they have a passkey
+// email so a brand-new user can read it before they have a password
 // or a sign-in.
+//
+// Sign-in flow (as of 2026-05-11): email + password, plus a short
+// sign-in code emailed on each fresh sign-in. Passkey infrastructure
+// retired the same day.
 
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Getting started, SwitchLeads",
   description:
-    "How to access your SwitchLeads provider account for the first time, set up a passkey, and find your way around.",
+    "How to access your SwitchLeads provider account for the first time, set up your password, and find your way around.",
   robots: { index: false, follow: false },
 };
 
@@ -27,7 +31,7 @@ export default function GettingStartedPage() {
           expect, and where to find things once you&apos;re in.
         </p>
         <p className="text-sm text-slate-500 mt-2">
-          Reading time: about 4 minutes.
+          Reading time: about 3 minutes.
         </p>
       </header>
 
@@ -47,7 +51,7 @@ export default function GettingStartedPage() {
       <Section step="1" title="The invite email">
         <p>
           Once your account is set up on our side, you&apos;ll get an email
-          inviting you to register. It comes from{" "}
+          inviting you to set a password. It comes from{" "}
           <span className="font-semibold text-slate-900">
             Switchable Support
           </span>{" "}
@@ -55,21 +59,12 @@ export default function GettingStartedPage() {
           <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">
             support@switchleads.co.uk
           </code>
-          ) with a subject line that mentions your SwitchLeads account.
+          ) with a subject line about your SwitchLeads portal access.
         </p>
         <p>
-          The email contains a single sign-in link, valid for seven days.
-        </p>
-        <p>
-          <span className="font-semibold text-slate-900">
-            Easiest path: open the link on your phone first.
-          </span>{" "}
-          Phones (iPhone or Android) handle this kind of sign-in automatically
-          and the prompt is the same one your banking app uses. Once your
-          phone knows you, signing in on a computer afterwards is a single
-          tap. If a phone isn&apos;t practical, the link works just as well
-          on a Mac or a Windows 10/11 PC; see step 2 for what to expect on
-          each.
+          The email contains one button:{" "}
+          <span className="font-semibold text-slate-900">Set up your password</span>.
+          That link is valid for 24 hours and only works once.
         </p>
         <Callout tone="amber" title="Can&apos;t find the email?">
           Check your spam folder first. If it&apos;s not there, email{" "}
@@ -83,90 +78,65 @@ export default function GettingStartedPage() {
         </Callout>
       </Section>
 
-      <Section step="2" title="Setting up a passkey">
+      <Section step="2" title="Setting your password">
         <p>
-          We don&apos;t use passwords. Instead, your account is protected by a{" "}
-          <span className="font-semibold text-slate-900">passkey</span>, a
-          modern sign-in method built into every recent phone and computer.
-          The standard is the same one Apple, Google, Microsoft, and most UK
-          banking apps use, so if you&apos;ve ever signed into your bank with
-          your face or fingerprint, this will feel familiar.
+          Click the link in the invite email. You&apos;ll land on a page
+          showing your email address (already filled in) and two boxes for
+          your new password.
         </p>
-        <p className="font-semibold text-slate-900">
-          What you&apos;ll see, by device:
-        </p>
-        <ul className="list-disc pl-5 space-y-1.5">
-          <li>
-            <span className="font-semibold text-slate-900">iPhone or iPad</span>
-            : a popup saying &quot;Save a passkey for app.switchleads.co.uk&quot;.
-            Tap Continue, confirm with Face ID or Touch ID. That&apos;s it.
-          </li>
-          <li>
-            <span className="font-semibold text-slate-900">Android</span>: a
-            popup asking to save a passkey. Tap Continue, confirm with your
-            fingerprint or screen unlock.
-          </li>
-          <li>
-            <span className="font-semibold text-slate-900">Mac</span>: a Touch
-            ID prompt on a recent MacBook or Magic Keyboard. Older Macs ask
-            for your macOS account password (the one you use to log into the
-            Mac) instead.
-          </li>
-          <li>
-            <span className="font-semibold text-slate-900">Windows 10 or 11</span>
-            : a Windows Hello prompt. Use whichever you have set up:
-            fingerprint, face, or the Hello PIN you use to sign into Windows.
-          </li>
-          <li>
-            <span className="font-semibold text-slate-900">USB security key</span>{" "}
-            (e.g. YubiKey): plug it in, tap it when the browser asks.
-          </li>
-        </ul>
         <p>
-          The whole step takes about ten seconds. There&apos;s nothing to
-          install, nothing to remember, no password to write down. Just tap
-          the prompt that comes up.
+          Pick anything you&apos;ll remember, at least 12 characters. Long is
+          better than fancy: three or four words strung together (e.g. {" "}
+          <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">
+            sunset-eagle-roast-window
+          </code>
+          ) is stronger than{" "}
+          <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">
+            P@ssw0rd1!
+          </code>{" "}
+          and easier to type.
         </p>
-        <Callout tone="slate" title="If a popup looks unfamiliar, that&apos;s normal">
-          Modern browsers show their own passkey popup, sometimes with a logo
-          you don&apos;t recognise (Chrome, Edge, 1Password, iCloud Keychain).
-          They all do the same job. Tap the option you&apos;re happy with;
-          you can&apos;t pick a wrong one. If you&apos;re unsure, just close
-          the popup and we&apos;ll set it up with you on a call (see the
-          callout at the top of this page).
+        <p>
+          Click <span className="font-semibold text-slate-900">Set password</span>{" "}
+          when both boxes match. You&apos;ll be taken to the sign-in page with a
+          green &quot;Password set&quot; banner.
+        </p>
+        <Callout tone="slate" title="Save it somewhere you trust">
+          A password manager (1Password, Bitwarden, your browser&apos;s built-in
+          one) is the easiest way. Otherwise jot it somewhere safe — you&apos;ll
+          need it next time you sign in on a new device.
         </Callout>
-        <Callout tone="slate" title="No fingerprint reader on your computer?">
-          You&apos;re fine. On Windows, your Hello PIN works on its own; if
-          you don&apos;t have one, Settings &gt; Accounts &gt; Sign-in options
-          walks you through setting one up. On older Macs, your macOS account
-          password handles it. As a last resort, the browser offers a QR
-          code: scan it with your phone, confirm there, and the computer
-          signs you in. Nothing else to install.
-        </Callout>
-        <p>
-          Your passkey lives on the device you registered on. If you want a
-          second device (laptop at home, second computer, colleague&apos;s
-          phone), it&apos;s a separate registration on that device, and we
-          can send a fresh link for it. There&apos;s no limit.
-        </p>
       </Section>
 
-      <Section step="3" title="Signing in after that">
+      <Section step="3" title="Signing in">
         <p>
-          Next time you visit the portal, your computer or phone recognises
-          the passkey and signs you in with a single tap or click. No emailed
-          links, no passwords.
-        </p>
-        <p>
-          The portal lives at{" "}
+          On the sign-in page (
           <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">
             app.switchleads.co.uk
           </code>
-          . Bookmark it once you&apos;re signed in.
+          ) enter your email and password. Click{" "}
+          <span className="font-semibold text-slate-900">Continue</span>.
         </p>
+        <p>
+          On a brand-new device or browser, we&apos;ll email you a short
+          sign-in code (a few digits) to confirm it&apos;s really you. Open
+          your inbox, copy the code, paste it into the box on the next
+          screen, click <span className="font-semibold text-slate-900">Sign in</span>.
+          You&apos;re in.
+        </p>
+        <p>
+          Day to day, you stay signed in. The code only appears on a fresh
+          device or after you&apos;ve been away for a long time — you&apos;re
+          not entering one every time you visit.
+        </p>
+        <Callout tone="amber" title="Forgot your password?">
+          Click <span className="font-semibold">Forgot your password?</span> on
+          the sign-in page. We&apos;ll email you a reset link. Set a new
+          password, then sign in again with it.
+        </Callout>
       </Section>
 
-      <Section step="4" title="What you&apos;ll see in the portal">
+      <Section step="4" title="What you'll see in the portal">
         <p>
           The home screen shows what needs your attention right now: callbacks,
           fastrack-ready leads, open leads waiting for a first call, and any
@@ -188,8 +158,7 @@ export default function GettingStartedPage() {
           </li>
           <li>
             <span className="font-semibold text-slate-900">Account</span>,
-            where your profile, passkeys, team members, and pricing details
-            live.
+            where your profile, team members, and pricing details live.
           </li>
           <li>
             <span className="font-semibold text-slate-900">Support</span>,
@@ -223,7 +192,7 @@ export default function GettingStartedPage() {
           <span className="font-semibold text-slate-900">Account</span>, an
           admin can invite teammates by email and choose whether they&apos;re
           another admin or a regular user. Invited teammates get the same kind
-          of email you got, with a fresh sign-in link.
+          of email you got, with a fresh password-setup link.
         </p>
         <p>
           Regular users can work leads, mark outcomes, and add notes. Admins
@@ -233,7 +202,7 @@ export default function GettingStartedPage() {
 
       <Section step="7" title="If something goes wrong">
         <p>
-          Lost device, can&apos;t sign in, missing a lead you were expecting,
+          Locked out, can&apos;t sign in, missing a lead you were expecting,
           or anything that looks off: email{" "}
           <a
             href="mailto:support@switchleads.co.uk"
@@ -253,9 +222,9 @@ export default function GettingStartedPage() {
 
       <div className="pt-6 border-t border-slate-200 space-y-3">
         <p className="text-sm text-slate-700">
-          Got your invite email? Click the link inside to register your
-          passkey. Once you&apos;re signed in, everything else makes sense in
-          about five minutes.
+          Got your invite email? Click the link inside to set your password.
+          Once you&apos;re signed in, everything else makes sense in about
+          five minutes.
         </p>
         <div className="bg-slate-900 text-white rounded-xl p-4 text-sm">
           <p className="font-semibold mb-1">Stuck at any step?</p>
