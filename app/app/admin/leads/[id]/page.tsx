@@ -22,6 +22,7 @@ import {
   testRoutingEmailAction,
 } from "./actions";
 import { TestEmailButtons } from "./test-email-buttons";
+import { CopyableUrl } from "./copyable-url";
 import { getDemoProviderIds } from "@/lib/demo";
 
 export default async function LeadDetailPage({
@@ -313,6 +314,49 @@ export default async function LeadDetailPage({
           <OwnerTestToggle submissionId={lead.id} dqReason={lead.dq_reason} />
         </div>
       </div>
+
+      {/* Per-lead links the operator might want to paste straight into
+          a hand-written email (Gmail etc.) without going through Brevo.
+          Each row only renders when its source identifier exists on the
+          submission. Same wiring as the SW_FASTRACK_URL +
+          SW_REFERRAL_URL Brevo attributes (_shared/route-lead.ts). */}
+      {(lead.client_nonce || lead.referral_code) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Per-lead links</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {lead.client_nonce && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#5a6a72]">
+                  Fastrack form
+                </p>
+                <p className="text-xs text-[#5a6a72]">
+                  Carries submission context so the fastrack form
+                  pre-fills correctly.
+                </p>
+                <CopyableUrl
+                  url={`https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(lead.client_nonce)}`}
+                />
+              </div>
+            )}
+            {lead.referral_code && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#5a6a72]">
+                  Personal referral page
+                </p>
+                <p className="text-xs text-[#5a6a72]">
+                  Shows this lead their sharing link with their code
+                  embedded.
+                </p>
+                <CopyableUrl
+                  url={`https://switchable.org.uk/refer/?ref=${encodeURIComponent(lead.referral_code)}`}
+                />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Core fields + routing + attribution in three columns */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
