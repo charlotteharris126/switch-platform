@@ -25,7 +25,7 @@ interface Filters {
   page: number;
 }
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 50;
 const RANGE_HOURS: Record<RangeFilter, number | null> = {
   "24h": 24,
   "7d": 24 * 7,
@@ -209,17 +209,15 @@ export default async function ProviderAuditPage({ params, searchParams }: Props)
         </CardContent>
       </Card>
 
-      {totalPages > 1 && (
-        <Pagination
-          providerId={providerId}
-          filters={filters}
-          totalPages={totalPages}
-          shown={rows.length}
-          fromRow={fromRow + 1}
-          toRow={fromRow + rows.length}
-          total={total}
-        />
-      )}
+      <Pagination
+        providerId={providerId}
+        filters={filters}
+        totalPages={totalPages}
+        shown={rows.length}
+        fromRow={fromRow + 1}
+        toRow={fromRow + rows.length}
+        total={total}
+      />
     </div>
   );
 }
@@ -298,6 +296,7 @@ function Pagination({
   const prevHref = filters.page > 0 ? hrefWith(providerId, filters, filters.page - 1) : null;
   const nextHref =
     filters.page < totalPages - 1 ? hrefWith(providerId, filters, filters.page + 1) : null;
+  const showControls = totalPages > 1;
 
   return (
     <div className="flex items-center justify-between gap-3 text-xs text-[#5a6a72]">
@@ -308,31 +307,33 @@ function Pagination({
           : "0"}{" "}
         of {total.toLocaleString()}
       </div>
-      <div className="flex items-center gap-2">
-        {prevHref ? (
-          <Link
-            href={prevHref}
-            className="px-3 py-1 border border-[#dde3e6] rounded-md text-[#11242e] hover:bg-[#f4f1ed] font-medium"
-          >
-            ← Previous
-          </Link>
-        ) : (
-          <span className="px-3 py-1 text-[#cbd1d3] cursor-not-allowed">← Previous</span>
-        )}
-        <span className="tabular-nums">
-          Page {filters.page + 1} of {totalPages}
-        </span>
-        {nextHref ? (
-          <Link
-            href={nextHref}
-            className="px-3 py-1 border border-[#dde3e6] rounded-md text-[#11242e] hover:bg-[#f4f1ed] font-medium"
-          >
-            Next →
-          </Link>
-        ) : (
-          <span className="px-3 py-1 text-[#cbd1d3] cursor-not-allowed">Next →</span>
-        )}
-      </div>
+      {showControls && (
+        <div className="flex items-center gap-2">
+          {prevHref ? (
+            <Link
+              href={prevHref}
+              className="px-3 py-1 border border-[#dde3e6] rounded-md text-[#11242e] hover:bg-[#f4f1ed] font-medium"
+            >
+              ← Previous
+            </Link>
+          ) : (
+            <span className="px-3 py-1 text-[#cbd1d3] cursor-not-allowed">← Previous</span>
+          )}
+          <span className="tabular-nums">
+            Page {filters.page + 1} of {totalPages}
+          </span>
+          {nextHref ? (
+            <Link
+              href={nextHref}
+              className="px-3 py-1 border border-[#dde3e6] rounded-md text-[#11242e] hover:bg-[#f4f1ed] font-medium"
+            >
+              Next →
+            </Link>
+          ) : (
+            <span className="px-3 py-1 text-[#cbd1d3] cursor-not-allowed">Next →</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

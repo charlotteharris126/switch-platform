@@ -118,7 +118,7 @@ export default async function ActionsPage() {
     funding_category: string | null;
   }>;
 
-  const approachingFlip = (approachingFlipRes.data ?? []) as Array<{
+  const approachingFlipRaw = (approachingFlipRes.data ?? []) as Array<{
     id: number;
     submission_id: number;
     provider_id: string;
@@ -126,7 +126,7 @@ export default async function ActionsPage() {
     sent_to_provider_at: string;
   }>;
 
-  const presumedEnrolled = (presumedEnrolledRes.data ?? []) as Array<{
+  const presumedEnrolledRaw = (presumedEnrolledRes.data ?? []) as Array<{
     id: number;
     submission_id: number;
     provider_id: string;
@@ -149,7 +149,7 @@ export default async function ActionsPage() {
     created_at: string;
   }>;
 
-  const needsChasing = (needsChasingRes.data ?? []) as Array<{
+  const needsChasingRaw = (needsChasingRes.data ?? []) as Array<{
     id: number;
     submission_id: number;
     provider_id: string;
@@ -158,7 +158,7 @@ export default async function ActionsPage() {
     status_updated_at: string;
   }>;
 
-  const cannotReachNoChaser = (cannotReachNoChaserRes.data ?? []) as Array<{
+  const cannotReachNoChaserRaw = (cannotReachNoChaserRes.data ?? []) as Array<{
     id: number;
     submission_id: number;
     provider_id: string;
@@ -166,7 +166,28 @@ export default async function ActionsPage() {
     status_updated_at: string;
   }>;
 
+  // Filter out enrolments for demo providers — they're test data that
+  // shouldn't surface in the admin attention queue. Unrouted leads don't
+  // have a provider yet so they pass through unchanged. Single small
+  // round-trip to fetch the demo set.
+  const { data: demoProvidersData } = await supabase
+    .schema("crm")
+    .from("providers")
+    .select("provider_id")
+    .eq("is_demo", true);
+  const demoProviderIds = new Set<string>(
+    ((demoProvidersData ?? []) as Array<{ provider_id: string }>).map((p) => p.provider_id),
+  );
+  function notDemo<T extends { provider_id: string }>(r: T): boolean {
+    return !demoProviderIds.has(r.provider_id);
+  }
+  const approachingFlip = approachingFlipRaw.filter(notDemo);
+  const presumedEnrolled = presumedEnrolledRaw.filter(notDemo);
+  const needsChasing = needsChasingRaw.filter(notDemo);
+  const cannotReachNoChaser = cannotReachNoChaserRaw.filter(notDemo);
+
   // Hydrate enrolment + submission context for pending AI suggestions.
+  // Demo-provider enrolments are skipped via the same filter as above.
   const pendingEnrolmentIds = pendingAi.map((p) => p.enrolment_id);
   const pendingEnrolMap = new Map<number, { id: number; submission_id: number; provider_id: string }>();
   if (pendingEnrolmentIds.length > 0) {
@@ -176,6 +197,7 @@ export default async function ActionsPage() {
       .select("id, submission_id, provider_id")
       .in("id", pendingEnrolmentIds);
     for (const e of (data ?? []) as Array<{ id: number; submission_id: number; provider_id: string }>) {
+      if (demoProviderIds.has(e.provider_id)) continue;
       pendingEnrolMap.set(e.id, e);
     }
   }
