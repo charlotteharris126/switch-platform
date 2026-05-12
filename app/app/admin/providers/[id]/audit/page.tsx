@@ -75,9 +75,11 @@ export default async function ProviderAuditPage({ params, searchParams }: Props)
   // this provider. Admin actions on this provider's data also carry the
   // provider_id in context (set by callers that know they're touching a
   // specific provider's enrolment) — same filter handles both.
+  // Reading via public.vw_audit_actions (migration 0121) instead of
+  // audit.actions directly, so we don't depend on the audit schema being
+  // in Supabase Data API exposed schemas.
   let query = admin
-    .schema("audit")
-    .from("actions")
+    .from("vw_audit_actions")
     .select(
       "id, created_at, actor_user_id, actor_email, surface, action, target_table, target_id, before_value, after_value, context",
       { count: "exact" },

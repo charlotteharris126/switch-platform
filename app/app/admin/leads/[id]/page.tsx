@@ -168,12 +168,12 @@ export default async function LeadDetailPage({
   }));
 
   // Audit activity for this lead — every action recorded against the lead's
-  // submission or enrolment. Pulls from audit.actions which the audit schema
-  // helper (admin.is_admin RLS) gates.
+  // submission or enrolment. Reads via public.vw_audit_actions (migration
+  // 0121) so we don't depend on the audit schema being in Supabase Data
+  // API exposed schemas.
   const enrolmentIdString = enrolment ? String(enrolment.id) : null;
   let auditQ = supabase
-    .schema("audit")
-    .from("actions")
+    .from("vw_audit_actions")
     .select("id, created_at, actor_email, surface, action, target_table, target_id, before_value, after_value, context")
     .order("created_at", { ascending: false })
     .limit(100);
