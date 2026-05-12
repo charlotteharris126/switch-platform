@@ -32,12 +32,20 @@ export async function acceptSlaAction(_formData: FormData): Promise<void> {
   const { data: pu, error: puErr } = await admin
     .schema("crm")
     .from("provider_users")
-    .select("id, provider_id")
+    .select("id, provider_id, role")
     .eq("auth_user_id", userData.user.id)
     .eq("status", "active")
-    .maybeSingle<{ id: number; provider_id: string }>();
+    .maybeSingle<{ id: number; provider_id: string; role: string }>();
   if (puErr || !pu) {
     throw new Error("Couldn't resolve your provider account. Email support@switchleads.co.uk.");
+  }
+  // Only the provider admin can accept on behalf of the company. Defends
+  // against a misordered invite where a team member signs in before the
+  // admin (rare — admin is always the first invitee — but defensive
+  // belt-and-braces). UI also enforces this so the button isn't even
+  // shown for non-admins.
+  if (pu.role !== "provider_admin") {
+    throw new Error("Only the provider admin can accept the SLA. Ask your admin to sign in first.");
   }
 
   const nowIso = new Date().toISOString();
