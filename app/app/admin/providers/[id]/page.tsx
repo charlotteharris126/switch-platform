@@ -88,13 +88,26 @@ export default async function ProviderDetailPage({
           ← Back to providers
         </Link>
         <h1 className="text-[28px] font-extrabold text-[#11242e] mt-2 tracking-tight">{provider.company_name}</h1>
-        <div className="flex gap-2 mt-2 items-center">
+        <div className="flex gap-2 mt-2 items-center flex-wrap">
           {provider.active ? (
             <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Active</Badge>
           ) : (
             <Badge variant="secondary">Inactive</Badge>
           )}
           {provider.pilot_status && <Badge variant="secondary">{provider.pilot_status}</Badge>}
+          {provider.agreement_version && (
+            <Badge variant="secondary">PPA {provider.agreement_version}</Badge>
+          )}
+          {provider.sla_accepted_at ? (
+            <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+              SLA accepted {new Date(provider.sla_accepted_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+            </Badge>
+          ) : (
+            <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">SLA not accepted</Badge>
+          )}
+          {provider.auto_flip_enabled === false && (
+            <Badge className="bg-rose-100 text-rose-800 hover:bg-rose-100">Auto-flip OFF</Badge>
+          )}
           <span className="text-xs text-[#5a6a72] font-mono">{provider.provider_id}</span>
         </div>
       </div>

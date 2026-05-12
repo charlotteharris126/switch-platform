@@ -129,9 +129,10 @@ function AgreementSummary({ row }: { row: AgreementRow }) {
         )}
       </div>
       <p className="text-sm text-slate-700 mt-2">
-        Pilot terms cover the duration of the pilot. The bullets below are a
-        short-form reference — the full clause-by-clause text is in your signed
-        Notion document.
+        The cards below are the in-portal summary of your pilot agreement. The
+        full PPA you signed at onboarding is the binding document; if you need
+        a fresh copy email{" "}
+        <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a>.
       </p>
     </div>
   );
@@ -245,29 +246,27 @@ function SlaThresholds({ row }: { row: AgreementRow }) {
 }
 
 function FullDocLink({ notionPageId }: { notionPageId: string | null }) {
+  // Most pilot providers signed via Fillout / the apprenticeship signup
+  // page, so the binding PPA was emailed to them at onboarding. The
+  // Notion page is our internal canonical copy — kept here as a
+  // fallback if Charlotte ever wants to share it directly, but hidden
+  // from the provider UI when it's not set.
+  if (!notionPageId) return null;
   return (
     <div className="mt-6 bg-slate-50 border border-slate-200 rounded-xl p-5">
-      <h3 className="text-sm font-semibold text-slate-900">Full agreement</h3>
-      {notionPageId ? (
-        <>
-          <p className="text-sm text-slate-700 mt-1">
-            The complete signed document lives in Notion.
-          </p>
-          <Link
-            href={`https://www.notion.so/${notionPageId.replace(/-/g, "")}`}
-            target="_blank"
-            rel="noopener"
-            className="inline-flex items-center mt-3 px-4 py-2 text-sm font-semibold bg-slate-900 text-white rounded-md hover:bg-slate-800 cursor-pointer"
-          >
-            Open in Notion ↗
-          </Link>
-        </>
-      ) : (
-        <p className="text-sm text-slate-500 mt-1 italic">
-          The link to your full agreement isn&apos;t wired up yet. Ask us for a
-          direct link if you need it.
-        </p>
-      )}
+      <h3 className="text-sm font-semibold text-slate-900">Reference copy</h3>
+      <p className="text-sm text-slate-700 mt-1">
+        We keep an internal canonical copy of your PPA here. Your own signed
+        copy was emailed to you at onboarding.
+      </p>
+      <Link
+        href={`https://www.notion.so/${notionPageId.replace(/-/g, "")}`}
+        target="_blank"
+        rel="noopener"
+        className="inline-flex items-center mt-3 px-4 py-2 text-sm font-semibold bg-slate-900 text-white rounded-md hover:bg-slate-800 cursor-pointer"
+      >
+        Open in Notion
+      </Link>
     </div>
   );
 }
