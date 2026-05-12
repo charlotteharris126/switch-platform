@@ -16,6 +16,15 @@ const STATUS_TONE: Record<LeadStatus, string> = {
   presumed_enrolled: "bg-emerald-50 text-emerald-700 border-emerald-200",
   lost: "bg-rose-50 text-rose-700 border-rose-200",
   cannot_reach: "bg-rose-50 text-rose-700 border-rose-200",
+  // Employer-lead palette — mirrors learner tones for sibling concepts:
+  // engaged ≈ meeting_booked (blue), in_progress ≈ attempt (amber),
+  // signed ≈ enrolled (emerald), not_signed ≈ lost (rose),
+  // presumed_employer_signed ≈ presumed_enrolled (emerald).
+  engaged: "bg-blue-50 text-blue-700 border-blue-200",
+  in_progress: "bg-amber-50 text-amber-700 border-amber-200",
+  signed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  not_signed: "bg-rose-50 text-rose-700 border-rose-200",
+  presumed_employer_signed: "bg-emerald-50 text-emerald-700 border-emerald-200",
 };
 
 export interface LeadRow {
@@ -29,10 +38,21 @@ export interface LeadRow {
   status_updated_at: string | null;
   has_fastrack: boolean;
   callback_pending: boolean;
+  // Lead-type discriminator. 'learner' (default) or 'employer_apprenticeship'.
+  // When 'employer_apprenticeship', the table replaces the Course column
+  // with Company, hides the cohort filter, and uses employer-shape status
+  // pills via the unified STATUS_TONE map.
+  lead_type: "learner" | "employer_apprenticeship";
   // Intake fields populated by lead payload v1.2. Used for the cohort
-  // filter dropdown. Null for single-cohort / rolling-intake leads.
+  // filter dropdown. Null for single-cohort / rolling-intake leads AND
+  // for employer leads (which have no intake concept).
   preferred_intake_id: string | null;
   acceptable_intake_ids: string[] | null;
+  // Employer-only display fields. Populated when lead_type ===
+  // 'employer_apprenticeship', NULL on learner rows.
+  company_name: string | null;
+  role_title: string | null;
+  sector: string | null;
 }
 
 export type Filter =
@@ -48,12 +68,21 @@ export type Filter =
   // Subset of "action": only attempts that have gone stale (status hasn't
   // moved in 36h+). Linked from the home page "call attempts need
   // retrying" card so the count + the click destination match exactly.
-  | "stale_attempts";
+  | "stale_attempts"
+  // Employer-shape filters. Used when isEmployerView (provider's leads
+  // are all employer_apprenticeship). Each maps to a single status; the
+  // 'near_60_day' filter is a derived subset (engaged | in_progress with
+  // status_updated_at > 50 days ago).
+  | "engaged"
+  | "in_progress"
+  | "signed"
+  | "not_signed"
+  | "near_60_day";
 
 // "Action needed" is rendered separately above as its own prominent pill
 // (rose when items waiting, emerald when zero). The standard filter row
-// below covers everything else.
-const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
+// below covers everything else, branched by lead-type.
+const LEARNER_FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
   { value: "callback", label: "Needs callback" },
   { value: "fastrack", label: "Fastrack" },
@@ -63,6 +92,15 @@ const FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "enrolled", label: "Enrolled" },
   { value: "cold", label: "Cold" },
 ];
+const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "open", label: "Open" },
+  { value: "engaged", label: "Engaged" },
+  { value: "in_progress", label: "In progress" },
+  { value: "signed", label: "Signed" },
+  { value: "not_signed", label: "Not signed" },
+  { value: "near_60_day", label: "60-day clock" },
+];
 
 // Overdue thresholds. Mirror the home page so the badge logic is
 // consistent across surfaces.
@@ -71,13 +109,15 @@ const OVERDUE_36H_MS = 36 * 60 * 60 * 1000; // callback / attempt stale
 
 // "Action needed" = anything where the next move is on the provider:
 //   - callback flag pending
-//   - fastrack ready (lead has fastrack submission, not yet settled)
-//   - status=open (no contact attempt yet)
+//   - status=open (no contact attempt yet, fastrack-or-not)
 //   - status=attempt_X with status_updated_at >36h ago (stale follow-up)
+// A fastrack flag alone doesn't gate action: once the provider has moved
+// the status off open, they've actioned the fastrack signal. If the new
+// status goes stale, it returns to actions via the stale-attempt timer.
+// Fastrack stays visible as a row badge + own filter pill regardless.
 const STALE_ATTEMPT_MS = OVERDUE_36H_MS;
 function isActionRow(r: LeadRow): boolean {
   if (r.callback_pending) return true;
-  if (r.has_fastrack && !FASTRACK_SETTLED.has(r.status)) return true;
   if (r.status === "open") return true;
   if (isStaleAttempt(r)) return true;
   return false;
@@ -167,6 +207,12 @@ export function LeadsTable({
   seededCohortIds = [],
 }: Props) {
   const allowBulk = onBulkMark !== undefined;
+  // Lead-type detected from the loaded rows. In practice a provider's
+  // leads are all one type (Riverside = employer, EMS/CD/WYK = learner)
+  // so the first row is authoritative. If rows are empty, default to
+  // learner shape (matches the historical default).
+  const isEmployerView = rows.length > 0
+    && rows.every((r) => r.lead_type === "employer_apprenticeship");
   const [filter, setFilter] = useState<Filter>(initialFilter);
   const [query, setQuery] = useState("");
   const [courseFilter, setCourseFilter] = useState<string>("all");
@@ -227,6 +273,12 @@ export function LeadsTable({
     let callback = 0;
     let fastrack = 0;
     let stale_attempts = 0;
+    let engaged = 0;
+    let in_progress = 0;
+    let signed = 0;
+    let not_signed = 0;
+    let near_60_day = 0;
+    const FIFTY_DAYS_MS = 50 * 24 * 60 * 60 * 1000;
     for (const r of rows) {
       if (isActionRow(r)) action += 1;
       if (r.callback_pending) callback += 1;
@@ -240,8 +292,24 @@ export function LeadsTable({
       if (ENROLLED.has(r.status)) enrolled += 1;
       if (COLD.has(r.status)) cold += 1;
       if (isStaleAttempt(r)) stale_attempts += 1;
+      // Employer counts
+      if (r.status === "engaged") engaged += 1;
+      if (r.status === "in_progress") in_progress += 1;
+      if (r.status === "signed" || r.status === "presumed_employer_signed") signed += 1;
+      if (r.status === "not_signed") not_signed += 1;
+      if (
+        (r.status === "engaged" || r.status === "in_progress")
+        && r.status_updated_at
+        && Date.now() - new Date(r.status_updated_at).getTime() > FIFTY_DAYS_MS
+      ) {
+        near_60_day += 1;
+      }
     }
-    return { all: rows.length, action, callback, fastrack, open, calling, meeting, enrolled, cold, stale_attempts };
+    return {
+      all: rows.length,
+      action, callback, fastrack, open, calling, meeting, enrolled, cold, stale_attempts,
+      engaged, in_progress, signed, not_signed, near_60_day,
+    };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -267,6 +335,21 @@ export function LeadsTable({
         if (!ENROLLED.has(r.status)) return false;
       } else if (filter === "cold") {
         if (!COLD.has(r.status)) return false;
+      } else if (filter === "engaged") {
+        if (r.status !== "engaged") return false;
+      } else if (filter === "in_progress") {
+        if (r.status !== "in_progress") return false;
+      } else if (filter === "signed") {
+        if (r.status !== "signed" && r.status !== "presumed_employer_signed") return false;
+      } else if (filter === "not_signed") {
+        if (r.status !== "not_signed") return false;
+      } else if (filter === "near_60_day") {
+        const fifty = 50 * 24 * 60 * 60 * 1000;
+        const stale =
+          (r.status === "engaged" || r.status === "in_progress")
+          && r.status_updated_at
+          && Date.now() - new Date(r.status_updated_at).getTime() > fifty;
+        if (!stale) return false;
       }
       if (courseFilter !== "all" && r.course_id !== courseFilter) return false;
       if (cohortFilter !== "all") {
@@ -285,15 +368,23 @@ export function LeadsTable({
       }
       return true;
     });
-    // Pin order: callback flag → fastrack → server's routed_at desc.
+    // Pin order: overdue → fastrack (unsettled) → callback → routed_at desc.
+    // Applied within every filter, not just "all" — keeps the same hierarchy
+    // visible inside Open / Calling / etc. The server returns routed_at desc
+    // already, so the final tier mostly reinforces that.
     return [...subset].sort((a, b) => {
+      const aOver = isOverdueRow(a) ? 1 : 0;
+      const bOver = isOverdueRow(b) ? 1 : 0;
+      if (aOver !== bOver) return bOver - aOver;
+      const aFast = (a.has_fastrack && !FASTRACK_SETTLED.has(a.status)) ? 1 : 0;
+      const bFast = (b.has_fastrack && !FASTRACK_SETTLED.has(b.status)) ? 1 : 0;
+      if (aFast !== bFast) return bFast - aFast;
       const aCb = a.callback_pending ? 1 : 0;
       const bCb = b.callback_pending ? 1 : 0;
       if (aCb !== bCb) return bCb - aCb;
-      const aFast = a.has_fastrack ? 1 : 0;
-      const bFast = b.has_fastrack ? 1 : 0;
-      if (aFast !== bFast) return bFast - aFast;
-      return 0;
+      const aRouted = a.routed_at ? new Date(a.routed_at).getTime() : 0;
+      const bRouted = b.routed_at ? new Date(b.routed_at).getTime() : 0;
+      return bRouted - aRouted;
     });
   }, [rows, filter, query, courseFilter, cohortFilter]);
 
@@ -301,19 +392,22 @@ export function LeadsTable({
     <div>
       {/* Action-needed sits on its own row above the other filter pills
           so it's prominent — Charlotte's the-thing-you-should-do-now
-          glance state. */}
-      <div className="mb-2">
-        <FilterPill
-          label="Action needed"
-          count={counts.action}
-          active={filter === "action"}
-          onClick={() => setFilter(filter === "action" ? "all" : "action")}
-          tone="rose"
-        />
-      </div>
+          glance state. Hidden on employer view because the action
+          definition (callback / open / stale-attempt) is learner-specific. */}
+      {!isEmployerView && (
+        <div className="mb-2">
+          <FilterPill
+            label="Action needed"
+            count={counts.action}
+            active={filter === "action"}
+            onClick={() => setFilter(filter === "action" ? "all" : "action")}
+            tone="rose"
+          />
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex flex-wrap gap-1">
-          {FILTER_DEFS.map((f) => (
+          {(isEmployerView ? EMPLOYER_FILTER_DEFS : LEARNER_FILTER_DEFS).map((f) => (
             <FilterPill
               key={f.value}
               label={f.label}
@@ -421,9 +515,10 @@ export function LeadsTable({
                   }
                 });
               }}
-              onExportSelected={() =>
-                downloadCsv(filtered.filter((r) => selected.has(r.id)))
-              }
+              onExportSelected={async () => {
+                const { downloadCsv } = await import("./csv-export");
+                downloadCsv(filtered.filter((r) => selected.has(r.id)));
+              }}
               result={bulkResult}
             />
           )}
@@ -461,7 +556,7 @@ export function LeadsTable({
                   )}
                   <th className="text-left px-4 py-3 font-semibold w-20">ID</th>
                   <th className="text-left px-4 py-3 font-semibold">Name</th>
-                  <th className="text-left px-4 py-3 font-semibold">Course</th>
+                  <th className="text-left px-4 py-3 font-semibold">{isEmployerView ? "Company" : "Course"}</th>
                   <th className="text-left px-4 py-3 font-semibold">In your queue</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
                 </tr>
@@ -469,8 +564,13 @@ export function LeadsTable({
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((r) => {
                   const overdue = isOverdueRow(r);
-                  const courseLabel = labelCourse(r.course_id) ?? r.course_id ?? "-";
-                  const fundingLabel = labelFunding(r.funding_category, null);
+                  const isEmployer = r.lead_type === "employer_apprenticeship";
+                  const courseOrCompanyLabel = isEmployer
+                    ? (r.company_name ?? "-")
+                    : (labelCourse(r.course_id) ?? r.course_id ?? "-");
+                  const subLabel = isEmployer
+                    ? (r.role_title ?? r.sector ?? null)
+                    : labelFunding(r.funding_category, null);
                   return (
                   <tr
                     key={r.id}
@@ -532,9 +632,9 @@ export function LeadsTable({
                       {r.email && <div className="text-xs text-slate-500">{r.email}</div>}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {courseLabel}
-                      {fundingLabel && (
-                        <div className="text-xs text-slate-500">{fundingLabel}</div>
+                      {courseOrCompanyLabel}
+                      {subLabel && (
+                        <div className="text-xs text-slate-500">{subLabel}</div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-700 tabular-nums">
@@ -685,59 +785,9 @@ function BulkBar({
   );
 }
 
-// Export the currently-filtered rows as a CSV. Lives client-side because the
-// rows are already in memory; no extra round-trip.
-function downloadCsv(rows: LeadRow[]) {
-  const headers = [
-    "Lead ID",
-    "Name",
-    "Email",
-    "Course",
-    "Funding",
-    "Status",
-    "Routed at",
-    "Fastrack",
-    "Callback pending",
-  ];
-  const lines = [headers.map(csvCell).join(",")];
-  for (const r of rows) {
-    lines.push(
-      [
-        r.id.toString(),
-        r.name,
-        r.email ?? "",
-        r.course_id ?? "",
-        r.funding_category ?? "",
-        STATUS_LABEL[r.status] ?? r.status,
-        r.routed_at ?? "",
-        r.has_fastrack ? "Yes" : "No",
-        r.callback_pending ? "Yes" : "No",
-      ]
-        .map(csvCell)
-        .join(","),
-    );
-  }
-  const csv = lines.join("\r\n");
-  // BOM so Excel opens UTF-8 cleanly without mangling non-ASCII names.
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  const stamp = new Date().toISOString().slice(0, 10);
-  a.download = `switchleads-leads-${stamp}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function csvCell(value: string): string {
-  // Quote if the value contains a quote, comma, or newline; double up internal quotes.
-  if (/[",\n\r]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
+// CSV export helpers live in ./csv-export.ts and are dynamically imported
+// from the BulkBar's Export button so the helper code (~2KB) only ships to
+// the client on the first click, not on every leads-list render.
 
 // Pull the YYYY-MM-DD date out of an intake id of the form
 // "<region>-<YYYY-MM-DD>". Returns null if the suffix isn't a date.

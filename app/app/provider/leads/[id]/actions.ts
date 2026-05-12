@@ -29,6 +29,7 @@ import {
   lostReasonsFor,
   STATUS_LABEL,
   type LeadStatus,
+  type LeadType,
   type LostReason,
 } from "@/lib/lead-status";
 
@@ -55,7 +56,11 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
   const targetStatus = args.status as LeadStatus;
 
   // System statuses can't be set manually
-  if (targetStatus === "presumed_enrolled" || targetStatus === "open") {
+  if (
+    targetStatus === "presumed_enrolled"
+    || targetStatus === "presumed_employer_signed"
+    || targetStatus === "open"
+  ) {
     return { ok: false, error: "That status can't be set manually." };
   }
 
@@ -76,8 +81,18 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     return { ok: false, error: "No enrolment row found, or you don't have access" };
   }
 
+  // Lookup lead_type from the submission row so the transition rules pick
+  // the right state machine (learner vs employer).
+  const { data: subRow } = await supabase
+    .schema("leads")
+    .from("submissions")
+    .select("lead_type")
+    .eq("id", args.submissionId)
+    .maybeSingle();
+  const leadType: LeadType = (subRow?.lead_type ?? "learner") as LeadType;
+
   const fromStatus = existingRow.status as LeadStatus;
-  if (!isAllowedTransition(fromStatus, targetStatus)) {
+  if (!isAllowedTransition(fromStatus, targetStatus, leadType)) {
     return {
       ok: false,
       error: `Can't move from "${STATUS_LABEL[fromStatus]}" to "${STATUS_LABEL[targetStatus]}".`,

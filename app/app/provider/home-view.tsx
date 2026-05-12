@@ -32,11 +32,21 @@ const STATUS_TONE: Record<LeadStatus, string> = {
   presumed_enrolled: "bg-emerald-50 text-emerald-700 border-emerald-200",
   lost: "bg-rose-50 text-rose-700 border-rose-200",
   cannot_reach: "bg-rose-50 text-rose-700 border-rose-200",
+  // Employer-lead statuses. Use the same colour intent as the closest
+  // learner equivalent so providers reading both feels consistent.
+  engaged: "bg-blue-50 text-blue-700 border-blue-200",
+  in_progress: "bg-amber-50 text-amber-700 border-amber-200",
+  signed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  not_signed: "bg-rose-50 text-rose-700 border-rose-200",
+  presumed_employer_signed: "bg-emerald-50 text-emerald-700 border-emerald-200",
 };
 
 export interface HomeViewProps {
   providerLabel: string;
   greetingName: string;
+  // Determines which "Needs your attention" + pipeline shape renders.
+  // Defaults to 'learner' to preserve existing behaviour for EMS/CD/WYK.
+  leadType?: "learner" | "employer_apprenticeship";
   enrolledLast30d: number;
   counts: {
     open: number;
@@ -46,6 +56,15 @@ export interface HomeViewProps {
   callbackCount: number;
   fastrackReadyCount: number;
   staleAttemptCount: number;
+  // Employer counts. Only consumed when leadType==='employer_apprenticeship'.
+  // Optional so learner-shape callers don't need to pass empty values.
+  employerCounts?: {
+    engaged: number;
+    in_progress: number;
+    signed: number;
+    not_signed: number;
+    near_60_day: number;
+  };
   oldestCallbackSince: string | null;
   oldestFastrackSince: string | null;
   oldestOpenSince: string | null;
@@ -71,11 +90,13 @@ export interface HomeViewProps {
 export function ProviderHomeView({
   providerLabel,
   greetingName,
+  leadType = "learner",
   enrolledLast30d,
   counts,
   callbackCount,
   fastrackReadyCount,
   staleAttemptCount,
+  employerCounts,
   oldestCallbackSince,
   oldestFastrackSince,
   oldestOpenSince,
@@ -88,6 +109,8 @@ export function ProviderHomeView({
   leadsBase,
   leadDetailPrefix,
 }: HomeViewProps) {
+  const isEmployer = leadType === "employer_apprenticeship";
+  const ec = employerCounts ?? { engaged: 0, in_progress: 0, signed: 0, not_signed: 0, near_60_day: 0 };
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -109,74 +132,150 @@ export function ProviderHomeView({
         </div>
       </div>
 
-      <section>
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-          Needs your attention
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          <ActionCard
-            href={`${leadsBase}/leads?status=fastrack`}
-            tone="violet"
-            count={fastrackReadyCount}
-            label="fastrack leads"
-            labelSingular="fastrack lead"
-            hint="Cohort confirmed, ready to enrol"
-            doneHint="No fastracks waiting"
-            oldestSince={oldestFastrackSince}
-            overdue={overdueFastrack}
-          />
-          <ActionCard
-            href={`${leadsBase}/leads?status=callback`}
-            tone="rose"
-            count={callbackCount}
-            label="callback requests"
-            labelSingular="callback request"
-            hint="Switchable flagged for follow-up"
-            doneHint="No callbacks pending"
-            oldestSince={oldestCallbackSince}
-            overdue={overdueCallback}
-          />
-          <ActionCard
-            href={`${leadsBase}/leads?status=open`}
-            tone="amber"
-            count={counts.open}
-            label="open leads never called"
-            labelSingular="open lead never called"
-            hint="No contact attempt yet"
-            doneHint="Every open lead's been tried"
-            oldestSince={oldestOpenSince}
-            overdue={overdueOpen}
-          />
-          <ActionCard
-            href={`${leadsBase}/leads?status=stale_attempts`}
-            tone="orange"
-            count={staleAttemptCount}
-            label="call attempts need retrying"
-            labelSingular="call attempt needs retrying"
-            hint="Last call was 36h+ ago"
-            doneHint="No stale attempts"
-            oldestSince={oldestStaleAttemptSince}
-            overdue={overdueStaleAttempt}
-          />
-        </div>
-      </section>
+      {isEmployer ? (
+        <>
+          <section>
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
+              Needs your attention
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <ActionCard
+                href={`${leadsBase}/leads?status=open`}
+                tone="amber"
+                count={counts.open}
+                label="open leads not yet engaged"
+                labelSingular="open lead not yet engaged"
+                hint="No contact yet"
+                doneHint="Every lead's been picked up"
+                oldestSince={oldestOpenSince}
+                overdue={overdueOpen}
+              />
+              <ActionCard
+                href={`${leadsBase}/leads?status=engaged`}
+                tone="violet"
+                count={ec.engaged}
+                label="engaged leads"
+                labelSingular="engaged lead"
+                hint="First contact made, deal not yet moving"
+                doneHint="No engaged leads waiting"
+                oldestSince={null}
+                overdue={false}
+              />
+              <ActionCard
+                href={`${leadsBase}/leads?status=in_progress`}
+                tone="rose"
+                count={ec.in_progress}
+                label="leads in progress"
+                labelSingular="lead in progress"
+                hint="Deal moving, not yet signed"
+                doneHint="Nothing in flight"
+                oldestSince={null}
+                overdue={false}
+              />
+              <ActionCard
+                href={`${leadsBase}/leads?status=near_60_day`}
+                tone="orange"
+                count={ec.near_60_day}
+                label="60-day clock approaching"
+                labelSingular="60-day clock approaching"
+                hint="50+ days since last update — Presumed Signed fires at 60"
+                doneHint="None approaching"
+                oldestSince={null}
+                overdue={ec.near_60_day > 0}
+              />
+            </div>
+          </section>
 
-      <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your pipeline</h2>
-          <Link
-            href={`${leadsBase}/leads`}
-            className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-          >
-            See all leads &rarr;
-          </Link>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <PipelinePill label="Open" value={counts.open} tone="slate" href={`${leadsBase}/leads?status=open`} />
-          <PipelinePill label="Calling" value={counts.attempts} tone="amber" href={`${leadsBase}/leads?status=calling`} />
-          <PipelinePill label="Meeting booked" value={counts.meeting_booked} tone="blue" href={`${leadsBase}/leads?status=meeting`} />
-        </div>
-      </section>
+          <section>
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your pipeline</h2>
+              <Link
+                href={`${leadsBase}/leads`}
+                className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+              >
+                See all leads &rarr;
+              </Link>
+            </div>
+            <div className="grid grid-cols-4 gap-3">
+              <PipelinePill label="Open" value={counts.open} tone="slate" href={`${leadsBase}/leads?status=open`} />
+              <PipelinePill label="Engaged" value={ec.engaged} tone="blue" href={`${leadsBase}/leads?status=engaged`} />
+              <PipelinePill label="In progress" value={ec.in_progress} tone="amber" href={`${leadsBase}/leads?status=in_progress`} />
+              <PipelinePill label="Signed" value={ec.signed} tone="emerald" href={`${leadsBase}/leads?status=signed`} />
+            </div>
+          </section>
+        </>
+      ) : (
+        <>
+          <section>
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
+              Needs your attention
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <ActionCard
+                href={`${leadsBase}/leads?status=fastrack`}
+                tone="violet"
+                count={fastrackReadyCount}
+                label="fastrack leads"
+                labelSingular="fastrack lead"
+                hint="Cohort confirmed, ready to enrol"
+                doneHint="No fastracks waiting"
+                oldestSince={oldestFastrackSince}
+                overdue={overdueFastrack}
+              />
+              <ActionCard
+                href={`${leadsBase}/leads?status=callback`}
+                tone="rose"
+                count={callbackCount}
+                label="callback requests"
+                labelSingular="callback request"
+                hint="Switchable flagged for follow-up"
+                doneHint="No callbacks pending"
+                oldestSince={oldestCallbackSince}
+                overdue={overdueCallback}
+              />
+              <ActionCard
+                href={`${leadsBase}/leads?status=open`}
+                tone="amber"
+                count={counts.open}
+                label="open leads never called"
+                labelSingular="open lead never called"
+                hint="No contact attempt yet"
+                doneHint="Every open lead's been tried"
+                oldestSince={oldestOpenSince}
+                overdue={overdueOpen}
+              />
+              <ActionCard
+                href={`${leadsBase}/leads?status=stale_attempts`}
+                tone="orange"
+                count={staleAttemptCount}
+                label="call attempts need retrying"
+                labelSingular="call attempt needs retrying"
+                hint="Last call was 36h+ ago"
+                doneHint="No stale attempts"
+                oldestSince={oldestStaleAttemptSince}
+                overdue={overdueStaleAttempt}
+              />
+            </div>
+          </section>
+
+          <section>
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your pipeline</h2>
+              <Link
+                href={`${leadsBase}/leads`}
+                className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+              >
+                See all leads &rarr;
+              </Link>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <PipelinePill label="Open" value={counts.open} tone="slate" href={`${leadsBase}/leads?status=open`} />
+              <PipelinePill label="Calling" value={counts.attempts} tone="amber" href={`${leadsBase}/leads?status=calling`} />
+              <PipelinePill label="Meeting booked" value={counts.meeting_booked} tone="blue" href={`${leadsBase}/leads?status=meeting`} />
+            </div>
+          </section>
+        </>
+      )}
 
       <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="flex items-baseline justify-between px-6 pt-5 pb-3">

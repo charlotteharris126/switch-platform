@@ -35,6 +35,7 @@ interface ProviderUserRow {
 
 interface ProviderRow {
   company_name: string;
+  funding_types: string[] | null;
 }
 
 interface EnrolmentCountRow {
@@ -133,7 +134,7 @@ export default async function ProviderHomePage() {
     admin
       .schema("crm")
       .from("providers")
-      .select("company_name")
+      .select("company_name, funding_types")
       .eq("provider_id", pu.provider_id)
       .maybeSingle<ProviderRow>(),
     recentIds.length
@@ -158,24 +159,22 @@ export default async function ProviderHomePage() {
   for (const r of allRouted) routedAtById.set(r.id, r.routed_at);
   const allRoutedIds = new Set<number>(allRouted.map((r) => r.id));
 
-  // Fastrack-ready = routed leads with a fastrack submission, NOT yet at a
-  // settled enrolment status (still actionable). Settled = lost /
-  // presumed_enrolled / enrolled — once a lead has hit any of those, the
-  // fastrack is no longer the next action regardless of what the form
-  // captured. cannot_reach stays in scope because the learner might come
-  // back. Caught 2026-05-11 when lead 375 (Lisa Parker, lost + fastrack)
-  // showed in "Needs your attention" despite being closed out.
-  const SETTLED_FOR_FASTRACK = new Set(["lost", "presumed_enrolled", "enrolled"]);
-  const settledIds = new Set<number>(
-    enrolments
-      .filter((e) => SETTLED_FOR_FASTRACK.has(e.status))
-      .map((e) => e.submission_id),
-  );
+  // Fastrack-ready = routed leads with a fastrack submission AND status=open
+  // (no enrolment row counts as open). Once the provider moves the status,
+  // they've actioned the fastrack signal — it stops driving the home action
+  // card. Stale attempts / callback signals are separate cards that re-fire
+  // independently if a contact attempt then goes cold. Tightened 2026-05-11
+  // (was: !settled-only, which kept fastracks visible across attempt_X /
+  // cannot_reach / meeting_booked despite provider already engaging).
+  const statusBySub = new Map<number, string>();
+  for (const e of enrolments) statusBySub.set(e.submission_id, e.status);
   const fastrackRows = (fastrackResult.data ?? []) as FastrackTimedRow[];
   const fastrackParentIds = new Set<number>(fastrackRows.map((r) => r.parent_submission_id));
-  const fastrackReadyIds = [...fastrackParentIds].filter(
-    (id) => allRoutedIds.has(id) && !settledIds.has(id),
-  );
+  const fastrackReadyIds = [...fastrackParentIds].filter((id) => {
+    if (!allRoutedIds.has(id)) return false;
+    const s = statusBySub.get(id);
+    return s === undefined || s === "open";
+  });
   const fastrackReadyCount = fastrackReadyIds.length;
 
   // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >36h ago.
@@ -202,10 +201,11 @@ export default async function ProviderHomePage() {
   );
   const oldestFastrackSince = oldestIso(
     fastrackRows
-      .filter(
-        (r) => allRoutedIds.has(r.parent_submission_id)
-          && !settledIds.has(r.parent_submission_id),
-      )
+      .filter((r) => {
+        if (!allRoutedIds.has(r.parent_submission_id)) return false;
+        const s = statusBySub.get(r.parent_submission_id);
+        return s === undefined || s === "open";
+      })
       .map((r) => r.submitted_at),
   );
   const oldestOpenSince = oldestIso(
@@ -246,6 +246,41 @@ export default async function ProviderHomePage() {
   // the provider's responsibility but we don't have a hard SLA here yet.
   const overdueFastrack = false;
 
+  // Employer-shape home: trigger when the provider serves apprenticeships
+  // (Riverside in v1). Drives the home view's "Needs your attention" +
+  // "Your pipeline" sections to render employer-shaped cards instead of
+  // learner-shaped ones. Day-1 Riverside has zero leads, so all cards
+  // will read 0; this just makes the labels match the workflow.
+  const isEmployerProvider =
+    Array.isArray(provider?.funding_types)
+    && provider!.funding_types!.includes("apprenticeship");
+
+  // Employer-shape counts. All compute from the same enrolments rows;
+  // RLS already scoped to this provider.
+  let employerEngagedCount = 0;
+  let employerInProgressCount = 0;
+  let employerSignedCount = 0;
+  let employerNotSignedCount = 0;
+  // "60-day clock approaching" = engaged or in_progress with no status
+  // update in 50+ days (10-day warning before the 60-day Presumed Employer
+  // Signed auto-flip).
+  const FIFTY_DAYS_MS = 50 * 24 * 60 * 60 * 1000;
+  let employerNear60DayCount = 0;
+  for (const e of enrolments) {
+    const ageMs = Date.now() - new Date(e.status_updated_at).getTime();
+    if (e.status === "engaged") {
+      employerEngagedCount += 1;
+      if (ageMs > FIFTY_DAYS_MS) employerNear60DayCount += 1;
+    } else if (e.status === "in_progress") {
+      employerInProgressCount += 1;
+      if (ageMs > FIFTY_DAYS_MS) employerNear60DayCount += 1;
+    } else if (e.status === "signed" || e.status === "presumed_employer_signed") {
+      employerSignedCount += 1;
+    } else if (e.status === "not_signed") {
+      employerNotSignedCount += 1;
+    }
+  }
+
   const recentLeads = recentSubs.map((s) => {
     const enrol = recentEnrolBySub.get(s.id);
     const name = [s.first_name, s.last_name].filter(Boolean).join(" ") || s.email || `Lead ${s.id}`;
@@ -271,11 +306,19 @@ export default async function ProviderHomePage() {
       <ProviderHomeView
         providerLabel={provider?.company_name ?? pu.provider_id}
         greetingName={pu.display_name ?? pu.contact_email}
+        leadType={isEmployerProvider ? "employer_apprenticeship" : "learner"}
         enrolledLast30d={enrolledLast30d}
         counts={counts}
         callbackCount={callbackCount}
         fastrackReadyCount={fastrackReadyCount}
         staleAttemptCount={staleAttemptCount}
+        employerCounts={{
+          engaged: employerEngagedCount,
+          in_progress: employerInProgressCount,
+          signed: employerSignedCount,
+          not_signed: employerNotSignedCount,
+          near_60_day: employerNear60DayCount,
+        }}
         oldestCallbackSince={oldestCallbackSince}
         oldestFastrackSince={oldestFastrackSince}
         oldestOpenSince={oldestOpenSince}

@@ -93,6 +93,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ status: "ignored", form_name: formName, reason: "fastrack form routed via fastrack-receive" });
   }
 
+  // `s4b-employer-lead-v1` has its own dedicated handler at
+  // netlify-employer-lead-router (B2B employer leads go to Riverside).
+  // The site-wide Netlify "Any form" webhook fires for this form too,
+  // so we filter here so an employer submission can never be ingested
+  // as a learner lead. Caught 2026-05-12 when test lead 397 landed
+  // as lead_type='learner' default after the per-form webhook was
+  // wired but the site-wide one was still active.
+  if (formName === "s4b-employer-lead-v1") {
+    return json({ status: "ignored", form_name: formName, reason: "employer lead routed via netlify-employer-lead-router" });
+  }
+
   const row = normaliseAndOverride(formName, body, rawBody);
 
   let result;

@@ -16,6 +16,7 @@
 import Link from "next/link";
 import { DurationTimer } from "../../duration-timer";
 import { OutcomeButtons } from "./outcome-buttons";
+import { EmployerOutcomeButtons } from "./employer-outcome-buttons";
 import { NotesLog, type NoteRow } from "./notes-log";
 import { MarkAdminNotesRead } from "./mark-admin-notes-read";
 import { STATUS_LABEL, type LeadStatus } from "@/lib/lead-status";
@@ -36,6 +37,11 @@ export interface LeadDetailSubmission {
   last_name: string | null;
   email: string | null;
   phone: string | null;
+  // Lead-type discriminator. 'learner' (default) or 'employer_apprenticeship'.
+  // Branches the "About" + "Course" sections of the detail view to render
+  // employer fields when employer.
+  lead_type: "learner" | "employer_apprenticeship";
+  // Learner-shape fields. Populated for lead_type='learner'.
   age_band: string | null;
   employment_status: string | null;
   course_id: string | null;
@@ -51,6 +57,19 @@ export interface LeadDetailSubmission {
   la: string | null;
   postcode: string | null;
   region: string | null;
+  // Employer-shape fields. Populated for lead_type='employer_apprenticeship'.
+  company_name: string | null;
+  role_title: string | null;
+  company_size_band: string | null;
+  sector: string | null;
+  levy_status: string | null;
+  urgency: string | null;
+  interest: string | null;
+  candidate_in_mind: string | null;
+  existing_apprentices: string | null;
+  headcount_estimate: string | null;
+  standards_interested: string | null;
+  additional_notes: string | null;
 }
 
 export interface LeadDetailEnrolment {
@@ -213,7 +232,10 @@ export function LeadDetailView({
             </div>
           </div>
 
-          {/* Outcome marking. Hidden entirely in read-only preview. */}
+          {/* Outcome marking. Hidden entirely in read-only preview.
+              Employer leads render a different stepper (Engaged → In
+              progress → Signed, plus a Not signed closeout) — see
+              EmployerOutcomeButtons. */}
           {onMarkOutcome ? (
             <div className="bg-white border border-slate-200 rounded-xl p-6">
               <h2 className="text-sm font-semibold text-slate-900">Mark outcome</h2>
@@ -221,48 +243,97 @@ export function LeadDetailView({
                 Click whichever applies. Forward only: once you&apos;ve moved past a step you can&apos;t go back.
                 Every change is logged.
               </p>
-              <OutcomeButtons
-                submissionId={submission.id}
-                currentStatus={status}
-                onMark={onMarkOutcome}
-              />
+              {submission.lead_type === "employer_apprenticeship" ? (
+                <EmployerOutcomeButtons
+                  submissionId={submission.id}
+                  currentStatus={status}
+                  onMark={onMarkOutcome}
+                />
+              ) : (
+                <OutcomeButtons
+                  submissionId={submission.id}
+                  currentStatus={status}
+                  onMark={onMarkOutcome}
+                />
+              )}
             </div>
           ) : (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-500">
-              Outcome controls hidden in read-only preview. The provider sees a stepper here:
-              Open &rarr; Calls &rarr; Meeting booked &rarr; Enrolled, plus Lost and Cannot reach.
+              Outcome controls hidden in read-only preview.
+              {submission.lead_type === "employer_apprenticeship"
+                ? " The provider sees a stepper here: Open → Engaged → In progress → Signed, plus a Not signed closeout."
+                : " The provider sees a stepper here: Open → Calls → Meeting booked → Enrolled, plus Lost and Cannot reach."}
             </div>
           )}
 
-          {/* Lead detail cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Section title="Contact">
-              <Row label="Email" value={submission.email} />
-              <Row label="Phone" value={submission.phone} />
-              <Row label="Local authority" value={submission.la} />
-              <Row label="Postcode" value={submission.postcode} />
-              <Row label="Region" value={submission.region} />
-            </Section>
+          {/* Lead detail cards — branched by lead_type. Employer leads
+              render company / role / sector / levy fields instead of the
+              learner-shape About + Course sections. */}
+          {submission.lead_type === "employer_apprenticeship" ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Section title="Contact">
+                <Row label="Email" value={submission.email} />
+                <Row label="Phone" value={submission.phone} />
+                <Row label="Role" value={submission.role_title} />
+              </Section>
 
-            <Section title="About the learner">
-              <Row label="Age band" value={labelAgeBand(submission.age_band)} />
-              <Row label="Employment" value={labelEmployment(submission.employment_status)} />
-              <Row label="Has Level 3 or higher" value={booleanLabel(submission.prior_level_3_or_higher)} />
-              <Row label="What they're after" value={labelOutcomeInterest(submission.outcome_interest)} />
-            </Section>
+              <Section title="Company">
+                <Row label="Company name" value={submission.company_name} />
+                <Row label="Sector" value={submission.sector} />
+                <Row label="Size band" value={submission.company_size_band} />
+                <Row label="Levy status" value={submission.levy_status} />
+              </Section>
 
-            <Section title="Course">
-              <Row label="Course" value={labelCourse(submission.course_id)} />
-              <Row label="Funding" value={labelFunding(submission.funding_category, submission.funding_route)} />
-              <IntakeRow
-                canStart={submission.can_start_on_intake_date}
-                preferredIntakeId={submission.preferred_intake_id}
-                acceptableIntakeIds={submission.acceptable_intake_ids}
-                startWhen={submission.start_when}
-                startTiming={submission.start_timing}
-              />
-            </Section>
-          </div>
+              <Section title="Apprenticeship interest">
+                <Row label="Interest" value={submission.interest} />
+                <Row label="Urgency" value={submission.urgency} />
+                <Row label="Standard" value={submission.standards_interested} />
+                <Row label="Candidate in mind" value={submission.candidate_in_mind} />
+              </Section>
+
+              <Section title="Context">
+                <Row label="Existing apprentices" value={submission.existing_apprentices} />
+                <Row label="Headcount estimate" value={submission.headcount_estimate} />
+                {submission.additional_notes && (
+                  <div className="mt-2">
+                    <p className="text-xs uppercase tracking-wide font-semibold text-slate-500">Their notes</p>
+                    <p className="text-sm text-slate-800 mt-1 italic border-l-2 border-slate-300 pl-3">
+                      &quot;{submission.additional_notes}&quot;
+                    </p>
+                  </div>
+                )}
+              </Section>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Section title="Contact">
+                <Row label="Email" value={submission.email} />
+                <Row label="Phone" value={submission.phone} />
+                <Row label="Local authority" value={submission.la} />
+                <Row label="Postcode" value={submission.postcode} />
+                <Row label="Region" value={submission.region} />
+              </Section>
+
+              <Section title="About the learner">
+                <Row label="Age band" value={labelAgeBand(submission.age_band)} />
+                <Row label="Employment" value={labelEmployment(submission.employment_status)} />
+                <Row label="Has Level 3 or higher" value={booleanLabel(submission.prior_level_3_or_higher)} />
+                <Row label="What they're after" value={labelOutcomeInterest(submission.outcome_interest)} />
+              </Section>
+
+              <Section title="Course">
+                <Row label="Course" value={labelCourse(submission.course_id)} />
+                <Row label="Funding" value={labelFunding(submission.funding_category, submission.funding_route)} />
+                <IntakeRow
+                  canStart={submission.can_start_on_intake_date}
+                  preferredIntakeId={submission.preferred_intake_id}
+                  acceptableIntakeIds={submission.acceptable_intake_ids}
+                  startWhen={submission.start_when}
+                  startTiming={submission.start_timing}
+                />
+              </Section>
+            </div>
+          )}
 
           {fastrackDetail && <FastrackSection detail={fastrackDetail} />}
         </div>

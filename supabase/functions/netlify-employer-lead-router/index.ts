@@ -1,0 +1,457 @@
+// Edge Function: netlify-employer-lead-router
+// Receives the Netlify Forms outgoing webhook for the Switchable for Business
+// employer-lead form (`s4b-employer-lead-v1`). Normalises the payload into
+// leads.submissions with lead_type='employer_apprenticeship', appends to the
+// Riverside Google Sheet, and fires the U1-employer + U2-provider Brevo
+// transactional emails.
+//
+// v1 design notes (deliberately leaner than netlify-lead-router):
+//   - Single hardcoded provider (Riverside) — every routed lead lands with
+//     primary_routed_to='riverside-training'. Multi-provider routing is a v2
+//     concern once the apprenticeship pilot proves out.
+//   - No auto_route_enabled gate, no referral programme, no fastrack path.
+//   - Server-side DQ is intentionally minimal: only an obviously-junk
+//     submission gate (no email or no company name). Mable's spec called for
+//     a Companies House lookup combined with consumer-email-domain matching;
+//     that's deferred to v1.1. False negatives in v1 mean Riverside reviews
+//     a few low-quality rows; false positives would lose real leads from
+//     owner-MDs of small businesses who legitimately use Gmail.
+//   - Brevo emails fire as post-response background tasks via
+//     EdgeRuntime.waitUntil so slow Brevo can never time out Netlify's
+//     webhook (Session 3.3 incident pattern).
+//
+// Role: connects via Supabase's auto-injected SUPABASE_DB_URL (postgres
+// superuser) and drops to scoped `functions_writer` role at the start of
+// every transaction via SET LOCAL ROLE.
+
+import postgres from "npm:postgres@3";
+import { sendBrevoEmail } from "../_shared/brevo.ts";
+
+const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
+if (!DATABASE_URL) {
+  throw new Error(
+    "SUPABASE_DB_URL is not set. This should be auto-injected by Supabase for every Edge Function.",
+  );
+}
+
+const RIVERSIDE_PROVIDER_ID = "riverside-training";
+const RIVERSIDE_SHEET_ENV = "RIVERSIDE_SHEET_WEBHOOK_URL"; // Apps Script v3 endpoint
+const BREVO_TEMPLATE_U1_EMPLOYER = "BREVO_TEMPLATE_U1_EMPLOYER";
+const BREVO_TEMPLATE_U2_PROVIDER = "BREVO_TEMPLATE_U2_PROVIDER";
+const BREVO_TEMPLATE_UD_EMPLOYER = "BREVO_TEMPLATE_UD_EMPLOYER";
+const RIVERSIDE_CONTACT_EMAIL_ENV = "RIVERSIDE_CONTACT_EMAIL"; // Jane Preston
+
+const sql = postgres(DATABASE_URL, {
+  max: 1,
+  idle_timeout: 20,
+  connect_timeout: 10,
+  prepare: false,
+});
+
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+interface EmployerSubmissionRow {
+  // Discriminator + identifiers
+  schema_version: string;
+  lead_type: "employer_apprenticeship";
+  // Routing fields
+  primary_routed_to: string | null;
+  routing_outcome: "routed" | "disqualified";
+  routing_outcome_hint: string | null;
+  routed_at: string | null;
+  // Submitter contact
+  first_name: string | null;
+  last_name: string | null;
+  email: string;
+  phone: string | null;
+  role_title: string | null;
+  // Company + apprenticeship context
+  company_name: string | null;
+  company_size_band: string | null;
+  sector: string | null;
+  levy_status: string | null;
+  interest: string | null;            // existing column reused for B2B value space
+  urgency: string | null;
+  candidate_in_mind: string | null;
+  existing_apprentices: string | null;
+  headcount_estimate: string | null;
+  standards_interested: string | null;
+  additional_notes: string | null;
+  ern: string;
+  // Consent
+  terms_accepted: boolean;
+  terms_accepted_at: string | null;
+  marketing_opt_in: boolean;
+  // Tracking
+  page_url: string | null;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_content: string | null;
+  fbclid: string | null;
+  gclid: string | null;
+  referrer: string | null;
+  // Raw payload — entire body archived for audit
+  raw_payload: JsonValue;
+}
+
+Deno.serve(async (req: Request): Promise<Response> => {
+  if (req.method !== "POST") {
+    return new Response("Method not allowed", { status: 405 });
+  }
+
+  let rawBody: JsonValue;
+  try {
+    rawBody = await req.json();
+  } catch (_err) {
+    return await persistDeadLetter(null, "Invalid JSON body");
+  }
+
+  const body = rawBody as Record<string, JsonValue> | null;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return await persistDeadLetter(rawBody, "Request body is not an object");
+  }
+
+  const formName = firstTopLevelString(body, "form_name", "form-name");
+  if (formName !== "s4b-employer-lead-v1") {
+    return json({ status: "ignored", form_name: formName, reason: "wrong form for employer-lead-router" });
+  }
+
+  const data = (body.data ?? body.payload ?? body) as Record<string, JsonValue>;
+
+  const row = normalise(data, rawBody);
+
+  // INSERT with the scoped role.
+  let insertedId: number;
+  try {
+    insertedId = await insertEmployerLead(row);
+  } catch (err) {
+    console.error("leads.submissions employer INSERT failed:", describeError(err));
+    return await persistDeadLetter(rawBody, `INSERT failed: ${describeError(err)}`);
+  }
+
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
+
+  if (row.routing_outcome === "disqualified") {
+    // DQ path: fire the polite "we'll keep you posted" email to the
+    // submitter only. No provider notify, no sheet append.
+    const task = sendEmployerDqAck(insertedId, row)
+      .catch((e) => console.error("UD employer ack failed:", describeError(e)));
+    if (runtime?.waitUntil) runtime.waitUntil(task);
+    return json({ status: "ok", submission_id: insertedId, outcome: "disqualified" });
+  }
+
+  // Routed path: append to Riverside sheet, U1 to employer, U2 to provider.
+  const task = (async () => {
+    await Promise.allSettled([
+      appendToRiversideSheet(insertedId, row),
+      sendEmployerAckU1(insertedId, row),
+      sendProviderNotifyU2(insertedId, row),
+    ]);
+  })().catch((e) => console.error("post-route fan-out failed:", describeError(e)));
+  if (runtime?.waitUntil) runtime.waitUntil(task);
+
+  return json({ status: "ok", submission_id: insertedId, outcome: "routed" });
+});
+
+// ---------------------------------------------------------------------------
+// Normalisation
+// ---------------------------------------------------------------------------
+
+function normalise(data: Record<string, JsonValue>, rawBody: JsonValue): EmployerSubmissionRow {
+  const email = trimLowerOrNull(strOrNull(data.email));
+  const company_name = trimOrNull(strOrNull(data.company_name));
+  const full_name = strOrNull(data.full_name) ?? "";
+  const [first_name, last_name] = splitName(full_name);
+
+  // Minimal DQ: missing email or missing company name → disqualified.
+  // (Companies House lookup deferred to v1.1 per the spec.)
+  let routing_outcome: "routed" | "disqualified" = "routed";
+  if (!email || !company_name) {
+    routing_outcome = "disqualified";
+  }
+
+  const terms_accepted = strOrNull(data.terms_accepted) === "true" || data.terms_accepted === true;
+  const marketing_opt_in =
+    strOrNull(data.marketing_opt_in) === "true" || data.marketing_opt_in === true;
+  const now = new Date().toISOString();
+
+  return {
+    schema_version: strOrNull(data.schema_version) ?? "1.0",
+    lead_type: "employer_apprenticeship",
+    primary_routed_to: routing_outcome === "routed" ? RIVERSIDE_PROVIDER_ID : null,
+    routing_outcome,
+    routing_outcome_hint: strOrNull(data.routing_outcome_hint),
+    routed_at: routing_outcome === "routed" ? now : null,
+    first_name,
+    last_name,
+    email: email ?? "",
+    phone: trimOrNull(strOrNull(data.phone)),
+    role_title: trimOrNull(strOrNull(data.role_title)),
+    company_name,
+    company_size_band: strOrNull(data.company_size_band),
+    sector: strOrNull(data.sector),
+    levy_status: strOrNull(data.levy_status),
+    interest: strOrNull(data.interest),
+    urgency: strOrNull(data.urgency),
+    candidate_in_mind: strOrNull(data.candidate_in_mind),
+    existing_apprentices: strOrNull(data.existing_apprentices),
+    headcount_estimate: strOrNull(data.headcount_estimate),
+    standards_interested: strOrNull(data.standards_interested) ?? "Project Management Level 4",
+    additional_notes: trimOrNull(strOrNull(data.additional_notes)),
+    ern: strOrNull(data.ern) ?? "",
+    terms_accepted,
+    terms_accepted_at: terms_accepted ? now : null,
+    marketing_opt_in,
+    page_url: strOrNull(data.page_url),
+    utm_source: strOrNull(data.utm_source),
+    utm_medium: strOrNull(data.utm_medium),
+    utm_campaign: strOrNull(data.utm_campaign),
+    utm_content: strOrNull(data.utm_content),
+    fbclid: strOrNull(data.fbclid),
+    gclid: strOrNull(data.gclid),
+    referrer: strOrNull(data.referrer_url) ?? strOrNull(data.referrer),
+    raw_payload: rawBody,
+  };
+}
+
+function splitName(full: string): [string | null, string | null] {
+  const parts = full.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return [null, null];
+  if (parts.length === 1) return [parts[0], null];
+  return [parts[0], parts.slice(1).join(" ")];
+}
+
+// ---------------------------------------------------------------------------
+// DB insert
+// ---------------------------------------------------------------------------
+
+async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
+  return await sql.begin(async (tx: postgres.TransactionSql) => {
+    await tx`SET LOCAL ROLE functions_writer`;
+
+    // `provider_ids` is NOT NULL on leads.submissions; for employer leads
+    // we set it to the single Riverside id (routed) or empty array (DQ).
+    const providerIds = row.routing_outcome === "routed" ? [RIVERSIDE_PROVIDER_ID] : [];
+
+    // submitted_at is NOT NULL with no DB-side default. created_at has a
+    // default of now() so we don't set it explicitly. referral_code is
+    // auto-populated by the leads.set_referral_code_default() trigger
+    // when the INSERT omits it (migration 0053).
+    const nowIso = new Date().toISOString();
+    const [inserted] = await tx<Array<{ id: number }>>`
+      INSERT INTO leads.submissions (
+        schema_version, submitted_at, lead_type, primary_routed_to, routing_outcome,
+        routing_outcome_hint, routed_at, provider_ids,
+        first_name, last_name, email, phone, role_title,
+        company_name, company_size_band, sector, levy_status,
+        interest, urgency, candidate_in_mind, existing_apprentices,
+        headcount_estimate, standards_interested, additional_notes, ern,
+        terms_accepted, terms_accepted_at, marketing_opt_in,
+        page_url, utm_source, utm_medium, utm_campaign, utm_content,
+        fbclid, gclid, referrer, raw_payload, is_dq
+      ) VALUES (
+        ${row.schema_version}, ${nowIso}, ${row.lead_type}, ${row.primary_routed_to}, ${row.routing_outcome},
+        ${row.routing_outcome_hint}, ${row.routed_at}, ${providerIds},
+        ${row.first_name}, ${row.last_name}, ${row.email}, ${row.phone}, ${row.role_title},
+        ${row.company_name}, ${row.company_size_band}, ${row.sector}, ${row.levy_status},
+        ${row.interest}, ${row.urgency}, ${row.candidate_in_mind}, ${row.existing_apprentices},
+        ${row.headcount_estimate}, ${row.standards_interested}, ${row.additional_notes}, ${row.ern},
+        ${row.terms_accepted}, ${row.terms_accepted_at}, ${row.marketing_opt_in},
+        ${row.page_url}, ${row.utm_source}, ${row.utm_medium}, ${row.utm_campaign}, ${row.utm_content},
+        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"}
+      )
+      RETURNING id
+    `;
+
+    if (row.routing_outcome === "routed") {
+      // Match the canonical route-lead pattern in _shared/route-lead.ts:
+      // routing_log row + ensure_open_enrolment so the provider portal's
+      // /provider/leads + lead-detail queries find a row to render
+      // against. Without the enrolment row, Riverside would see the lead
+      // listed but couldn't mark an outcome.
+      const logRows = await tx<Array<{ id: number }>>`
+        INSERT INTO leads.routing_log (
+          submission_id, provider_id, route_reason, delivery_method, delivery_status
+        ) VALUES (
+          ${inserted.id}, ${RIVERSIDE_PROVIDER_ID}, 'primary', 'sheet_webhook', 'sent'
+        )
+        RETURNING id
+      `;
+      const routingLogId = Number(logRows[0].id);
+      await tx`
+        SELECT crm.ensure_open_enrolment(
+          ${inserted.id},
+          ${routingLogId},
+          ${RIVERSIDE_PROVIDER_ID}
+        )
+      `;
+    }
+
+    return inserted.id;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sheet append + email helpers
+// ---------------------------------------------------------------------------
+
+async function appendToRiversideSheet(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
+  const url = Deno.env.get(RIVERSIDE_SHEET_ENV);
+  if (!url) {
+    console.warn(`${RIVERSIDE_SHEET_ENV} not set — skipping sheet append`);
+    return;
+  }
+  const body = {
+    mode: "append",
+    fields: {
+      "Submission ID": submissionId,
+      "Submission time": new Date().toISOString(),
+      "Full name": [row.first_name, row.last_name].filter(Boolean).join(" "),
+      "Role": row.role_title ?? "",
+      "Email": row.email,
+      "Phone": row.phone ?? "",
+      "Company": row.company_name ?? "",
+      "Sector": row.sector ?? "",
+      "Company size": row.company_size_band ?? "",
+      "Levy status": row.levy_status ?? "",
+      "Interest": row.interest ?? "",
+      "Candidate in mind": row.candidate_in_mind ?? "",
+      "Urgency": row.urgency ?? "",
+      "Headcount estimate": row.headcount_estimate ?? "",
+      "Existing apprentices": row.existing_apprentices ?? "",
+      "Standards interested": row.standards_interested ?? "",
+      "Additional notes": row.additional_notes ?? "",
+      "Marketing consent": row.marketing_opt_in ? "Yes" : "No",
+      "Status": "",
+      "60-day clock started": "",
+    },
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`sheet append failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+async function sendEmployerAckU1(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
+  const templateId = Number(Deno.env.get(BREVO_TEMPLATE_U1_EMPLOYER));
+  if (!templateId) {
+    console.warn(`${BREVO_TEMPLATE_U1_EMPLOYER} not set — skipping U1 ack`);
+    return;
+  }
+  await sendBrevoEmail({
+    templateId,
+    to: [{ email: row.email, name: [row.first_name, row.last_name].filter(Boolean).join(" ") || row.email }],
+    params: {
+      FIRSTNAME: row.first_name ?? "",
+      COMPANY: row.company_name ?? "",
+      SUBMISSION_ID: submissionId,
+    },
+  });
+}
+
+async function sendProviderNotifyU2(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
+  const templateId = Number(Deno.env.get(BREVO_TEMPLATE_U2_PROVIDER));
+  const to = Deno.env.get(RIVERSIDE_CONTACT_EMAIL_ENV);
+  if (!templateId || !to) {
+    console.warn("Riverside U2 provider notify env not fully set — skipping");
+    return;
+  }
+  await sendBrevoEmail({
+    templateId,
+    to: [{ email: to, name: "Riverside Training" }],
+    params: {
+      SUBMISSION_ID: submissionId,
+      COMPANY: row.company_name ?? "",
+      INTEREST: row.interest ?? "",
+      URGENCY: row.urgency ?? "",
+    },
+  });
+}
+
+async function sendEmployerDqAck(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
+  const templateId = Number(Deno.env.get(BREVO_TEMPLATE_UD_EMPLOYER));
+  if (!templateId || !row.email) {
+    console.warn(`${BREVO_TEMPLATE_UD_EMPLOYER} not set — skipping UD ack`);
+    return;
+  }
+  await sendBrevoEmail({
+    templateId,
+    to: [{ email: row.email, name: [row.first_name, row.last_name].filter(Boolean).join(" ") || row.email }],
+    params: {
+      FIRSTNAME: row.first_name ?? "",
+      SUBMISSION_ID: submissionId,
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Plumbing helpers
+// ---------------------------------------------------------------------------
+
+async function persistDeadLetter(payload: JsonValue, reason: string): Promise<Response> {
+  try {
+    await sql.begin(async (tx: postgres.TransactionSql) => {
+      await tx`SET LOCAL ROLE functions_writer`;
+      await tx`
+        INSERT INTO leads.dead_letter (source, error_context, raw_payload)
+        VALUES ('edge_function_employer_lead_router', ${reason}, ${tx.json(payload)})
+      `;
+    });
+  } catch (err) {
+    console.error("dead_letter INSERT failed:", describeError(err));
+  }
+  return json({ status: "dead_letter", reason }, 200);
+}
+
+function firstTopLevelString(body: Record<string, JsonValue>, ...keys: string[]): string | null {
+  for (const k of keys) {
+    const v = body[k];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return null;
+}
+
+function strOrNull(v: JsonValue | undefined): string | null {
+  if (v == null) return null;
+  if (typeof v === "string") return v.length > 0 ? v : null;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return null;
+}
+
+function trimOrNull(v: string | null): string | null {
+  if (!v) return null;
+  const t = v.trim();
+  return t.length > 0 ? t : null;
+}
+
+function trimLowerOrNull(v: string | null): string | null {
+  const t = trimOrNull(v);
+  return t ? t.toLowerCase() : null;
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+function json(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}

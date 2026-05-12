@@ -31,6 +31,14 @@ const STEPPER_SHORT_LABEL: Record<LeadStatus, string> = {
   lost: "Lost",
   cannot_reach: "Cannot reach",
   presumed_enrolled: "Presumed",
+  // Employer-lead stepper labels. Currently unused (employer outcome
+  // buttons render a different layout — see EmployerOutcomeButtons) but
+  // kept here so the Record stays exhaustive across LeadStatus values.
+  engaged: "Engaged",
+  in_progress: "In progress",
+  signed: "Signed",
+  not_signed: "Not signed",
+  presumed_employer_signed: "Presumed",
 };
 
 const LOST_REASON_LABEL: Record<LostReason, string> = {

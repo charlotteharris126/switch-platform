@@ -53,21 +53,23 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
 
   // Fetch in one wave: this submission, this enrolment, notes for this
   // lead, all routed siblings (id + routed_at) and fastrack parent ids
-  // for prev/next ordering, plus this lead's own fastrack row if any.
-  // RLS-scoped throughout.
+  // for prev/next ordering. The fastrack-detail row only fires after
+  // hasFastrack is known — saves the extra round-trip on the ~80% of
+  // leads with no fastrack. RLS-scoped throughout.
   const [
     submissionResult,
     enrolResult,
     notesResult,
     siblingsResult,
     fastrackResult,
-    fastrackDetailResult,
   ] = await Promise.all([
     supabase
       .schema("leads")
       .from("submissions")
       .select(
-        "id,routed_at,first_name,last_name,email,phone,age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,la,postcode,region",
+        "id,routed_at,first_name,last_name,email,phone,lead_type," +
+        "age_band,employment_status,course_id,funding_category,funding_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,la,postcode,region," +
+        "company_name,role_title,company_size_band,sector,levy_status,urgency,interest,candidate_in_mind,existing_apprentices,headcount_estimate,standards_interested,additional_notes",
       )
       .eq("id", submissionId)
       .maybeSingle<LeadDetailSubmission>(),
@@ -88,6 +90,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
       .schema("leads")
       .from("submissions")
       .select("id,routed_at")
+      .eq("primary_routed_to", ctx.providerId)
       .not("routed_at", "is", null)
       .is("archived_at", null)
       .is("parent_submission_id", null)
@@ -97,16 +100,6 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
       .schema("leads")
       .from("fastrack_submissions")
       .select("parent_submission_id"),
-    supabase
-      .schema("leads")
-      .from("fastrack_submissions")
-      .select(
-        "id, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in",
-      )
-      .eq("parent_submission_id", submissionId)
-      .order("submitted_at", { ascending: false })
-      .limit(1)
-      .maybeSingle<FastrackDetail>(),
   ]);
 
   const submission = submissionResult.data;
@@ -118,7 +111,18 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     (fastrackResult.data ?? []).map((r: FastrackParentRow) => r.parent_submission_id),
   );
   const hasFastrack = fastrackParentIds.has(submission.id);
-  const fastrackDetail = fastrackDetailResult.data;
+  const fastrackDetail = hasFastrack
+    ? (await supabase
+        .schema("leads")
+        .from("fastrack_submissions")
+        .select(
+          "id, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in",
+        )
+        .eq("parent_submission_id", submissionId)
+        .order("submitted_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<FastrackDetail>()).data
+    : null;
 
   // Build the same ordering the leads list uses: fastrack first, then
   // routed_at desc.

@@ -508,3 +508,6 @@ verify_jwt = false
 
 [functions.backfill-sheet-submission-ids]
 verify_jwt = false
+
+[functions.netlify-employer-lead-router]
+verify_jwt = false

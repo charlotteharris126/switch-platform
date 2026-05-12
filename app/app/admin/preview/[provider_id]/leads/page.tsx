@@ -52,6 +52,10 @@ interface SubmissionRow {
   re_submission_count: number | null;
   preferred_intake_id: string | null;
   acceptable_intake_ids: string[] | null;
+  lead_type: "learner" | "employer_apprenticeship" | null;
+  company_name: string | null;
+  role_title: string | null;
+  sector: string | null;
 }
 
 interface EnrolmentRow {
@@ -90,7 +94,7 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
   const submissionsResult = await admin
     .schema("leads")
     .from("submissions")
-    .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids")
+    .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector")
     .eq("primary_routed_to", providerId)
     .not("routed_at", "is", null)
     .is("archived_at", null)
@@ -154,8 +158,12 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
       status_updated_at: enrol?.status_updated_at ?? null,
       has_fastrack: fastrackParentIds.has(s.id),
       callback_pending: enrol?.callback_requested_at != null,
+      lead_type: s.lead_type ?? "learner",
       preferred_intake_id: s.preferred_intake_id,
       acceptable_intake_ids: s.acceptable_intake_ids,
+      company_name: s.company_name,
+      role_title: s.role_title,
+      sector: s.sector,
     };
   });
 
@@ -261,7 +269,6 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
 function parseFilter(param: string | undefined): Filter {
   if (!param) return "all";
   const normalised = param.toLowerCase();
-  if (normalised === "in_progress") return "calling";
   if (normalised === "settled") return "enrolled";
   if (normalised === "enrolment_meeting_booked") return "meeting";
   if (
@@ -274,7 +281,12 @@ function parseFilter(param: string | undefined): Filter {
     normalised === "meeting" ||
     normalised === "enrolled" ||
     normalised === "cold" ||
-    normalised === "stale_attempts"
+    normalised === "stale_attempts" ||
+    normalised === "engaged" ||
+    normalised === "in_progress" ||
+    normalised === "signed" ||
+    normalised === "not_signed" ||
+    normalised === "near_60_day"
   ) {
     return normalised;
   }

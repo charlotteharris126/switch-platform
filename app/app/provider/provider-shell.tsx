@@ -13,7 +13,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
 
-type Active = "home" | "leads" | "account" | "support";
+type Active = "home" | "leads" | "agreement" | "account" | "support";
 
 interface Props {
   active: Active;
@@ -54,6 +54,7 @@ export async function ProviderShell({ active, children, actionCount }: Props) {
                 <LeadsNavLink active={active === "leads"} />
               </Suspense>
             )}
+            <NavLink href="/provider/agreement" label="Agreement" active={active === "agreement"} />
             <NavLink href="/provider/support" label="Support" active={active === "support"} />
             <NavLink href="/provider/account" label="Account" active={active === "account"} />
             <form action={signOutAction} className="ml-2">
@@ -70,38 +71,25 @@ export async function ProviderShell({ active, children, actionCount }: Props) {
 async function LeadsNavLink({ active }: { active: boolean }) {
   const supabase = await createClient();
   // The badge needs to match what the "Action needed" filter shows on click.
-  // Action = (open) ∪ (callback_pending) ∪ (fastrack-ready, not settled) ∪
-  // (attempt_X with status_updated_at >48h ago). Server-side, fastrack
-  // membership and attempt-staleness need either a join or a derived
-  // calculation, so we pull the minimum row data and compute client-side.
+  // Action = (open) ∪ (callback_pending) ∪ (attempt_X with status_updated_at
+  // >36h ago). Fastrack alone no longer gates action — once the provider
+  // moves status off open, the fastrack signal is considered handled
+  // (re-fires via the stale-attempt timer if the new state goes cold).
   // RLS scopes everything to this provider.
-  const STALE_ATTEMPT_HOURS = 48;
+  const STALE_ATTEMPT_HOURS = 36;
   const cutoff = new Date(Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000).toISOString();
 
-  const [enrolmentsResult, fastrackResult] = await Promise.all([
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("submission_id, status, status_updated_at, callback_requested_at"),
-    supabase
-      .schema("leads")
-      .from("fastrack_submissions")
-      .select("parent_submission_id"),
-  ]);
+  const { data: enrolmentsData } = await supabase
+    .schema("crm")
+    .from("enrolments")
+    .select("status, status_updated_at, callback_requested_at");
 
-  const enrolments = (enrolmentsResult.data ?? []) as Array<{
-    submission_id: number;
+  const enrolments = (enrolmentsData ?? []) as Array<{
     status: string;
     status_updated_at: string;
     callback_requested_at: string | null;
   }>;
-  const fastrackParents = new Set<number>(
-    ((fastrackResult.data ?? []) as Array<{ parent_submission_id: number }>).map(
-      (r) => r.parent_submission_id,
-    ),
-  );
 
-  const SETTLED = new Set(["lost", "presumed_enrolled"]);
   const ATTEMPT = new Set([
     "attempt_1_no_answer",
     "attempt_2_no_answer",
@@ -110,11 +98,10 @@ async function LeadsNavLink({ active }: { active: boolean }) {
   let total = 0;
   for (const e of enrolments) {
     const callback = e.callback_requested_at != null;
-    const fastrack = fastrackParents.has(e.submission_id) && !SETTLED.has(e.status);
     const open = e.status === "open";
     const staleAttempt =
       ATTEMPT.has(e.status) && new Date(e.status_updated_at).toISOString() < cutoff;
-    if (callback || fastrack || open || staleAttempt) total += 1;
+    if (callback || open || staleAttempt) total += 1;
   }
 
   return (
