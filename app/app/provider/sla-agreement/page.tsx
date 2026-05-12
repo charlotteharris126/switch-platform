@@ -15,9 +15,10 @@ import Image from "next/image";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { acceptSlaAction, signOutFromSlaAction } from "./actions";
+import { signOutFromSlaAction } from "./actions";
 import { SLA_VERSION } from "./version";
 import { SignOutButton } from "../sign-out-button";
+import { AcceptForm } from "./accept-form";
 
 interface ProviderSlaRow {
   provider_id: string;
@@ -164,18 +165,7 @@ export default async function SlaAgreementPage() {
         </Section>
 
         {isAdminRole ? (
-          <form action={acceptSlaAction}>
-            <button
-              type="submit"
-              className="w-full md:w-auto px-6 py-3 text-sm font-semibold bg-slate-900 text-white rounded-md hover:bg-slate-800 cursor-pointer"
-            >
-              Got it — take me to the portal
-            </button>
-            <p className="text-xs text-slate-500 mt-2">
-              Clicking this confirms you&apos;ve read the working agreement above
-              (logged with timestamp + your account).
-            </p>
-          </form>
+          <AcceptForm />
         ) : (
           <div className="bg-amber-50 border border-amber-200 rounded-md p-4">
             <p className="text-sm text-amber-900 font-semibold">
