@@ -48,7 +48,17 @@ type SearchParams = {
   emails?: string;
 };
 
-const VALID_LEAD_STATUSES = ["open", "enrolled", "presumed_enrolled", "cannot_reach", "lost"] as const;
+// Status values accepted by the ?lead_status= URL filter. Covers both
+// learner and employer state machines so admin can filter across the
+// full corpus when stage='all'.
+const VALID_LEAD_STATUSES = [
+  // Learner
+  "open", "enrolled", "presumed_enrolled", "cannot_reach", "lost",
+  "attempt_1_no_answer", "attempt_2_no_answer", "attempt_3_no_answer",
+  "enrolment_meeting_booked",
+  // Employer (Switchable for Business v1)
+  "engaged", "in_progress", "signed", "not_signed", "presumed_employer_signed",
+] as const;
 
 type Stage = "all" | "qualified" | "routed" | "awaiting" | "enrolled" | "lost" | "dq" | "archived";
 
@@ -102,13 +112,21 @@ export default async function LeadsPage({
   // Stages that need a join with crm.enrolments (awaiting / enrolled / lost)
   // pre-fetch the relevant submission IDs so the main query can filter via
   // .in("id", [...]) without a server-side join.
+  //
+  // Each stage spans both lead types:
+  //   - enrolled = learner enrolled/presumed_enrolled + employer signed/presumed_employer_signed
+  //   - lost     = learner lost                       + employer not_signed
+  //   - awaiting = any non-terminal status (excluded by id)
   let stageIdFilter: { in?: number[]; notIn?: number[] } | null = null;
   if (stage === "awaiting" || stage === "enrolled" || stage === "lost") {
     const statuses = stage === "awaiting"
-      ? ["enrolled", "presumed_enrolled", "lost", "cannot_reach"]
+      ? [
+          "enrolled", "presumed_enrolled", "lost", "cannot_reach",
+          "signed", "presumed_employer_signed", "not_signed",
+        ]
       : stage === "enrolled"
-        ? ["enrolled", "presumed_enrolled"]
-        : ["lost"];
+        ? ["enrolled", "presumed_enrolled", "signed", "presumed_employer_signed"]
+        : ["lost", "not_signed"];
     const { data: enrolForStage } = await supabase
       .schema("crm")
       .from("enrolments")

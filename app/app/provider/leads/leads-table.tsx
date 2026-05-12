@@ -206,13 +206,18 @@ export function LeadsTable({
   linkPrefix = "/provider/leads/",
   seededCohortIds = [],
 }: Props) {
-  const allowBulk = onBulkMark !== undefined;
   // Lead-type detected from the loaded rows. In practice a provider's
   // leads are all one type (Riverside = employer, EMS/CD/WYK = learner)
   // so the first row is authoritative. If rows are empty, default to
   // learner shape (matches the historical default).
   const isEmployerView = rows.length > 0
     && rows.every((r) => r.lead_type === "employer_apprenticeship");
+  // Bulk actions (BulkBar with "Tried no answer / Meeting booked / Cannot
+  // reach / Lost") are learner-only. Employer flow is per-lead via
+  // EmployerOutcomeButtons on the detail page. Disable the select column
+  // + BulkBar entirely for employer view even when the caller passed
+  // onBulkMark, so admin preview also respects this.
+  const allowBulk = onBulkMark !== undefined && !isEmployerView;
   const [filter, setFilter] = useState<Filter>(initialFilter);
   const [query, setQuery] = useState("");
   const [courseFilter, setCourseFilter] = useState<string>("all");

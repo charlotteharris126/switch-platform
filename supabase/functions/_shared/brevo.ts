@@ -258,7 +258,11 @@ export type EmailLogType =
   | "referral_cold" | "referral_lost"
   | "newsletter"
   | "provider_presumed_warning"
-  | "re_engagement";
+  | "re_engagement"
+  // Switchable for Business v1 (employer apprenticeship leads, Riverside).
+  // Constraint added in migration 0125.
+  | "s4b_employer_u1"
+  | "s4b_employer_ud";
 
 export interface SendTransactionalArgs {
   sql: Sql;

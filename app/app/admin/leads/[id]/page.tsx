@@ -303,7 +303,7 @@ export default async function LeadDetailPage({
               Demo
             </Badge>
           )}
-          {lead.fastracked_at && (
+          {lead.fastracked_at && lead.lead_type !== "employer_apprenticeship" && (
             <Badge className="bg-violet-100 text-violet-800 hover:bg-violet-100">
               Fastracked
             </Badge>
@@ -317,58 +317,58 @@ export default async function LeadDetailPage({
 
       {/* Per-lead links the operator might want to paste straight into
           a hand-written email (Gmail etc.) without going through Brevo.
-          Each row shows the URL when its source identifier exists on
-          the submission, or an inline "not available, here's why" when
-          it doesn't. Same wiring as the SW_FASTRACK_URL +
-          SW_REFERRAL_URL Brevo attributes (_shared/route-lead.ts). */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Per-lead links</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#5a6a72]">
-              Fastrack form
-            </p>
-            <p className="text-xs text-[#5a6a72]">
-              Carries submission context so the fastrack form
-              pre-fills correctly. Funded leads only.
-            </p>
-            {lead.client_nonce ? (
-              <CopyableUrl
-                url={`https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(lead.client_nonce)}${
-                  lead.course_id ? `&course=${encodeURIComponent(lead.course_id)}` : ""
-                }&m=${lead.marketing_opt_in ? "1" : "0"}`}
-              />
-            ) : (
-              <p className="text-xs text-[#b3412e] bg-[#fbeae5] border border-[#f4d3c8] rounded px-2 py-1.5">
-                {lead.funding_category === "self"
-                  ? "Not available — this is a self-funded lead; fastrack is funded-only."
-                  : "Not available — submission has no client_nonce. Likely a funded submission from before 7 May 2026 (migration 0087)."}
+          Funded-learner-only — neither fastrack nor the referral
+          programme applies to B2B employer leads. */}
+      {lead.lead_type !== "employer_apprenticeship" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Per-lead links</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#5a6a72]">
+                Fastrack form
               </p>
-            )}
-          </div>
-          <div className="space-y-1.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#5a6a72]">
-              Personal referral page
-            </p>
-            <p className="text-xs text-[#5a6a72]">
-              Shows this lead their sharing link with their code
-              embedded.
-            </p>
-            {lead.referral_code ? (
-              <CopyableUrl
-                url={`https://switchable.org.uk/refer/?ref=${encodeURIComponent(lead.referral_code)}`}
-              />
-            ) : (
-              <p className="text-xs text-[#b3412e] bg-[#fbeae5] border border-[#f4d3c8] rounded px-2 py-1.5">
-                Not available — no referral_code on this submission. They&apos;ll
-                get one assigned next time route-lead.ts touches the row.
+              <p className="text-xs text-[#5a6a72]">
+                Carries submission context so the fastrack form
+                pre-fills correctly. Funded leads only.
               </p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              {lead.client_nonce ? (
+                <CopyableUrl
+                  url={`https://switchable.org.uk/funded/thank-you/?ref=${encodeURIComponent(lead.client_nonce)}${
+                    lead.course_id ? `&course=${encodeURIComponent(lead.course_id)}` : ""
+                  }&m=${lead.marketing_opt_in ? "1" : "0"}`}
+                />
+              ) : (
+                <p className="text-xs text-[#b3412e] bg-[#fbeae5] border border-[#f4d3c8] rounded px-2 py-1.5">
+                  {lead.funding_category === "self"
+                    ? "Not available — this is a self-funded lead; fastrack is funded-only."
+                    : "Not available — submission has no client_nonce. Likely a funded submission from before 7 May 2026 (migration 0087)."}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#5a6a72]">
+                Personal referral page
+              </p>
+              <p className="text-xs text-[#5a6a72]">
+                Shows this lead their sharing link with their code
+                embedded.
+              </p>
+              {lead.referral_code ? (
+                <CopyableUrl
+                  url={`https://switchable.org.uk/refer/?ref=${encodeURIComponent(lead.referral_code)}`}
+                />
+              ) : (
+                <p className="text-xs text-[#b3412e] bg-[#fbeae5] border border-[#f4d3c8] rounded px-2 py-1.5">
+                  Not available — no referral_code on this submission. They&apos;ll
+                  get one assigned next time route-lead.ts touches the row.
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Core fields + routing + attribution in three columns */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

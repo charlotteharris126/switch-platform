@@ -26,11 +26,18 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const LEAD_STATUSES: Array<{ value: string; label: string }> = [
+  // Learner statuses
   { value: "open",              label: "Open" },
   { value: "enrolled",          label: "Enrolled" },
   { value: "presumed_enrolled", label: "Presumed enrolled" },
   { value: "cannot_reach",      label: "Cannot reach" },
   { value: "lost",              label: "Lost" },
+  // Employer statuses (Switchable for Business v1)
+  { value: "engaged",                  label: "Engaged (B2B)" },
+  { value: "in_progress",              label: "In progress (B2B)" },
+  { value: "signed",                   label: "Signed (B2B)" },
+  { value: "not_signed",               label: "Not signed (B2B)" },
+  { value: "presumed_employer_signed", label: "Presumed signed (B2B)" },
 ];
 
 function parseLeadStatusList(raw: string | undefined): string[] {

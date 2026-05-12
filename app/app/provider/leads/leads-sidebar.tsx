@@ -22,6 +22,17 @@ interface Props {
   enrolledThisMonth: number;
   callbackPending: number;
   weekStats: WeekStats;
+  // 'learner' (default) or 'employer_apprenticeship'. When employer, swap
+  // the snapshot, this-week stats, and status guide for B2B-shaped
+  // equivalents. Defaults to learner to preserve existing behaviour for
+  // EMS/CD/WYK.
+  leadType?: "learner" | "employer_apprenticeship";
+  employerStats?: {
+    engaged: number;
+    in_progress: number;
+    signed: number;
+    signed_this_month: number;
+  };
 }
 
 export function LeadsSidebar({
@@ -31,7 +42,54 @@ export function LeadsSidebar({
   enrolledThisMonth,
   callbackPending,
   weekStats,
+  leadType = "learner",
+  employerStats,
 }: Props) {
+  const isEmployer = leadType === "employer_apprenticeship";
+  if (isEmployer) {
+    const es = employerStats ?? { engaged: 0, in_progress: 0, signed: 0, signed_this_month: 0 };
+    return (
+      <aside className="space-y-4">
+        <Card>
+          <CardTitle>At a glance</CardTitle>
+          <div className="mt-3 space-y-0.5">
+            <StatLink href="/provider/leads?status=open" label="Open" value={open} tone="rose" emphasis />
+            <StatLink href="/provider/leads?status=engaged" label="Engaged" value={es.engaged} tone="blue" />
+            <StatLink href="/provider/leads?status=in_progress" label="In progress" value={es.in_progress} tone="amber" />
+            <StatLink href="/provider/leads?status=signed" label="Signed this month" value={es.signed_this_month} tone="emerald" />
+          </div>
+        </Card>
+
+        <Card>
+          <CardTitle>This week</CardTitle>
+          <div className="mt-3 space-y-1">
+            <Stat label="New leads" value={weekStats.contacted} tone="slate" />
+            <Stat label="Signed" value={weekStats.enrolled} tone="emerald" />
+            <Stat label="Not signed" value={weekStats.lost} tone="rose" />
+          </div>
+        </Card>
+
+        <Card>
+          <CardTitle>Status guide</CardTitle>
+          <ul className="mt-3 space-y-1.5">
+            {([
+              ["open", "Routed, not yet engaged"],
+              ["engaged", "First contact made"],
+              ["in_progress", "Deal moving, not yet signed"],
+              ["signed", "Apprenticeship agreement executed"],
+              ["not_signed", "Won't proceed"],
+              ["presumed_employer_signed", "Auto-flipped after 60 days"],
+            ] as Array<[LeadStatus, string]>).map(([s, hint]) => (
+              <li key={s} className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="text-slate-700 font-medium">{STATUS_LABEL[s]}</span>
+                <span className="text-slate-500 text-right">{hint}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </aside>
+    );
+  }
   return (
     <aside className="space-y-4">
       {/* Snapshot — every row clicks through to the matching filter */}

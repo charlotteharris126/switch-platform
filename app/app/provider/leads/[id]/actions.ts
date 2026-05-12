@@ -327,6 +327,30 @@ export async function bulkMarkOutcomeAction(args: {
     lost_reason: string | null;
   }>;
 
+  // Defensive: bulk modes are learner-only. Filter out any employer
+  // leads if they somehow reach here (the BulkBar is hidden for
+  // employer views, but a malicious or stale tab could still POST).
+  if (rows.length > 0) {
+    const { data: leadTypes } = await supabase
+      .schema("leads")
+      .from("submissions")
+      .select("id, lead_type")
+      .in("id", rows.map((r) => r.submission_id));
+    const employerSubIds = new Set(
+      ((leadTypes ?? []) as Array<{ id: number; lead_type: string | null }>)
+        .filter((s) => s.lead_type === "employer_apprenticeship")
+        .map((s) => s.id),
+    );
+    if (employerSubIds.size > 0) {
+      return {
+        ok: false,
+        applied: 0,
+        skipped: 0,
+        error: "Bulk actions are not supported for employer leads — use the lead detail page.",
+      };
+    }
+  }
+
   // attempt_advance resolves per-lead. Non-advance modes share one target.
   const ATTEMPT_NEXT: Record<string, LeadStatus> = {
     open: "attempt_1_no_answer",
@@ -366,7 +390,9 @@ export async function bulkMarkOutcomeAction(args: {
       skipped += 1;
       continue;
     }
-    if (!isAllowedTransition(fromStatus, targetStatus)) {
+    // bulk modes are learner-only and we've already short-circuited if any
+    // employer lead is in the set; safe to default leadType="learner" here.
+    if (!isAllowedTransition(fromStatus, targetStatus, "learner")) {
       skipped += 1;
       continue;
     }

@@ -25,7 +25,7 @@
 // every transaction via SET LOCAL ROLE.
 
 import postgres from "npm:postgres@3";
-import { sendBrevoEmail } from "../_shared/brevo.ts";
+import { sendBrevoEmail, sendTransactional } from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -35,11 +35,19 @@ if (!DATABASE_URL) {
 }
 
 const RIVERSIDE_PROVIDER_ID = "riverside-training";
-const RIVERSIDE_SHEET_ENV = "RIVERSIDE_SHEET_WEBHOOK_URL"; // Apps Script v3 endpoint
+// Provider contact email + sheet webhook URL + cc_emails are read from
+// crm.providers at send time (same pattern as netlify-lead-router for
+// funded providers). Single source of truth, editable via
+// /admin/providers/[id]. The U1 Brevo template ID stays in Vault because
+// it's per-environment. The provider-facing U2 notification is inline
+// HTML (matches funded provider notification in _shared/route-lead.ts).
+//
+// No UD-employer email in v1: there's no real "not a fit right now" path
+// — every legitimate submission routes to Riverside. The only DQ branch
+// is truly malformed payloads (missing email entirely) which by
+// definition can't be emailed back. Persisted to DB with
+// routing_outcome='disqualified' for audit only.
 const BREVO_TEMPLATE_U1_EMPLOYER = "BREVO_TEMPLATE_U1_EMPLOYER";
-const BREVO_TEMPLATE_U2_PROVIDER = "BREVO_TEMPLATE_U2_PROVIDER";
-const BREVO_TEMPLATE_UD_EMPLOYER = "BREVO_TEMPLATE_UD_EMPLOYER";
-const RIVERSIDE_CONTACT_EMAIL_ENV = "RIVERSIDE_CONTACT_EMAIL"; // Jane Preston
 
 const sql = postgres(DATABASE_URL, {
   max: 1,
@@ -139,11 +147,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const runtime = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
 
   if (row.routing_outcome === "disqualified") {
-    // DQ path: fire the polite "we'll keep you posted" email to the
-    // submitter only. No provider notify, no sheet append.
-    const task = sendEmployerDqAck(insertedId, row)
-      .catch((e) => console.error("UD employer ack failed:", describeError(e)));
-    if (runtime?.waitUntil) runtime.waitUntil(task);
+    // DQ in v1 only fires on truly malformed payloads (no email / no
+    // company). No email follow-up — by definition we either can't reach
+    // them (no email) or it's likely a bot. Row persisted with
+    // routing_outcome='disqualified' for audit. Owner can review via
+    // /admin/leads filtered on is_dq=true if anything legit ever lands
+    // here by mistake.
     return json({ status: "ok", submission_id: insertedId, outcome: "disqualified" });
   }
 
@@ -303,9 +312,12 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
 // ---------------------------------------------------------------------------
 
 async function appendToRiversideSheet(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
-  const url = Deno.env.get(RIVERSIDE_SHEET_ENV);
+  const [providerRow] = await sql<Array<{ sheet_webhook_url: string | null }>>`
+    SELECT sheet_webhook_url FROM crm.providers WHERE provider_id = ${RIVERSIDE_PROVIDER_ID}
+  `;
+  const url = providerRow?.sheet_webhook_url;
   if (!url) {
-    console.warn(`${RIVERSIDE_SHEET_ENV} not set — skipping sheet append`);
+    console.warn("Riverside sheet_webhook_url not set on crm.providers — skipping sheet append");
     return;
   }
   const body = {
@@ -344,54 +356,95 @@ async function appendToRiversideSheet(submissionId: number, row: EmployerSubmiss
 }
 
 async function sendEmployerAckU1(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
+  // Mirrors the funded learner-ack pattern in netlify-lead-router:
+  // sendTransactional → Brevo template (Wren-editable) → email_log
+  // gets a row for analytics + idempotency. Brand 'switchable' because
+  // it's a Switchable-for-Business submitter-facing email.
   const templateId = Number(Deno.env.get(BREVO_TEMPLATE_U1_EMPLOYER));
   if (!templateId) {
-    console.warn(`${BREVO_TEMPLATE_U1_EMPLOYER} not set — skipping U1 ack`);
+    console.warn(`${BREVO_TEMPLATE_U1_EMPLOYER} not set — skipping U1 employer ack`);
     return;
   }
-  await sendBrevoEmail({
+  if (!row.email) return;
+  const recipientName = [row.first_name, row.last_name].filter(Boolean).join(" ") || row.email;
+  await sendTransactional({
+    sql,
     templateId,
-    to: [{ email: row.email, name: [row.first_name, row.last_name].filter(Boolean).join(" ") || row.email }],
+    recipient: { email: row.email, name: recipientName },
+    submissionId,
+    emailType: "s4b_employer_u1",
+    brand: "switchable",
     params: {
       FIRSTNAME: row.first_name ?? "",
       COMPANY: row.company_name ?? "",
+      ROLE: row.role_title ?? "",
+      SECTOR: row.sector ?? "",
+      LEVY_STATUS: row.levy_status ?? "",
+      URGENCY: row.urgency ?? "",
+      STANDARD: row.standards_interested ?? "",
       SUBMISSION_ID: submissionId,
     },
   });
 }
 
 async function sendProviderNotifyU2(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
-  const templateId = Number(Deno.env.get(BREVO_TEMPLATE_U2_PROVIDER));
-  const to = Deno.env.get(RIVERSIDE_CONTACT_EMAIL_ENV);
-  if (!templateId || !to) {
-    console.warn("Riverside U2 provider notify env not fully set — skipping");
+  // Mirrors the funded-provider notification pattern in
+  // _shared/route-lead.ts: inline HTML via sendBrevoEmail, contact_email +
+  // contact_name + cc_emails read from crm.providers, portal deep-link
+  // when portal_enabled. The U2 stays PII-free in line with
+  // feedback_provider_email_no_pii.md — only the lead reference + a link.
+  const [providerRow] = await sql<Array<{
+    contact_email: string | null;
+    contact_name: string | null;
+    company_name: string;
+    cc_emails: string[] | null;
+    portal_enabled: boolean;
+    sheet_id: string | null;
+  }>>`
+    SELECT contact_email, contact_name, company_name, cc_emails, portal_enabled, sheet_id
+      FROM crm.providers
+     WHERE provider_id = ${RIVERSIDE_PROVIDER_ID}
+  `;
+  if (!providerRow?.contact_email) {
+    console.warn("Riverside contact_email not set on crm.providers — skipping U2 provider notify");
     return;
   }
-  await sendBrevoEmail({
-    templateId,
-    to: [{ email: to, name: "Riverside Training" }],
-    params: {
-      SUBMISSION_ID: submissionId,
-      COMPANY: row.company_name ?? "",
-      INTEREST: row.interest ?? "",
-      URGENCY: row.urgency ?? "",
-    },
-  });
-}
 
-async function sendEmployerDqAck(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
-  const templateId = Number(Deno.env.get(BREVO_TEMPLATE_UD_EMPLOYER));
-  if (!templateId || !row.email) {
-    console.warn(`${BREVO_TEMPLATE_UD_EMPLOYER} not set — skipping UD ack`);
-    return;
-  }
+  const leadRef = `#${submissionId}`;
+  const portalLink = providerRow.portal_enabled
+    ? `https://app.switchleads.co.uk/leads/${submissionId}`
+    : null;
+  const sheetLink = providerRow.sheet_id
+    ? `https://docs.google.com/spreadsheets/d/${providerRow.sheet_id}/edit`
+    : null;
+  const actionBlock = portalLink
+    ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>`
+    : sheetLink
+      ? `<p><a href="${sheetLink}">Open your sheet</a></p>`
+      : "";
+  const contextLine = portalLink
+    ? `<p>The lead is at status <strong>open</strong>. Click through to see the employer's details, mark outcomes as you progress, and add notes.</p>`
+    : `<p>The lead has been added with status <strong>open</strong>. Please update the status and notes as you work through.</p>`;
+
+  const html = `
+    <p>Hi ${providerRow.contact_name ?? "there"},</p>
+    <p>You have a new employer enquiry (${leadRef}) ${portalLink ? "ready in your SwitchLeads portal" : "in your SwitchLeads sheet"}.</p>
+    ${actionBlock}
+    ${contextLine}
+    <p>Thanks,<br>SwitchLeads</p>
+  `.trim();
+
   await sendBrevoEmail({
-    templateId,
-    to: [{ email: row.email, name: [row.first_name, row.last_name].filter(Boolean).join(" ") || row.email }],
-    params: {
-      FIRSTNAME: row.first_name ?? "",
-      SUBMISSION_ID: submissionId,
-    },
+    to: [{
+      email: providerRow.contact_email,
+      name: providerRow.contact_name ?? providerRow.company_name,
+    }],
+    cc: providerRow.cc_emails && providerRow.cc_emails.length > 0
+      ? providerRow.cc_emails.map((e: string) => ({ email: e }))
+      : undefined,
+    subject: `New employer enquiry - ${leadRef}`,
+    htmlContent: html,
+    tags: ["route-lead", "employer-notification"],
   });
 }
 

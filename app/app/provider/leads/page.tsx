@@ -176,25 +176,41 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   let weekEnrolled = 0;
   let weekLost = 0;
   let weekMeetingsBooked = 0;
+  // Employer-shape counters for the sidebar branch.
+  let employerEngaged = 0;
+  let employerInProgress = 0;
+  let employerSigned = 0;
+  let employerSignedThisMonth = 0;
   for (const r of rows) {
     if (r.status === "open") openCount += 1;
     if (CALLING_STATUSES.has(r.status)) callingCount += 1;
     if (r.status === "enrolment_meeting_booked") meetingBookedCount += 1;
     if (r.callback_pending) callbackPendingCount += 1;
+    if (r.status === "engaged") employerEngaged += 1;
+    if (r.status === "in_progress") employerInProgress += 1;
+    if (r.status === "signed" || r.status === "presumed_employer_signed") employerSigned += 1;
     const enrol = enrolBySub.get(r.id);
     if (enrol) {
       const t = new Date(enrol.status_updated_at).getTime();
       if ((enrol.status === "enrolled" || enrol.status === "presumed_enrolled") && t >= monthStart) {
         enrolledThisMonth += 1;
       }
+      if (
+        (enrol.status === "signed" || enrol.status === "presumed_employer_signed")
+        && t >= monthStart
+      ) {
+        employerSignedThisMonth += 1;
+      }
       if (t >= weekStart) {
         if (CONTACTED_STATUSES.has(enrol.status as LeadStatus)) weekContacted += 1;
-        if (enrol.status === "enrolled") weekEnrolled += 1;
-        if (enrol.status === "lost") weekLost += 1;
+        if (enrol.status === "enrolled" || enrol.status === "signed") weekEnrolled += 1;
+        if (enrol.status === "lost" || enrol.status === "not_signed") weekLost += 1;
         if (enrol.status === "enrolment_meeting_booked") weekMeetingsBooked += 1;
       }
     }
   }
+  const isEmployerProviderForSidebar = rows.length > 0
+    && rows.every((r) => r.lead_type === "employer_apprenticeship");
 
   return (
     <ProviderShell active="leads">
@@ -245,6 +261,13 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
                   enrolled: weekEnrolled,
                   lost: weekLost,
                   meetings_booked: weekMeetingsBooked,
+                }}
+                leadType={isEmployerProviderForSidebar ? "employer_apprenticeship" : "learner"}
+                employerStats={{
+                  engaged: employerEngaged,
+                  in_progress: employerInProgress,
+                  signed: employerSigned,
+                  signed_this_month: employerSignedThisMonth,
                 }}
               />
             </div>
