@@ -17,6 +17,7 @@ import { DisplayNameForm } from "./display-name-form";
 import { TeamPanel, type TeamUserRow } from "./team-panel";
 import { updateDisplayNameAction } from "./actions";
 import { inviteProviderUserAction, removeProviderUserAction } from "./team-actions";
+import { AgreementSection, AGREEMENT_COLUMNS, type AgreementRow } from "../agreement-section";
 
 interface ProviderUserRow {
   id: number;
@@ -29,7 +30,7 @@ interface ProviderUserRow {
   invited_at: string;
 }
 
-interface ProviderRow {
+interface ProviderRow extends AgreementRow {
   company_name: string;
   contact_email: string;
   contact_phone: string | null;
@@ -75,7 +76,7 @@ export default async function ProviderAccountPage() {
     admin
       .schema("crm")
       .from("providers")
-      .select("company_name, contact_email, contact_phone, pilot_status, billing_model, pricing_model, per_enrolment_fee, percent_rate, min_fee, max_fee, free_enrolments_remaining, is_demo")
+      .select(`company_name, contact_email, contact_phone, pilot_status, billing_model, pricing_model, per_enrolment_fee, percent_rate, min_fee, max_fee, free_enrolments_remaining, is_demo, ${AGREEMENT_COLUMNS}`)
       .eq("provider_id", pu.provider_id)
       .maybeSingle<ProviderRow>(),
     admin
@@ -198,6 +199,19 @@ export default async function ProviderAccountPage() {
         {callerIsAdmin && (
           <Card title="Pricing">
             <BillingSummary provider={provider} />
+          </Card>
+        )}
+
+        {/* Pilot agreement — visible to all roles. Was a standalone
+            /provider/agreement page until 2026-05-12; folded into Account
+            because a once-per-pilot reference doesn't merit its own nav tab,
+            and so the admin /preview surface picks it up too. */}
+        {provider && (
+          <Card
+            title="Pilot agreement"
+            subtitle="Quick reference for the PPA you signed. Email support to change anything."
+          >
+            <AgreementSection row={provider} />
           </Card>
         )}
 

@@ -14,8 +14,13 @@ import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdminUser } from "@/lib/auth/require-admin";
 import { PreviewHeader } from "../preview-header";
+import {
+  AgreementSection,
+  AGREEMENT_COLUMNS,
+  type AgreementRow,
+} from "@/app/provider/agreement-section";
 
-interface ProviderRow {
+interface ProviderRow extends AgreementRow {
   provider_id: string;
   company_name: string;
   contact_email: string;
@@ -60,7 +65,7 @@ export default async function PreviewAccountPage({ params }: Props) {
   const { data: provider } = await admin
     .schema("crm")
     .from("providers")
-    .select("provider_id, company_name, contact_email, contact_phone, pilot_status, billing_model, pricing_model, per_enrolment_fee, percent_rate, min_fee, max_fee, free_enrolments_remaining, is_demo")
+    .select(`provider_id, company_name, contact_email, contact_phone, pilot_status, billing_model, pricing_model, per_enrolment_fee, percent_rate, min_fee, max_fee, free_enrolments_remaining, is_demo, ${AGREEMENT_COLUMNS}`)
     .eq("provider_id", providerId)
     .maybeSingle<ProviderRow>();
   if (!provider) notFound();
@@ -159,6 +164,13 @@ export default async function PreviewAccountPage({ params }: Props) {
 
           <Card title="Pricing">
             <BillingSummary provider={provider} />
+          </Card>
+
+          <Card
+            title="Pilot agreement"
+            subtitle="Same view the provider sees inside their Account page."
+          >
+            <AgreementSection row={provider} />
           </Card>
         </div>
       </div>

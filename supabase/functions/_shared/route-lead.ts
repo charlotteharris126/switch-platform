@@ -1064,13 +1064,25 @@ async function appendToProviderSheet(
     return { ok: false, error: `apps script ${res.status}: ${text.slice(0, 300)}` };
   }
 
+  // Apps Script always returns HTTP 200 even on token failures, redeploy
+  // permission lapses, and logic errors — the only reliable success signal
+  // is a parseable JSON body with ok===true. A non-JSON response (HTML
+  // auth page, redirect, plain text) is ALWAYS a failure, never a success.
+  // Previously `catch { return { ok: true }; }` swallowed those, which is
+  // how submission 267 (Christy Clarence, 2026-05-04) was recorded as
+  // delivered to the EMS sheet but never actually landed there.
+  const responseText = await res.text();
+  let body: { ok?: boolean; error?: string };
   try {
-    const body = await res.json() as { ok?: boolean; error?: string };
-    if (body.ok === true) return { ok: true };
-    return { ok: false, error: body.error ?? "apps script returned ok=false" };
+    body = JSON.parse(responseText) as { ok?: boolean; error?: string };
   } catch {
-    return { ok: true };
+    return {
+      ok: false,
+      error: `apps script: unparseable response: ${responseText.slice(0, 300)}`,
+    };
   }
+  if (body.ok === true) return { ok: true };
+  return { ok: false, error: body.error ?? "apps script returned ok=false" };
 }
 
 // -------- CRM webhook push --------
