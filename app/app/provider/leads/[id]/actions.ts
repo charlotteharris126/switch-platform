@@ -352,10 +352,15 @@ export async function bulkMarkOutcomeAction(args: {
   }
 
   // attempt_advance resolves per-lead. Non-advance modes share one target.
+  // attempt_3 → cannot_reach auto-progression so the provider can keep
+  // clicking "Tried, no answer" and the system closes the lead out on
+  // the fourth click (Charlotte 2026-05-12, option A: one click saved
+  // vs adding a separate cannot-reach button).
   const ATTEMPT_NEXT: Record<string, LeadStatus> = {
     open: "attempt_1_no_answer",
     attempt_1_no_answer: "attempt_2_no_answer",
     attempt_2_no_answer: "attempt_3_no_answer",
+    attempt_3_no_answer: "cannot_reach",
   };
   const sharedTarget: LeadStatus | null = args.status === "attempt_advance"
     ? null
