@@ -22,12 +22,31 @@ export default async function ProviderSupportPage() {
   const { data: pu } = await admin
     .schema("crm")
     .from("provider_users")
-    .select("contact_email")
+    .select("contact_email, provider_id")
     .eq("auth_user_id", user.id)
     .eq("status", "active")
-    .maybeSingle<{ contact_email: string }>();
+    .maybeSingle<{ contact_email: string; provider_id: string }>();
 
   const replyEmail = pu?.contact_email ?? user.email ?? "your registered email";
+
+  // Determine the provider's shape so the Common questions section can
+  // filter out guides that don't apply. Employer-providers (Riverside)
+  // shouldn't see fastrack / callback / attempt-counter explanations.
+  let isEmployer = false;
+  if (pu?.provider_id) {
+    const { data: provider } = await admin
+      .schema("crm")
+      .from("providers")
+      .select("funding_types")
+      .eq("provider_id", pu.provider_id)
+      .maybeSingle<{ funding_types: string[] | null }>();
+    isEmployer = Array.isArray(provider?.funding_types)
+      && provider!.funding_types!.includes("apprenticeship");
+  }
+  const visibleGuides = GUIDES.filter((g) => {
+    if (g.for === "both") return true;
+    return isEmployer ? g.for === "employer" : g.for === "learner";
+  });
 
   return (
     <ProviderShell active="support">
@@ -67,7 +86,7 @@ export default async function ProviderSupportPage() {
             Common questions
           </h2>
           <div className="space-y-3">
-            {GUIDES.map((g) => (
+            {visibleGuides.map((g) => (
               <details
                 key={g.q}
                 className="group bg-white border border-slate-200 rounded-xl overflow-hidden"
@@ -119,8 +138,10 @@ export default async function ProviderSupportPage() {
 // Plain ASCII quotes only in q/a strings: q is rendered as a JSX expression
 // (not text), so HTML entities show literally; consistent with the rest of
 // the codebase. No em dashes per copy.md.
-const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
+type GuideAudience = "learner" | "employer" | "both";
+const GUIDES: Array<{ q: string; a: React.ReactNode; for: GuideAudience }> = [
   {
+    for: "learner",
     q: "How do I mark an outcome on a lead?",
     a: (
       <>
@@ -136,6 +157,22 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     ),
   },
   {
+    for: "employer",
+    q: "How do I mark an outcome on an employer lead?",
+    a: (
+      <>
+        Click into any lead from the Leads list. Use the stepper under
+        &quot;Move this lead forward&quot; to advance through Engaged, In
+        progress, and Signed. Use &quot;Mark not signed&quot; to close out a
+        lead that won&apos;t proceed (you&apos;ll be asked for a reason).
+        Outcomes are forward-only on the main stepper. If you marked Not
+        signed by mistake, the Not signed screen has buttons to move the
+        lead back to Engaged, In progress, or Signed.
+      </>
+    ),
+  },
+  {
+    for: "learner",
     q: "What does the Fastrack badge mean?",
     a: (
       <>
@@ -150,6 +187,7 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     ),
   },
   {
+    for: "learner",
     q: 'What does "Callback requested" mean?',
     a: (
       <>
@@ -164,19 +202,21 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     ),
   },
   {
+    for: "both",
     q: "Where do my notes go?",
     a: (
       <>
         Notes you write on a lead are visible to anyone on your team in the
         portal and to SwitchLeads support. They&apos;re NOT visible to the
-        learner. Each note is timestamped and tagged with the author&apos;s
-        display name, so you can keep a running log of what was said on each
-        call. Notes from SwitchLeads (in blue, tagged &quot;Switchable&quot;)
-        appear in the same log.
+        learner or employer. Each note is timestamped and tagged with the
+        author&apos;s display name, so you can keep a running log of what was
+        said on each call. Notes from SwitchLeads (in blue, tagged
+        &quot;Switchable&quot;) appear in the same log.
       </>
     ),
   },
   {
+    for: "learner",
     q: "What should I do when a lead doesn't pick up?",
     a: (
       <>
@@ -190,6 +230,22 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     ),
   },
   {
+    for: "employer",
+    q: "What's the 60-day clock?",
+    a: (
+      <>
+        Once an employer lead is at Engaged or In progress, you&apos;ve got
+        60 days from the last status update to confirm a Signed outcome. At
+        day 50 the lead shows a &quot;60-day clock approaching&quot; flag.
+        If no update lands by day 60, the system auto-flips the lead to
+        &quot;Presumed signed&quot; and you&apos;ll be billed unless you raise
+        a dispute within 7 days. The cleanest workflow: update the status as
+        soon as the employer signs, and the clock resets.
+      </>
+    ),
+  },
+  {
+    for: "both",
     q: "When does the timer reset?",
     a: (
       <>
@@ -202,6 +258,7 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     ),
   },
   {
+    for: "both",
     q: "Forgot my password / can't sign in, what do I do?",
     a: (
       <>
@@ -221,12 +278,13 @@ const GUIDES: Array<{ q: string; a: React.ReactNode }> = [
     ),
   },
   {
+    for: "both",
     q: "What is the 6-8 digit code I'm asked for?",
     a: (
       <>
         When you sign in on a fresh device or browser we email you a short
         sign-in code as a second check. Open your inbox, copy the code, paste
-        it into the box. Day to day you stay signed in for about a week — the
+        it into the box. Day to day you stay signed in for about a week, the
         code only kicks in on a fresh sign-in.
       </>
     ),

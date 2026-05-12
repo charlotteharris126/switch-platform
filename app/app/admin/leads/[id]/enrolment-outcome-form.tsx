@@ -12,9 +12,14 @@ interface Props {
   currentDisputedAt: string | null;
   currentDisputedReason: string | null;
   isRouted: boolean;
+  // Determines which status + reason set the form shows. Defaults to
+  // learner. Employer leads (lead_type='employer_apprenticeship') get
+  // the B2B status set (engaged / in_progress / signed / not_signed +
+  // presumed_employer_signed) and the employer not_signed reasons.
+  leadType?: "learner" | "employer_apprenticeship";
 }
 
-const STATUSES: Array<{ value: EnrolmentStatus; label: string; description: string }> = [
+const LEARNER_STATUSES: Array<{ value: EnrolmentStatus; label: string; description: string }> = [
   { value: "open",              label: "Open",              description: "No outcome yet. Provider hasn't confirmed contact." },
   { value: "enrolled",          label: "Enrolled",          description: "Learner started the course. Counts toward billing." },
   { value: "presumed_enrolled", label: "Presumed enrolled", description: "Provider hasn't confirmed after 14 days. Auto-set by cron normally." },
@@ -22,13 +27,34 @@ const STATUSES: Array<{ value: EnrolmentStatus; label: string; description: stri
   { value: "lost",              label: "Lost",              description: "Provider made contact but learner won't enrol. Pick a reason." },
 ];
 
-const LOST_REASONS: Array<{ value: LostReason; label: string }> = [
+const EMPLOYER_STATUSES: Array<{ value: EnrolmentStatus; label: string; description: string }> = [
+  { value: "open",                       label: "Open",              description: "No outcome yet. Provider hasn't engaged yet." },
+  { value: "engaged",                    label: "Engaged",           description: "Provider has made first contact with the employer." },
+  { value: "in_progress",                label: "In progress",       description: "Deal moving — multiple touches, no signing yet." },
+  { value: "signed",                     label: "Signed",            description: "Employer has executed the apprenticeship agreement. Counts toward billing." },
+  { value: "presumed_employer_signed",   label: "Presumed signed",   description: "Provider hasn't confirmed after 60 days. Auto-set by cron normally." },
+  { value: "not_signed",                 label: "Not signed",        description: "Provider engaged but employer won't proceed. Pick a reason." },
+];
+
+const LEARNER_LOST_REASONS: Array<{ value: LostReason; label: string }> = [
   { value: "not_interested",            label: "Not interested" },
   { value: "wrong_course",              label: "Wrong course" },
   { value: "funding_issue",             label: "Funding issue" },
   { value: "cancelled",                 label: "Cancelled (pre-start)" },
   { value: "withdrew_after_enrolment",  label: "Withdrew (post-enrolment)" },
+  { value: "l3_mismatch_self_reported", label: "L3 mismatch (self-reported)" },
+  { value: "cohort_decline",            label: "Couldn't make the cohort dates" },
   { value: "other",                     label: "Other" },
+];
+
+const EMPLOYER_NOT_SIGNED_REASONS: Array<{ value: LostReason; label: string }> = [
+  { value: "budget",                  label: "Budget" },
+  { value: "wrong_levy_fit",          label: "Wrong levy fit" },
+  { value: "timing",                  label: "Timing" },
+  { value: "competitor",              label: "Went with competitor" },
+  { value: "decided_not_to_proceed",  label: "Decided not to proceed" },
+  { value: "no_response",             label: "No response" },
+  { value: "other",                   label: "Other" },
 ];
 
 export function EnrolmentOutcomeForm({
@@ -39,7 +65,13 @@ export function EnrolmentOutcomeForm({
   currentDisputedAt,
   currentDisputedReason,
   isRouted,
+  leadType = "learner",
 }: Props) {
+  const isEmployer = leadType === "employer_apprenticeship";
+  const STATUSES = isEmployer ? EMPLOYER_STATUSES : LEARNER_STATUSES;
+  const LOST_REASONS = isEmployer ? EMPLOYER_NOT_SIGNED_REASONS : LEARNER_LOST_REASONS;
+  const closureStatus: EnrolmentStatus = isEmployer ? "not_signed" : "lost";
+  const presumedStatus: EnrolmentStatus = isEmployer ? "presumed_employer_signed" : "presumed_enrolled";
   const [pending, startTransition] = useTransition();
   const [displayStatus, setDisplayStatus] = useState<string | null>(currentStatus);
   const [selectedStatus, setSelectedStatus] = useState<EnrolmentStatus | null>(
@@ -61,16 +93,17 @@ export function EnrolmentOutcomeForm({
     );
   }
 
-  const showLostReason = selectedStatus === "lost";
-  const showDisputeBlock = selectedStatus === "presumed_enrolled";
+  const showLostReason = selectedStatus === closureStatus;
+  const showDisputeBlock = selectedStatus === presumedStatus;
+  const closureReasonHeading = isEmployer ? "Why didn't they sign?" : "Why was it lost?";
 
   function handleSubmit() {
     if (!selectedStatus) {
       toast.warning("Pick a status before saving.");
       return;
     }
-    if (selectedStatus === "lost" && !selectedReason) {
-      toast.warning("Pick a reason for Lost before saving.");
+    if (selectedStatus === closureStatus && !selectedReason) {
+      toast.warning(`Pick a reason for ${isEmployer ? "Not signed" : "Lost"} before saving.`);
       return;
     }
     if (disputed && (!disputedReason || disputedReason.trim().length === 0)) {
@@ -86,9 +119,9 @@ export function EnrolmentOutcomeForm({
         submissionId,
         status:         selectedStatus,
         notes:          notes.trim() || null,
-        lostReason:     selectedStatus === "lost" ? selectedReason : null,
-        disputed:       selectedStatus === "presumed_enrolled" ? disputed : false,
-        disputedReason: selectedStatus === "presumed_enrolled" && disputed ? disputedReason.trim() || null : null,
+        lostReason:     selectedStatus === closureStatus ? selectedReason : null,
+        disputed:       selectedStatus === presumedStatus ? disputed : false,
+        disputedReason: selectedStatus === presumedStatus && disputed ? disputedReason.trim() || null : null,
       });
       if (result.ok) {
         toast.success("Outcome saved", {
@@ -137,10 +170,11 @@ export function EnrolmentOutcomeForm({
         })}
       </div>
 
-      {/* Conditional: lost reason radio appears when status=Lost */}
+      {/* Conditional: closure reason radio appears when status=Lost (learner)
+          or Not signed (employer). */}
       {showLostReason && (
         <div className="mb-3 pl-3 border-l-2 border-[#cd8b76]">
-          <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72] mb-2">Why was it lost?</p>
+          <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72] mb-2">{closureReasonHeading}</p>
           <div className="flex flex-wrap gap-2">
             {LOST_REASONS.map((r) => {
               const selected = selectedReason === r.value;
@@ -213,14 +247,27 @@ export function EnrolmentOutcomeForm({
 }
 
 function isStatus(value: string | null): value is EnrolmentStatus {
-  return value === "open" || value === "enrolled" || value === "presumed_enrolled" || value === "cannot_reach" || value === "lost";
+  if (!value) return false;
+  return [
+    // Learner
+    "open", "attempt_1_no_answer", "attempt_2_no_answer", "attempt_3_no_answer",
+    "enrolment_meeting_booked", "enrolled", "presumed_enrolled",
+    "cannot_reach", "lost",
+    // Employer
+    "engaged", "in_progress", "signed", "not_signed", "presumed_employer_signed",
+  ].includes(value);
 }
 
 function isLostReason(value: string | null): value is LostReason {
-  return value === "not_interested"
-    || value === "wrong_course"
-    || value === "funding_issue"
-    || value === "cancelled"
-    || value === "withdrew_after_enrolment"
-    || value === "other";
+  if (!value) return false;
+  return [
+    // Learner
+    "not_interested", "wrong_course", "funding_issue", "cancelled",
+    "withdrew_after_enrolment", "l3_mismatch_self_reported", "cohort_decline",
+    // Employer
+    "budget", "wrong_levy_fit", "timing", "competitor",
+    "decided_not_to_proceed", "no_response",
+    // Shared
+    "other",
+  ].includes(value);
 }

@@ -33,18 +33,43 @@ export async function markOwnerTestSubmission(
 
 
 export type EnrolmentStatus =
+  // Learner
   | "open"
+  | "attempt_1_no_answer"
+  | "attempt_2_no_answer"
+  | "attempt_3_no_answer"
+  | "enrolment_meeting_booked"
   | "enrolled"
   | "presumed_enrolled"
   | "cannot_reach"
-  | "lost";
+  | "lost"
+  // Employer (Switchable for Business v1)
+  | "engaged"
+  | "in_progress"
+  | "signed"
+  | "not_signed"
+  | "presumed_employer_signed";
 
+// Combined reason set. The same DB column stores both learner lost_reason
+// and employer not_signed_reason; lead_type on the submission discriminates.
+// The form picks the right subset based on the lead's lead_type at render time.
 export type LostReason =
+  // Learner reasons
   | "not_interested"
   | "wrong_course"
   | "funding_issue"
   | "cancelled"
   | "withdrew_after_enrolment"
+  | "l3_mismatch_self_reported"
+  | "cohort_decline"
+  // Employer reasons
+  | "budget"
+  | "wrong_levy_fit"
+  | "timing"
+  | "competitor"
+  | "decided_not_to_proceed"
+  | "no_response"
+  // Shared
   | "other";
 
 export interface MarkEnrolmentOutcomeInput {

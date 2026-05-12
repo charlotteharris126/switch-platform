@@ -66,11 +66,15 @@ export default async function ActionsPage() {
       .eq("status", "open")
       .lt("sent_to_provider_at", new Date(Date.now() - 12 * 24 * 3600 * 1000).toISOString()),
 
+    // Presumed-state queue spans both lead types: learner
+    // presumed_enrolled (14-day auto-flip) AND employer
+    // presumed_employer_signed (60-day auto-flip). Both states share the
+    // same 7-day dispute window semantics.
     supabase
       .schema("crm")
       .from("enrolments")
       .select("id, submission_id, provider_id, status, sent_to_provider_at, status_updated_at, dispute_deadline_at, notes, disputed_at, disputed_reason")
-      .eq("status", "presumed_enrolled")
+      .in("status", ["presumed_enrolled", "presumed_employer_signed"])
       .order("status_updated_at", { ascending: true }),
 
     // Pending AI suggestions from sheet Notes edits awaiting owner approval.
@@ -405,7 +409,7 @@ export default async function ActionsPage() {
             )}
           </CardTitle>
           <p className="text-xs text-[#5a6a72] mt-1">
-            Routed 12+ days ago, no outcome yet. Auto-flip cron sets these to <em>presumed enrolled</em> at day 14 — chase the provider now for a real outcome.
+            Learner leads only. Routed 12+ days ago, no outcome yet. Auto-flip cron sets these to <em>presumed enrolled</em> at day 14 — chase the provider now for a real outcome. Employer (B2B) leads run on a 60-day clock and will get their own approaching-flip section when migration 0097 ships.
           </p>
         </CardHeader>
         <CardContent className="p-0">
@@ -454,11 +458,11 @@ export default async function ActionsPage() {
         </CardContent>
       </Card>
 
-      {/* SECTION 3 — Presumed enrolled */}
+      {/* SECTION 3 — Presumed states (both lead types) */}
       <Card>
         <CardHeader>
           <CardTitle className="text-sm flex items-center gap-2">
-            Presumed enrolled (awaiting confirmation)
+            Presumed (awaiting confirmation)
             {presumedEnrolled.length > 0 && (
               <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
                 {presumedEnrolled.length}
@@ -466,7 +470,7 @@ export default async function ActionsPage() {
             )}
           </CardTitle>
           <p className="text-xs text-[#5a6a72] mt-1">
-            Auto-flipped after 14 days of provider silence. Mark <em>enrolled</em> (triggers billing) or <em>lost</em> right here. If the provider rebuts the flip, open the lead to record a dispute (pauses billing while you investigate).
+            Learner leads auto-flip to <em>presumed enrolled</em> after 14 days of provider silence; employer (B2B) leads flip to <em>presumed signed</em> after 60 days. Mark the real outcome here (triggers billing on enrolled / signed). If the provider rebuts, open the lead to record a dispute (pauses billing while you investigate).
           </p>
         </CardHeader>
         <CardContent className="p-0">

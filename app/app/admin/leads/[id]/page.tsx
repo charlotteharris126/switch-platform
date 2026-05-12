@@ -535,7 +535,10 @@ export default async function LeadDetailPage({
         </Card>
       )}
 
-      {/* Enrolment outcome — only visible for non-DQ routed leads */}
+      {/* Enrolment outcome — only visible for non-DQ routed leads.
+          Form branches its STATUSES + LOST_REASONS by lead_type so an
+          employer lead surfaces engaged / in_progress / signed /
+          not_signed + B2B reasons. */}
       {!lead.is_dq && (
         <EnrolmentOutcomeForm
           submissionId={lead.id}
@@ -545,6 +548,7 @@ export default async function LeadDetailPage({
           currentDisputedAt={enrolment?.disputed_at ?? null}
           currentDisputedReason={enrolment?.disputed_reason ?? null}
           isRouted={Boolean(lead.primary_routed_to)}
+          leadType={(lead.lead_type ?? "learner") as "learner" | "employer_apprenticeship"}
         />
       )}
 

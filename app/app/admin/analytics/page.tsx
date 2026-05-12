@@ -151,7 +151,19 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   const adRows = (adsRes.data ?? []) as AdSpendRow[];
 
   // Derived sets
-  const enrolledSubIds = new Set(enrolments.filter((e) => e.status === "enrolled" || e.status === "presumed_enrolled").map((e) => e.submission_id));
+  // "Enrolled" for the conversion calc spans both lead types: learner
+  // enrolled/presumed_enrolled AND employer signed/presumed_employer_signed
+  // all count as a successful conversion outcome.
+  const enrolledSubIds = new Set(
+    enrolments
+      .filter((e) =>
+        e.status === "enrolled"
+        || e.status === "presumed_enrolled"
+        || e.status === "signed"
+        || e.status === "presumed_employer_signed"
+      )
+      .map((e) => e.submission_id),
+  );
   const totalAdSpend = adRows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
 
   // Dedupe by email for sections that count *people* (demographics, DQ
