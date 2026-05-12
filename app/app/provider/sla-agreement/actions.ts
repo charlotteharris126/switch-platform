@@ -1,20 +1,23 @@
 "use server";
 
-// Server action: provider clicks "I agree" on the in-portal SLA
-// re-agreement page. Stamps crm.providers with sla_accepted_at +
-// sla_accepted_by_user_id + sla_accepted_version. Writes an audit row
-// so the acceptance is traceable.
-//
-// Until this fires, the provider can't access the rest of the portal
-// (layout gate at /provider/layout.tsx redirects unaccepted users).
-// Auto-flip cron also gates on this — leads under an unaccepted
-// provider don't get auto-flipped to Presumed.
+// Server actions for the SLA agreement page:
+//   - acceptSlaAction: provider admin clicks "I agree", stamps the
+//     provider row + writes audit, redirects to portal home.
+//   - signOutFromSlaAction: handles the sign-out button on the SLA
+//     page (the page sits OUTSIDE the standard ProviderShell so it
+//     doesn't get the shell's signout for free).
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SLA_VERSION } from "./version";
+
+export async function signOutFromSlaAction(_formData: FormData): Promise<void> {
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  redirect("/provider-login");
+}
 
 // Form-action signature: takes FormData (unused — this is a "click I
 // agree" form with no fields) and returns void (redirect throws). Any

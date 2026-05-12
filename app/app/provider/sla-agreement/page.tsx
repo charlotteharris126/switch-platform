@@ -11,11 +11,13 @@
 // exact thresholds they're accepting — same values that drive the
 // portal overdue badges + the cron's flip timing.
 
+import Image from "next/image";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { acceptSlaAction } from "./actions";
+import { acceptSlaAction, signOutFromSlaAction } from "./actions";
 import { SLA_VERSION } from "./version";
+import { SignOutButton } from "../sign-out-button";
 
 interface ProviderSlaRow {
   provider_id: string;
@@ -93,8 +95,11 @@ export default async function SlaAgreementPage() {
             Before you start, let&apos;s re-confirm how this works
           </h1>
           <p className="text-sm text-slate-600 mt-2">
-            We agreed your pilot terms when you signed the PPA. Now you&apos;re in the
-            portal, here&apos;s the day-to-day shape of it. Quick read, takes a minute.
+            We put a lot into finding and qualifying every lead routed to
+            you. The PPA you signed covers the commercial terms of how we
+            work together; this page is the day-to-day version of the same
+            agreement. The rules below keep the partnership smooth on
+            both sides.
           </p>
         </header>
 
@@ -191,15 +196,31 @@ export default async function SlaAgreementPage() {
 }
 
 function FallbackShell({ children }: { children: React.ReactNode }) {
-  // Intentionally not wrapped in ProviderShell — the standard provider
-  // nav assumes the user is past the SLA gate (so e.g. the Leads count
-  // badge can fetch). Until they accept, they get a plain-frame view
-  // with no nav.
+  // Intentionally not wrapped in ProviderShell. The standard nav assumes
+  // the user is past the SLA gate (so e.g. the Leads count badge can
+  // fetch). Until they accept, they get a plain-frame view that mirrors
+  // the proper shell's branded header but with no internal nav links.
+  // A Sign out form is included so users who land here on the wrong
+  // account can back out without being stuck.
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-slate-900 px-6 py-4">
-        <span className="text-sm font-bold text-white">SwitchLeads</span>
-      </header>
+      <nav className="bg-slate-900 border-b border-slate-800">
+        <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+          <span className="flex items-center gap-3">
+            <Image
+              src="/brand/logo-dark.svg"
+              alt="SwitchLeads"
+              width={140}
+              height={21}
+              priority
+              className="h-5 w-auto"
+            />
+          </span>
+          <form action={signOutFromSlaAction}>
+            <SignOutButton />
+          </form>
+        </div>
+      </nav>
       <main className="max-w-3xl mx-auto p-6 md:p-10">{children}</main>
     </div>
   );
