@@ -64,7 +64,9 @@ export default async function SlaAgreementPage() {
           We can&apos;t find your provider record.
         </h1>
         <p className="text-sm text-slate-500 mt-2">
-          Email <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a> and we&apos;ll sort it.
+          Email{" "}
+          <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a>
+          {" "}and we&apos;ll sort it.
         </p>
       </FallbackShell>
     );
@@ -92,7 +94,7 @@ export default async function SlaAgreementPage() {
           </h1>
           <p className="text-sm text-slate-600 mt-2">
             We agreed your pilot terms when you signed the PPA. Now you&apos;re in the
-            portal, here&apos;s the day-to-day shape of it. Quick read — takes a minute.
+            portal, here&apos;s the day-to-day shape of it. Quick read, takes a minute.
           </p>
         </header>
 
@@ -108,9 +110,10 @@ export default async function SlaAgreementPage() {
               has been sitting for more than <strong>{row.sla_stale_attempt_hours} hours</strong>.
             </Bullet>
             <Bullet>
-              Update the lead&apos;s status as you work it. The portal is the
-              single source of truth; the Google Sheet view stays in sync
-              automatically for major transitions.
+              Update the lead&apos;s status as you work it in the portal. Your
+              Google Sheet will stay around for a while as a fallback and
+              syncs automatically when you mark a major outcome, so you can
+              keep working from either side.
             </Bullet>
           </ul>
         </Section>
@@ -119,7 +122,10 @@ export default async function SlaAgreementPage() {
           <ul className="space-y-3 text-sm text-slate-800">
             <Bullet>
               Every routed lead has been pre-screened so it matches your
-              eligibility criteria. We only bill on confirmed enrolments.
+              eligibility criteria. We only bill on confirmed enrolments,
+              and on untouched leads left at Open for{" "}
+              <strong>{row.sla_presumed_flip_days} days</strong> (the auto-flip
+              rule below).
             </Bullet>
             <Bullet>
               We surface stale leads in your portal home + the leads list
@@ -127,7 +133,8 @@ export default async function SlaAgreementPage() {
             </Bullet>
             <Bullet>
               We email you the minute a lead lands and we&apos;re reachable on{" "}
-              <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a> if anything&apos;s off.
+              <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a>
+              {" "}if anything&apos;s off.
             </Bullet>
           </ul>
         </Section>
@@ -173,7 +180,8 @@ export default async function SlaAgreementPage() {
               The provider admin on your team has to read and confirm this
               agreement before anyone else on the team gets portal access.
               Ping them to log in, or email{" "}
-              <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a> if you&apos;re not sure who that is.
+              <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a>
+              {" "}if you&apos;re not sure who that is.
             </p>
           </div>
         )}
