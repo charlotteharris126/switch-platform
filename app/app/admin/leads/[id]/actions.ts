@@ -120,6 +120,30 @@ export async function markEnrolmentOutcome(
     p_submission_ids: [input.submissionId],
   });
 
+  // Portal → sheet sync. Admin manual outcome changes need to reflect on
+  // the provider's sheet too, otherwise they'd see a discrepancy. Major
+  // transitions only; sub-states (attempts, in_progress) skipped inside
+  // pushSheetStatus.
+  const { data: subRow } = await supabase
+    .schema("leads")
+    .from("submissions")
+    .select("primary_routed_to")
+    .eq("id", input.submissionId)
+    .maybeSingle<{ primary_routed_to: string | null }>();
+  if (subRow?.primary_routed_to) {
+    const { pushSheetStatus } = await import("@/lib/sheet-status-sync");
+    pushSheetStatus({
+      submissionId: input.submissionId,
+      providerId: subRow.primary_routed_to,
+      newStatus: input.status as never,
+    }).catch((err) =>
+      console.warn(
+        `admin portal→sheet sync error for submission ${input.submissionId}:`,
+        err,
+      ),
+    );
+  }
+
   revalidatePath(`/leads/${input.submissionId}`);
 
   return { ok: true, enrolmentId: data as number };

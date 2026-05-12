@@ -33,8 +33,20 @@ export type LearnerStatus =
   | "cannot_reach"
   | "presumed_enrolled";
 
+// Employer leads use the same attempt-counter + cannot_reach states as
+// learner because Riverside's SLA is also call-driven (1 wd to first
+// attempt, 3 attempts over a fortnight before giving up). The B2B-shape
+// difference is the back half: engaged / in_progress / signed instead of
+// enrolment_meeting_booked / enrolled.
+type SharedAttemptOrClosure =
+  | "attempt_1_no_answer"
+  | "attempt_2_no_answer"
+  | "attempt_3_no_answer"
+  | "cannot_reach";
+
 export type EmployerStatus =
   | SharedStatus
+  | SharedAttemptOrClosure
   | "engaged"
   | "in_progress"
   | "signed"
@@ -147,14 +159,32 @@ const ALLOWED_LEARNER: Record<LearnerStatus, ReadonlyArray<LearnerStatus>> = {
   presumed_enrolled: [],
 };
 
-// Employer transitions. The B2B sales funnel is shorter and meeting-driven:
-//   open → engaged (first contact made)
-//   engaged → in_progress (deal moving, multiple touches)
-//   in_progress → signed (contract executed) | not_signed (declined / dropped)
-//   not_signed is recoverable (mirrors learner 'lost' semantics).
-//   presumed_employer_signed is terminal (cron-driven 60-day auto-flip).
+// Employer transitions. B2B SLA is 1 wd to first attempt, 3 attempts
+// over a fortnight before giving up. So the front half mirrors learner
+// (open → 1 → 2 → 3 → cannot_reach) and the back half is B2B-specific
+// (engaged → in_progress → signed). Either half can jump to the other:
+// any attempt state can jump directly to engaged if the employer picks up.
 const ALLOWED_EMPLOYER: Record<EmployerStatus, ReadonlyArray<EmployerStatus>> = {
-  open: ["engaged", "in_progress", "signed", "not_signed"],
+  open: [
+    "attempt_1_no_answer",
+    "engaged", "in_progress", "signed", "not_signed",
+    "cannot_reach",
+  ],
+  attempt_1_no_answer: [
+    "attempt_2_no_answer",
+    "engaged", "in_progress", "signed", "not_signed",
+    "cannot_reach",
+  ],
+  attempt_2_no_answer: [
+    "attempt_3_no_answer",
+    "engaged", "in_progress", "signed", "not_signed",
+    "cannot_reach",
+  ],
+  attempt_3_no_answer: [
+    "engaged", "in_progress", "signed", "not_signed",
+    "cannot_reach",
+  ],
+  cannot_reach: ["engaged", "in_progress", "signed", "not_signed"],
   engaged: ["in_progress", "signed", "not_signed"],
   in_progress: ["signed", "not_signed"],
   signed: ["not_signed"],

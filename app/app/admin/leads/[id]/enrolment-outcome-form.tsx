@@ -28,12 +28,16 @@ const LEARNER_STATUSES: Array<{ value: EnrolmentStatus; label: string; descripti
 ];
 
 const EMPLOYER_STATUSES: Array<{ value: EnrolmentStatus; label: string; description: string }> = [
-  { value: "open",                       label: "Open",              description: "No outcome yet. Provider hasn't engaged yet." },
-  { value: "engaged",                    label: "Engaged",           description: "Provider has made first contact with the employer." },
-  { value: "in_progress",                label: "In progress",       description: "Deal moving — multiple touches, no signing yet." },
-  { value: "signed",                     label: "Signed",            description: "Employer has executed the apprenticeship agreement. Counts toward billing." },
+  { value: "open",                       label: "Open",              description: "No outcome yet. Provider has 1 wd to first attempt." },
+  { value: "attempt_1_no_answer",        label: "1st no answer",     description: "First call, no answer." },
+  { value: "attempt_2_no_answer",        label: "2nd no answer",     description: "Second call, no answer." },
+  { value: "attempt_3_no_answer",        label: "3rd no answer",     description: "Third call, no answer." },
+  { value: "cannot_reach",               label: "Cannot reach",      description: "3 attempts over a fortnight, no response. Closure." },
+  { value: "engaged",                    label: "Engaged",           description: "Got through. First conversation done." },
+  { value: "in_progress",                label: "In progress",       description: "Deal moving — multiple touches, proposal stage." },
+  { value: "signed",                     label: "Signed",            description: "Employer signed the apprenticeship agreement. Counts toward billing." },
   { value: "presumed_employer_signed",   label: "Presumed signed",   description: "Provider hasn't confirmed after 60 days. Auto-set by cron normally." },
-  { value: "not_signed",                 label: "Not signed",        description: "Provider engaged but employer won't proceed. Pick a reason." },
+  { value: "not_signed",                 label: "Not signed",        description: "Engaged but won't proceed. Pick a reason." },
 ];
 
 const LEARNER_LOST_REASONS: Array<{ value: LostReason; label: string }> = [

@@ -3,10 +3,16 @@
 // Employer-lead outcome buttons. Parallel to <OutcomeButtons> (which is
 // learner-shaped) — chosen by LeadDetailView based on submission.lead_type.
 //
-// Workflow is shorter than learner: no call-attempt counter, no fastrack.
-//   open → engaged (first meeting) → in_progress (deal warm) → signed
-//                                                 ↓
-//                                              not_signed (recoverable)
+// Workflow mirrors learner on the front half (attempt counter) and is
+// B2B-specific on the back half:
+//   open → attempt_1 → attempt_2 → attempt_3 → cannot_reach (closure)
+//         ↘                                  ↗
+//          → engaged → in_progress → signed (or not_signed at any point)
+//
+// SLA: 1 working day to first attempt, 3 attempts over a fortnight before
+// cannot_reach. Stale-attempt threshold = 120h (5 days) per attempt step,
+// vs 36h for learner.
+//
 // presumed_employer_signed is system-driven (60-day cron auto-flip) and
 // can't be set from the portal.
 
@@ -20,7 +26,35 @@ import {
   type NotSignedReason,
 } from "@/lib/lead-status";
 
-const STEPPER_PATH: ReadonlyArray<LeadStatus> = ["open", "engaged", "in_progress", "signed"];
+// Linear stepper covering every "still working it" position. Closeouts
+// (cannot_reach, not_signed) sit below as separate buttons.
+const STEPPER_PATH: ReadonlyArray<LeadStatus> = [
+  "open",
+  "attempt_1_no_answer",
+  "attempt_2_no_answer",
+  "attempt_3_no_answer",
+  "engaged",
+  "in_progress",
+  "signed",
+];
+
+const STEPPER_SHORT_LABEL: Record<LeadStatus, string> = {
+  open: "Open",
+  attempt_1_no_answer: "1st",
+  attempt_2_no_answer: "2nd",
+  attempt_3_no_answer: "3rd",
+  engaged: "Engaged",
+  in_progress: "In progress",
+  signed: "Signed",
+  // Fillers — not on this stepper but typed to keep the Record exhaustive.
+  enrolment_meeting_booked: "Meeting",
+  enrolled: "Enrolled",
+  lost: "Lost",
+  cannot_reach: "Cannot reach",
+  presumed_enrolled: "Presumed",
+  not_signed: "Not signed",
+  presumed_employer_signed: "Presumed",
+};
 
 interface Props {
   submissionId: number;
@@ -34,12 +68,18 @@ interface Props {
 }
 
 const OUTCOME_NOTE_MAX = 500;
+const ATTEMPT_STATES = new Set<LeadStatus>([
+  "open",
+  "attempt_1_no_answer",
+  "attempt_2_no_answer",
+  "attempt_3_no_answer",
+]);
 
 export function EmployerOutcomeButtons({ submissionId, currentStatus, onMark }: Props) {
   const [pending, startTransition] = useTransition();
   const [pendingValue, setPendingValue] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showCloseout, setShowCloseout] = useState<boolean>(false);
+  const [showCloseout, setShowCloseout] = useState<"cannot_reach" | "not_signed" | null>(null);
   const [notSignedReason, setNotSignedReason] = useState<NotSignedReason>("decided_not_to_proceed");
   const [outcomeNote, setOutcomeNote] = useState("");
 
@@ -48,15 +88,13 @@ export function EmployerOutcomeButtons({ submissionId, currentStatus, onMark }: 
   function fire(value: LeadStatus, reason?: NotSignedReason) {
     setError(null);
     setPendingValue(value);
-    const noteToSend = value === "not_signed" ? outcomeNote.trim() || null : null;
+    const noteToSend = value === "not_signed" || value === "cannot_reach"
+      ? outcomeNote.trim() || null
+      : null;
     startTransition(async () => {
       const result = await onMark({
         submissionId,
         status: value,
-        // not_signed reuses the lost_reason column for storage (the schema
-        // doesn't differentiate; the column name is historical). Reason
-        // value comes from VALID_NOT_SIGNED_REASONS so analytics can split
-        // employer vs learner by lead_type at query time.
         lostReason: value === "not_signed" ? reason ?? null : null,
         outcomeNote: noteToSend,
       });
@@ -64,7 +102,7 @@ export function EmployerOutcomeButtons({ submissionId, currentStatus, onMark }: 
       setPendingValue(null);
       if (result.ok) {
         setOutcomeNote("");
-        setShowCloseout(false);
+        setShowCloseout(null);
       }
     });
   }
@@ -79,6 +117,32 @@ export function EmployerOutcomeButtons({ submissionId, currentStatus, onMark }: 
     );
   }
 
+  // Off-path: cannot_reach — closed, but the employer might still come
+  // back. Allow recovery into engaged/in_progress/signed.
+  if (currentStatus === "cannot_reach") {
+    return (
+      <div className="mt-4 space-y-3">
+        <div className="text-sm text-slate-600 bg-amber-50 border border-amber-200 rounded-md p-3">
+          Marked <strong>Cannot reach</strong>. If the employer comes back you can
+          still move them to <em>Engaged</em>, <em>In progress</em>, or directly to <em>Signed</em>.
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(["engaged", "in_progress", "signed"] as LeadStatus[]).map((s) => (
+            <SecondaryButton
+              key={s}
+              label={STATUS_LABEL[s]}
+              pending={pending && pendingValue === s}
+              disabled={pending}
+              onClick={() => fire(s)}
+            />
+          ))}
+        </div>
+        {error && <ErrorLine message={error} />}
+      </div>
+    );
+  }
+
+  // Off-path: not_signed — recoverable like learner 'lost'.
   if (currentStatus === "not_signed") {
     return (
       <div className="mt-4 space-y-3">
@@ -103,6 +167,7 @@ export function EmployerOutcomeButtons({ submissionId, currentStatus, onMark }: 
   }
 
   const currentIndex = STEPPER_PATH.indexOf(currentStatus);
+  const inAttemptPhase = ATTEMPT_STATES.has(currentStatus);
 
   return (
     <div className="mt-4 space-y-5">
@@ -149,7 +214,7 @@ export function EmployerOutcomeButtons({ submissionId, currentStatus, onMark }: 
                     isCurrent ? "font-semibold text-slate-900" : "text-slate-500"
                   }`}
                 >
-                  {STATUS_LABEL[step]}
+                  {STEPPER_SHORT_LABEL[step]}
                 </span>
               </div>
             );
@@ -161,14 +226,55 @@ export function EmployerOutcomeButtons({ submissionId, currentStatus, onMark }: 
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
           Or close out
         </p>
-        <SecondaryButton
-          label="Mark not signed…"
-          pending={pending && pendingValue === "not_signed"}
-          disabled={pending}
-          onClick={() => setShowCloseout((v) => !v)}
-        />
+        <div className="flex flex-wrap gap-2">
+          {inAttemptPhase && (
+            <SecondaryButton
+              label="Cannot reach…"
+              pending={pending && pendingValue === "cannot_reach"}
+              disabled={pending}
+              onClick={() => setShowCloseout((v) => (v === "cannot_reach" ? null : "cannot_reach"))}
+            />
+          )}
+          <SecondaryButton
+            label="Mark not signed…"
+            pending={pending && pendingValue === "not_signed"}
+            disabled={pending}
+            onClick={() => setShowCloseout((v) => (v === "not_signed" ? null : "not_signed"))}
+          />
+        </div>
 
-        {showCloseout && (
+        {showCloseout === "cannot_reach" && (
+          <div className="mt-3 bg-amber-50 border border-amber-200 rounded-md p-3 space-y-2">
+            <p className="text-xs text-amber-900">
+              Use this when you&apos;ve made 3 attempts over the fortnight and the employer
+              hasn&apos;t responded. Adds the lead to the closed list. You can still
+              move it back into engagement if they come around.
+            </p>
+            <label className="block text-xs font-semibold text-amber-900 mt-2">
+              Note (optional)
+            </label>
+            <textarea
+              value={outcomeNote}
+              onChange={(e) => setOutcomeNote(e.target.value.slice(0, OUTCOME_NOTE_MAX))}
+              placeholder="Any context worth keeping…"
+              rows={2}
+              className="block w-full border border-amber-300 bg-white rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+            />
+            <p className="text-[11px] text-amber-700 text-right">
+              {outcomeNote.length}/{OUTCOME_NOTE_MAX}
+            </p>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => fire("cannot_reach")}
+              className="px-4 py-2 text-sm font-semibold bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {pending && pendingValue === "cannot_reach" ? "Marking…" : "Confirm cannot reach"}
+            </button>
+          </div>
+        )}
+
+        {showCloseout === "not_signed" && (
           <div className="mt-3 bg-rose-50 border border-rose-200 rounded-md p-3 space-y-2">
             <label className="block text-xs font-semibold text-rose-900">Reason</label>
             <select

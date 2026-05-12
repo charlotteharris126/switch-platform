@@ -32,6 +32,7 @@ import {
   type LeadType,
   type LostReason,
 } from "@/lib/lead-status";
+import { pushSheetStatus } from "@/lib/sheet-status-sync";
 
 interface Args {
   submissionId: number;
@@ -81,15 +82,17 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     return { ok: false, error: "No enrolment row found, or you don't have access" };
   }
 
-  // Lookup lead_type from the submission row so the transition rules pick
-  // the right state machine (learner vs employer).
+  // Lookup lead_type + primary_routed_to so the transition rules pick
+  // the right state machine AND the portal→sheet sync knows which
+  // provider sheet to update.
   const { data: subRow } = await supabase
     .schema("leads")
     .from("submissions")
-    .select("lead_type")
+    .select("lead_type, primary_routed_to")
     .eq("id", args.submissionId)
     .maybeSingle();
   const leadType: LeadType = (subRow?.lead_type ?? "learner") as LeadType;
+  const routedProviderId: string | null = subRow?.primary_routed_to ?? null;
 
   const fromStatus = existingRow.status as LeadStatus;
   if (!isAllowedTransition(fromStatus, targetStatus, leadType)) {
@@ -178,6 +181,24 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
 
   if (auditError) {
     return { ok: false, error: `Outcome saved but audit write failed: ${auditError.message}` };
+  }
+
+  // Portal → sheet status sync. Major transitions push to the provider's
+  // sheet so it stays in lockstep with the portal. Sub-states (attempts /
+  // in_progress / meeting_booked) deliberately don't push — sheet stays
+  // at its current high-level value. Fire-and-forget: a sheet-side
+  // failure logs to console but doesn't roll back the DB change.
+  if (routedProviderId) {
+    pushSheetStatus({
+      submissionId: args.submissionId,
+      providerId: routedProviderId,
+      newStatus: targetStatus,
+    }).catch((err) =>
+      console.warn(
+        `portal→sheet sync error for submission ${args.submissionId}:`,
+        err,
+      ),
+    );
   }
 
   // Only revalidate the detail page the provider is sitting on. The leads
@@ -519,6 +540,44 @@ export async function bulkMarkOutcomeAction(args: {
   const totalRequested = args.submissionIds.length;
   const notFound = totalRequested - rows.length;
   skipped += notFound;
+
+  // Portal → sheet sync per row. Best-effort; runs in parallel after
+  // the DB write is committed. Bulk is learner-only (employer guard
+  // earlier in this action), so pull the routed provider per submission
+  // and fire pushSheetStatus for each.
+  if (applied > 0) {
+    const submissionIdSet = new Set(auditEntries.map((e) => Number(e.target_id)).filter((n) => Number.isFinite(n)));
+    if (submissionIdSet.size > 0) {
+      const submissionIdsList = Array.from(
+        new Set(auditEntries.map((e) => e.context.submission_id)),
+      );
+      const { data: subRows } = await supabase
+        .schema("leads")
+        .from("submissions")
+        .select("id, primary_routed_to")
+        .in("id", submissionIdsList);
+      const routedById = new Map<number, string>();
+      for (const r of (subRows ?? []) as Array<{ id: number; primary_routed_to: string | null }>) {
+        if (r.primary_routed_to) routedById.set(r.id, r.primary_routed_to);
+      }
+      // Pull the final per-row toStatus from auditEntries so we know what
+      // each row was set to.
+      for (const entry of auditEntries) {
+        const providerId = routedById.get(entry.context.submission_id);
+        if (!providerId) continue;
+        pushSheetStatus({
+          submissionId: entry.context.submission_id,
+          providerId,
+          newStatus: entry.after.status,
+        }).catch((err) =>
+          console.warn(
+            `bulk portal→sheet sync error for submission ${entry.context.submission_id}:`,
+            err,
+          ),
+        );
+      }
+    }
+  }
 
   revalidatePath("/provider/leads");
   revalidatePath("/provider");
