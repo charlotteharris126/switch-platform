@@ -93,14 +93,13 @@ export default async function SlaAgreementPage() {
             Welcome to your portal, {greetingName}
           </p>
           <h1 className="text-2xl font-semibold text-slate-900 mt-1">
-            Before you start, let&apos;s re-confirm how this works
+            Your SLA agreement
           </h1>
           <p className="text-sm text-slate-600 mt-2">
-            We put a lot into finding and qualifying every lead routed to
-            you. The PPA you signed covers the commercial terms of how we
-            work together; this page is the day-to-day version of the same
-            agreement. The rules below keep the partnership smooth on
-            both sides.
+            Every lead we route to you is pre-screened and qualified on our
+            side. The PPA covers the commercials of how we work together,
+            and this page is the day-to-day version of the same agreement,
+            so we both know what to expect.
           </p>
         </header>
 

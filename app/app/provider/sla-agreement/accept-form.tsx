@@ -22,8 +22,7 @@ export function AcceptForm() {
         />
         <span className="text-sm text-slate-800">
           I&apos;ve read the working agreement above and I&apos;m happy to confirm
-          it on behalf of my company. (Logged with timestamp and my
-          account so we&apos;ve both got a record.)
+          it on behalf of my company.
         </span>
       </label>
       <SubmitButton disabled={!agreed} />
