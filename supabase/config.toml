@@ -511,3 +511,6 @@ verify_jwt = false
 
 [functions.netlify-employer-lead-router]
 verify_jwt = false
+
+[functions.email-presumed-flipped-cron]
+verify_jwt = false

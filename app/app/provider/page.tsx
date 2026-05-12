@@ -15,13 +15,13 @@
 // has admin-gated RLS that the authenticated session doesn't satisfy on
 // self-lookup.
 
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ProviderShell } from "./provider-shell";
 import { ProviderHomeView } from "./home-view";
 import type { LeadStatus } from "@/lib/lead-status";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
+import { requireProviderUser } from "@/lib/auth/require-provider";
 
 interface ProviderUserRow {
   id: number;
@@ -75,29 +75,20 @@ interface FastrackTimedRow {
 }
 
 export default async function ProviderHomePage() {
+  // requireProviderUser handles auth check + provider_user lookup AND the
+  // SLA acceptance gate (redirects to /provider/sla-agreement if the
+  // provider hasn't accepted the current SLA version). All other
+  // /provider/* pages share this gate via the same helper.
+  const ctx = await requireProviderUser();
   const supabase = await createClient();
-  // Re-verify with the auth server, not cookie-only — defence-in-depth on
-  // top of the proxy's getUser call. Costs ~80ms but happens once per page
-  // paint, in parallel with no data dependency (we await it here only to
-  // get user.id for the provider_user lookup below).
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData?.user;
-  if (!user) redirect("/provider-login");
-
   const admin = createAdminClient();
 
-  // Fan out: provider_user (admin client), all enrolments (auth, RLS-scoped),
-  // last 5 routed (auth), all routed sub ids (auth. for fastrack-ready
-  // count), all fastrack parents (auth, RLS-scoped).
-  const [puResult, enrolmentsResult, recentSubsResult, allRoutedResult, fastrackResult] =
+  // Fan out: all enrolments (auth, RLS-scoped), last 5 routed (auth),
+  // all routed sub ids (auth. for fastrack-ready count), all fastrack
+  // parents (auth, RLS-scoped). provider_users lookup already done in
+  // requireProviderUser above.
+  const [enrolmentsResult, recentSubsResult, allRoutedResult, fastrackResult] =
     await Promise.all([
-      admin
-        .schema("crm")
-        .from("provider_users")
-        .select("id, provider_id, contact_email, display_name, role, enrolled_at, status")
-        .eq("auth_user_id", user.id)
-        .eq("status", "active")
-        .maybeSingle<ProviderUserRow>(),
       supabase
         .schema("crm")
         .from("enrolments")
@@ -124,11 +115,18 @@ export default async function ProviderHomePage() {
         .select("parent_submission_id, submitted_at"),
     ]);
 
-  const pu = puResult.data;
-  if (!pu) {
-    await supabase.auth.signOut();
-    redirect("/provider-login?error=no_active_account");
-  }
+  // Shape kept for the rest of the function body — pull what it needs
+  // from ctx into a pu-shaped local so the downstream code doesn't
+  // need to change.
+  const pu = {
+    id:            ctx.providerUserId,
+    provider_id:   ctx.providerId,
+    contact_email: ctx.contactEmail,
+    display_name:  ctx.displayName,
+    role:          ctx.role,
+    enrolled_at:   null,
+    status:        "active",
+  };
 
   const recentSubs = (recentSubsResult.data ?? []) as RecentLeadRow[];
   const recentIds = recentSubs.map((s) => s.id);

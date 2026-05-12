@@ -15,6 +15,11 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+// SLA version that providers need to have accepted to access the portal.
+// When the SLA copy materially changes, bump this in
+// app/provider/sla-agreement/actions.ts AND here in lockstep; providers
+// last accepted an earlier version then get redirected to re-confirm.
+import { SLA_VERSION } from "@/app/provider/sla-agreement/actions";
 
 export interface ProviderUserContext {
   authUserId: string;
@@ -52,6 +57,24 @@ export async function requireProviderUser(): Promise<ProviderUserContext> {
   if (!pu) {
     await supabase.auth.signOut();
     redirect("/provider-login?error=no_active_account");
+  }
+
+  // SLA acceptance gate. Provider must have re-accepted the current
+  // version (signed via the in-portal /provider/sla-agreement page)
+  // before any other portal route renders. Acceptance lives on the
+  // provider record (per-provider, not per-user), so once any team
+  // member accepts, the whole team is unblocked.
+  const { data: providerRow } = await admin
+    .schema("crm")
+    .from("providers")
+    .select("sla_accepted_at, sla_accepted_version")
+    .eq("provider_id", pu.provider_id)
+    .maybeSingle<{ sla_accepted_at: string | null; sla_accepted_version: string | null }>();
+  const hasAcceptedCurrent =
+    !!providerRow?.sla_accepted_at
+    && providerRow?.sla_accepted_version === SLA_VERSION;
+  if (!hasAcceptedCurrent) {
+    redirect("/provider/sla-agreement");
   }
 
   return {

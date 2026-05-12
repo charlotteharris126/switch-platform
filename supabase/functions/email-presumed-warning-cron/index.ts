@@ -63,6 +63,9 @@ interface CandidateRow {
   provider_contact_email: string;
   provider_contact_name: string | null;
   provider_cc_emails: string[];
+  // Per-provider flip threshold — drives the "Auto-mark date" column in
+  // the email body. PPA v1 = 14, PPA v2 = 60.
+  provider_sla_presumed_flip_days: number;
 }
 
 interface PerProviderBatch {
@@ -108,12 +111,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }, 200);
   }
 
-  // Candidate query.
-  // - status='open' (auto-flip would catch only these)
-  // - routed 12-14 days ago (window starts at day-12, ends day-14 when auto-flip fires)
-  // - no provider_presumed_warning row in email_log for this submission yet
-  // - lead is alive (not archived, not DQ)
-  // - provider has contact_email (skip silently if unset)
+  // Candidate query — per-provider 2-day warning window.
+  //
+  // Each provider has its own sla_presumed_flip_days on crm.providers
+  // (migration 0127). The warning fires when routed_at sits between
+  // (presumed_flip - 2) and presumed_flip days ago.
+  //   - PPA v1 funded (EMS / CD / WYK): warn at day 12, flip at day 14
+  //   - PPA v2 employer (Riverside):    warn at day 58, flip at day 60
+  //
+  // Gates:
+  //   - status='open' (only what the auto-flip cron will actually catch)
+  //   - provider auto_flip_enabled = true AND sla_accepted_at IS NOT NULL
+  //     (matches the gate in crm.run_enrolment_auto_flip — no warning if
+  //     the flip wouldn't fire)
+  //   - lead is alive (not archived, not DQ)
+  //   - provider has contact_email + is active
+  //   - no provider_presumed_warning email_log row yet for this submission
   let candidates: CandidateRow[];
   try {
     candidates = await sql<CandidateRow[]>`
@@ -130,14 +143,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
         p.company_name AS provider_company_name,
         p.contact_email AS provider_contact_email,
         p.contact_name AS provider_contact_name,
-        coalesce(p.cc_emails, ARRAY[]::text[]) AS provider_cc_emails
+        coalesce(p.cc_emails, ARRAY[]::text[]) AS provider_cc_emails,
+        p.sla_presumed_flip_days AS provider_sla_presumed_flip_days
       FROM leads.routing_log rl
       JOIN crm.enrolments e
         ON e.submission_id = rl.submission_id AND e.provider_id = rl.provider_id
       JOIN leads.submissions s ON s.id = rl.submission_id
       JOIN crm.providers p ON p.provider_id = rl.provider_id
-      WHERE rl.routed_at < now() - interval '12 days'
-        AND rl.routed_at > now() - interval '14 days'
+      WHERE rl.routed_at < now() - ((p.sla_presumed_flip_days - 2) || ' days')::interval
+        AND rl.routed_at > now() - (p.sla_presumed_flip_days || ' days')::interval
         AND e.status = 'open'
         AND s.is_dq = false
         AND s.archived_at IS NULL
@@ -145,6 +159,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
         AND p.contact_email <> ''
         AND p.active = true
         AND p.archived_at IS NULL
+        AND p.auto_flip_enabled  = true
+        AND p.sla_accepted_at IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM crm.email_log el
            WHERE el.submission_id = rl.submission_id
@@ -271,8 +287,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
 function renderLeadsHtml(leads: CandidateRow[]): string {
   const rows = leads.map((l) => {
     const name = [l.first_name, l.last_name].filter(Boolean).join(" ") || "(no name)";
-    const flipDateStr = new Date(new Date(l.routed_at).getTime() + 14 * 24 * 3600 * 1000)
-      .toLocaleDateString("en-GB", { day: "numeric", month: "long" });
+    const flipDateStr = new Date(
+      new Date(l.routed_at).getTime() + l.provider_sla_presumed_flip_days * 24 * 3600 * 1000,
+    ).toLocaleDateString("en-GB", { day: "numeric", month: "long" });
     return `
       <tr>
         <td style="padding:6px 12px;border-bottom:1px solid #eee">${escapeHtml(name)}</td>

@@ -26,6 +26,13 @@ interface AgreementRow {
   sla_switchleads_obligations: string[] | null;
   billing_model: string | null;
   pricing_model: string | null;
+  sla_first_attempt_hours: number;
+  sla_attempts_required: number;
+  sla_attempt_window_days: number;
+  sla_stale_attempt_hours: number;
+  sla_presumed_flip_days: number;
+  sla_accepted_at: string | null;
+  sla_accepted_version: string | null;
 }
 
 export default async function ProviderAgreementPage() {
@@ -42,7 +49,7 @@ export default async function ProviderAgreementPage() {
     .schema("crm")
     .from("providers")
     .select(
-      "provider_id, company_name, agreement_version, agreement_signed_at, agreement_notion_page_id, sla_provider_obligations, sla_switchleads_obligations, billing_model, pricing_model",
+      "provider_id, company_name, agreement_version, agreement_signed_at, agreement_notion_page_id, sla_provider_obligations, sla_switchleads_obligations, billing_model, pricing_model, sla_first_attempt_hours, sla_attempts_required, sla_attempt_window_days, sla_stale_attempt_hours, sla_presumed_flip_days, sla_accepted_at, sla_accepted_version",
     )
     .eq("provider_id", ctx.providerId)
     .maybeSingle<AgreementRow>();
@@ -63,6 +70,8 @@ export default async function ProviderAgreementPage() {
         ) : (
           <>
             <AgreementSummary row={row} />
+
+            <SlaThresholds row={row} />
 
             <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
               <ObligationsCard
@@ -162,6 +171,74 @@ function ObligationsCard({
             Not yet populated. Ping us if you&apos;d like this filled in now.
           </li>
         )}
+      </ul>
+    </div>
+  );
+}
+
+function SlaThresholds({ row }: { row: AgreementRow }) {
+  const acceptedDate = row.sla_accepted_at
+    ? new Date(row.sla_accepted_at).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })
+    : null;
+
+  const items: Array<{ label: string; value: string; hint: string }> = [
+    {
+      label: "First contact",
+      value: `Within ${row.sla_first_attempt_hours}h`,
+      hint: "Time you've got from when we route a lead to making first contact.",
+    },
+    {
+      label: "Attempts before giving up",
+      value: `${row.sla_attempts_required} attempts over ${row.sla_attempt_window_days} days`,
+      hint: "How many contact attempts before \"cannot reach\" is the right outcome.",
+    },
+    {
+      label: "Retry an attempt by",
+      value: `${row.sla_stale_attempt_hours}h after last try`,
+      hint: "After this, the portal flags the lead as overdue so it doesn't slip.",
+    },
+    {
+      label: "Auto-flip to presumed",
+      value: `${row.sla_presumed_flip_days} days`,
+      hint:
+        "If a lead's still at Open after this long with no outcome, our system marks it Presumed " +
+        (row.agreement_version === "v2" ? "signed" : "enrolled") +
+        " and triggers billing (you get a 7-day window to dispute).",
+    },
+  ];
+
+  return (
+    <div className="mt-6 bg-white border border-slate-200 rounded-xl p-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <h3 className="text-sm font-semibold text-slate-900">Your SLA thresholds</h3>
+        {acceptedDate && (
+          <span className="text-xs text-slate-500">
+            Re-confirmed in portal {acceptedDate}
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-slate-500 mt-1">
+        These drive the badges and reminders you see in the portal. Same
+        thresholds the auto-flip cron honours when it bumps stale leads to
+        Presumed.
+      </p>
+      <ul className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+        {items.map((it) => (
+          <li
+            key={it.label}
+            className="bg-slate-50 border border-slate-200 rounded-md px-3 py-2"
+          >
+            <p className="text-[11px] uppercase tracking-wide font-semibold text-slate-500">
+              {it.label}
+            </p>
+            <p className="text-sm font-semibold text-slate-900 mt-0.5">{it.value}</p>
+            <p className="text-xs text-slate-600 mt-1">{it.hint}</p>
+          </li>
+        ))}
       </ul>
     </div>
   );

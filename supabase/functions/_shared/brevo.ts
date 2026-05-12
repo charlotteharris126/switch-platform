@@ -258,6 +258,10 @@ export type EmailLogType =
   | "referral_cold" | "referral_lost"
   | "newsletter"
   | "provider_presumed_warning"
+  // Post-flip notification to provider after auto-flip cron pushes a
+  // lead to presumed_enrolled / presumed_employer_signed. Constraint
+  // added in migration 0130.
+  | "provider_presumed_flipped"
   | "re_engagement"
   // Switchable for Business v1 (employer apprenticeship leads, Riverside).
   // Constraint added in migration 0125.
