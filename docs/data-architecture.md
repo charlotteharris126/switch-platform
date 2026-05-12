@@ -589,6 +589,15 @@ CREATE TABLE crm.providers (
   -- Direct is the first use case (co-director on 4pm strategy calls).
   cc_emails           TEXT[] NOT NULL DEFAULT '{}',
 
+  -- Site-side slug used by Switchable for per-provider pages (added Session 42,
+  -- migration 0134). Differs from provider_id where the DB id and the public
+  -- URL diverge (e.g. provider_id='riverside-training', site_slug='riverside').
+  -- NULL for providers with no public page (funded providers today). UNIQUE
+  -- partial index enforces no two providers claim the same site URL.
+  -- No consumer reads this column at the time of writing; v2+ apprenticeship
+  -- routing will derive thank-you slugs from here.
+  site_slug           TEXT,
+
   archived_at         TIMESTAMPTZ,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()

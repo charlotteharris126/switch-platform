@@ -270,6 +270,7 @@ export default async function LeadDetailPage({
     | null;
 
   const fullName = [lead.first_name, lead.last_name].filter(Boolean).join(" ") || "—";
+  const isEmployerLead = lead.lead_type === "employer_apprenticeship";
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -370,7 +371,10 @@ export default async function LeadDetailPage({
         </Card>
       )}
 
-      {/* Core fields + routing + attribution in three columns */}
+      {/* Core fields + routing + attribution in three columns.
+          Cards branch by lead_type: learner gets Contact (incl. address) +
+          Course/qualification; employer gets Contact (person + role) +
+          Company/apprenticeship. Attribution + consent is shared. */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card>
           <CardHeader>
@@ -381,43 +385,71 @@ export default async function LeadDetailPage({
             <FieldRow label="Last name" value={lead.last_name} />
             <FieldRow label="Email" value={lead.email} />
             <FieldRow label="Phone" value={lead.phone} />
-            <FieldRow label="Postcode" value={lead.postcode} />
-            <FieldRow label="LA" value={lead.la} />
-            <FieldRow label="Region" value={lead.region} />
+            {isEmployerLead ? (
+              <FieldRow label="Role" value={lead.role_title} />
+            ) : (
+              <>
+                <FieldRow label="Postcode" value={lead.postcode} />
+                <FieldRow label="LA" value={lead.la} />
+                <FieldRow label="Region" value={lead.region} />
+              </>
+            )}
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Course + qualification</CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs space-y-2">
-            <FieldRow label="Course ID" value={lead.course_id} />
-            <FieldRow label="Preferred intake" value={lead.preferred_intake_id} />
-            <FieldRow
-              label="Acceptable intakes"
-              value={
-                Array.isArray(lead.acceptable_intake_ids) && lead.acceptable_intake_ids.length > 0
-                  ? lead.acceptable_intake_ids.join(", ")
-                  : null
-              }
-            />
-            <FieldRow label="Funding category" value={lead.funding_category} />
-            <FieldRow label="Funding scheme" value={lead.funding_route} />
-            <FieldRow label="Age band" value={lead.age_band} />
-            <FieldRow label="Employment" value={lead.employment_status} />
-            <FieldRow
-              label="Prior L3+"
-              value={lead.prior_level_3_or_higher == null ? null : String(lead.prior_level_3_or_higher)}
-            />
-            <FieldRow
-              label="Can start"
-              value={lead.can_start_on_intake_date == null ? null : String(lead.can_start_on_intake_date)}
-            />
-            <FieldRow label="Why this course" value={lead.why_this_course} />
-            <FieldRow label="Outcome interest" value={lead.outcome_interest} />
-          </CardContent>
-        </Card>
+        {isEmployerLead ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Company + apprenticeship</CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs space-y-2">
+              <FieldRow label="Company" value={lead.company_name} />
+              <FieldRow label="Sector" value={lead.sector} />
+              <FieldRow label="Company size" value={lead.company_size_band} />
+              <FieldRow label="Levy status" value={lead.levy_status} />
+              <FieldRow label="Interest" value={lead.interest} />
+              <FieldRow label="Urgency" value={lead.urgency} />
+              <FieldRow label="Candidate in mind" value={lead.candidate_in_mind} />
+              <FieldRow label="Existing apprentices" value={lead.existing_apprentices} />
+              <FieldRow label="Headcount estimate" value={lead.headcount_estimate} />
+              <FieldRow label="Standards interested" value={lead.standards_interested} />
+              <FieldRow label="ERN" value={lead.ern} />
+              <FieldRow label="Additional notes" value={lead.additional_notes} />
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Course + qualification</CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs space-y-2">
+              <FieldRow label="Course ID" value={lead.course_id} />
+              <FieldRow label="Preferred intake" value={lead.preferred_intake_id} />
+              <FieldRow
+                label="Acceptable intakes"
+                value={
+                  Array.isArray(lead.acceptable_intake_ids) && lead.acceptable_intake_ids.length > 0
+                    ? lead.acceptable_intake_ids.join(", ")
+                    : null
+                }
+              />
+              <FieldRow label="Funding category" value={lead.funding_category} />
+              <FieldRow label="Funding scheme" value={lead.funding_route} />
+              <FieldRow label="Age band" value={lead.age_band} />
+              <FieldRow label="Employment" value={lead.employment_status} />
+              <FieldRow
+                label="Prior L3+"
+                value={lead.prior_level_3_or_higher == null ? null : String(lead.prior_level_3_or_higher)}
+              />
+              <FieldRow
+                label="Can start"
+                value={lead.can_start_on_intake_date == null ? null : String(lead.can_start_on_intake_date)}
+              />
+              <FieldRow label="Why this course" value={lead.why_this_course} />
+              <FieldRow label="Outcome interest" value={lead.outcome_interest} />
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
@@ -431,7 +463,9 @@ export default async function LeadDetailPage({
             <FieldRow label="fbclid" value={lead.fbclid} />
             <FieldRow label="gclid" value={lead.gclid} />
             <FieldRow label="Referrer" value={lead.referrer} />
-            <FieldRow label="Session ID" value={lead.session_id} />
+            {!isEmployerLead && (
+              <FieldRow label="Session ID" value={lead.session_id} />
+            )}
             <FieldRow label="Terms accepted" value={String(lead.terms_accepted)} />
             <FieldRow label="Marketing opt-in" value={String(lead.marketing_opt_in)} />
           </CardContent>

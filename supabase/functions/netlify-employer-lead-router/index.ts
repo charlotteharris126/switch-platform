@@ -157,12 +157,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // Routed path: append to Riverside sheet, U1 to employer, U2 to provider.
+  // Each leg's rejection is logged individually so a silent failure on one
+  // leg doesn't disappear (previously Promise.allSettled swallowed leg
+  // rejections without surfacing them — bit us 2026-05-12 with the sheet
+  // append returning {ok:false, error:'unauthorized'}).
   const task = (async () => {
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       appendToRiversideSheet(insertedId, row),
       sendEmployerAckU1(insertedId, row),
       sendProviderNotifyU2(insertedId, row),
     ]);
+    const legNames = ["sheet-append", "U1-employer", "U2-provider"];
+    results.forEach((result, idx) => {
+      if (result.status === "rejected") {
+        console.error(
+          `post-route leg ${legNames[idx]} failed (submission ${insertedId}):`,
+          describeError(result.reason),
+        );
+      }
+    });
   })().catch((e) => console.error("post-route fan-out failed:", describeError(e)));
   if (runtime?.waitUntil) runtime.waitUntil(task);
 
@@ -312,6 +325,21 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
 // ---------------------------------------------------------------------------
 
 async function appendToRiversideSheet(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
+  // Mirror the canonical sheet-append shape from _shared/route-lead.ts:
+  //   - token at top level (Apps Script v2 rejects with `unauthorized` if missing)
+  //   - payload keys are FIELD_MAP keys (snake_case), NOT sheet header names
+  //   - the appender reads `body[key]` directly, no `fields:` wrapper
+  // Earlier version sent `{mode: "append", fields: {"Submission ID": ...}}`,
+  // which returned `{ok: false, error: 'unauthorized'}` (no token) — Apps
+  // Script still reports "Completed" for that response, so it silently
+  // didn't write anything. Bug caught 2026-05-12 on the first Riverside
+  // test submission.
+  //
+  // Employer-specific payload keys map to sheet headers via FIELD_MAP
+  // entries added in v2 appender 2026-05-12 — those entries must be in
+  // the deployed script revision, OR the cells stay blank. Headers that
+  // aren't in FIELD_MAP (e.g. "Provider notes") render blank, which is
+  // intended for Jane's free-text column.
   const [providerRow] = await sql<Array<{ sheet_webhook_url: string | null }>>`
     SELECT sheet_webhook_url FROM crm.providers WHERE provider_id = ${RIVERSIDE_PROVIDER_ID}
   `;
@@ -320,37 +348,36 @@ async function appendToRiversideSheet(submissionId: number, row: EmployerSubmiss
     console.warn("Riverside sheet_webhook_url not set on crm.providers — skipping sheet append");
     return;
   }
-  // Field keys match the column headers on the Riverside Employer Leads
-  // sheet exactly — the v2 appender script keys FIELD_MAP off normalised
-  // header text, so any rename here must be mirrored in the sheet header
-  // (or the cell stays empty). Marketing consent + 60-day clock columns
-  // intentionally absent — marketing consent is a SwitchLeads/Brevo
-  // concern (not provider-facing), and the 60-day clock is auto-tracked
-  // off status_updated_at in the DB (not a column Jane fills in).
-  // Provider notes column exists on the sheet for Jane's free-text per
-  // lead — not sent from here, stays empty for her to fill.
+  const token = Deno.env.get("SHEETS_APPEND_TOKEN");
+  if (!token) {
+    console.warn("SHEETS_APPEND_TOKEN not set — skipping sheet append");
+    return;
+  }
+
+  const fullName = [row.first_name, row.last_name].filter(Boolean).join(" ");
   const body = {
+    token,
     mode: "append",
-    fields: {
-      "Submission ID": submissionId,
-      "Submission time": new Date().toISOString(),
-      "Full name": [row.first_name, row.last_name].filter(Boolean).join(" "),
-      "Role": row.role_title ?? "",
-      "Email": row.email,
-      "Phone": row.phone ?? "",
-      "Company": row.company_name ?? "",
-      "Sector": row.sector ?? "",
-      "Company size": row.company_size_band ?? "",
-      "Levy status": row.levy_status ?? "",
-      "Interest": row.interest ?? "",
-      "Candidate in mind": row.candidate_in_mind ?? "",
-      "Urgency": row.urgency ?? "",
-      "Headcount estimate": row.headcount_estimate ?? "",
-      "Existing apprentices": row.existing_apprentices ?? "",
-      "Standards interested": row.standards_interested ?? "",
-      "Additional notes": row.additional_notes ?? "",
-      "Status": "",
-    },
+    submission_id: submissionId,
+    submitted_at: new Date().toISOString(),
+    name: fullName,
+    first_name: row.first_name ?? "",
+    last_name: row.last_name ?? "",
+    email: row.email,
+    phone: row.phone ?? "",
+    role_title: row.role_title ?? "",
+    company_name: row.company_name ?? "",
+    sector: row.sector ?? "",
+    company_size_band: row.company_size_band ?? "",
+    levy_status: row.levy_status ?? "",
+    interest: row.interest ?? "",
+    candidate_in_mind: row.candidate_in_mind ?? "",
+    urgency: row.urgency ?? "",
+    headcount_estimate: row.headcount_estimate ?? "",
+    existing_apprentices: row.existing_apprentices ?? "",
+    standards_interested: row.standards_interested ?? "",
+    additional_notes: row.additional_notes ?? "",
+    status: "",
   };
   const res = await fetch(url, {
     method: "POST",
@@ -358,7 +385,20 @@ async function appendToRiversideSheet(submissionId: number, row: EmployerSubmiss
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`sheet append failed: ${res.status} ${await res.text()}`);
+    throw new Error(`sheet append HTTP ${res.status}: ${await res.text()}`);
+  }
+  // Apps Script always returns 200 even for token failures and logic
+  // errors — parse the body and surface non-ok responses as throws so
+  // the fan-out logger picks them up.
+  const responseText = await res.text();
+  let parsed: { ok?: boolean; error?: string } | null = null;
+  try {
+    parsed = JSON.parse(responseText);
+  } catch {
+    throw new Error(`sheet append: unparseable response: ${responseText.slice(0, 300)}`);
+  }
+  if (!parsed?.ok) {
+    throw new Error(`sheet append rejected: ${parsed?.error ?? responseText.slice(0, 300)}`);
   }
 }
 
@@ -400,6 +440,17 @@ async function sendProviderNotifyU2(submissionId: number, row: EmployerSubmissio
   // contact_name + cc_emails read from crm.providers, portal deep-link
   // when portal_enabled. The U2 stays PII-free in line with
   // feedback_provider_email_no_pii.md — only the lead reference + a link.
+  //
+  // TEST_MODE override (added 2026-05-12 after the Jane-got-3-test-emails
+  // incident): when TEST_MODE='true' AND OWNER_TEST_EMAIL is set, the U2
+  // recipient is forcibly redirected to OWNER_TEST_EMAIL and cc_emails are
+  // stripped. The function still reads crm.providers to keep contact_name /
+  // portal_enabled / sheet_id wiring honest in the email body. Set this env
+  // pair before any test session that might trigger a real submission;
+  // unset (or set to anything other than 'true') for production.
+  const testMode = Deno.env.get("TEST_MODE") === "true";
+  const ownerTestEmail = Deno.env.get("OWNER_TEST_EMAIL");
+
   const [providerRow] = await sql<Array<{
     contact_email: string | null;
     contact_name: string | null;
@@ -415,6 +466,25 @@ async function sendProviderNotifyU2(submissionId: number, row: EmployerSubmissio
   if (!providerRow?.contact_email) {
     console.warn("Riverside contact_email not set on crm.providers — skipping U2 provider notify");
     return;
+  }
+
+  let recipientEmail = providerRow.contact_email;
+  let recipientName = providerRow.contact_name ?? providerRow.company_name;
+  let ccList = providerRow.cc_emails && providerRow.cc_emails.length > 0
+    ? providerRow.cc_emails.map((e: string) => ({ email: e }))
+    : undefined;
+  let subjectPrefix = "";
+
+  if (testMode) {
+    if (!ownerTestEmail) {
+      console.warn("TEST_MODE=true but OWNER_TEST_EMAIL not set — skipping U2 to avoid hitting provider");
+      return;
+    }
+    recipientEmail = ownerTestEmail;
+    recipientName = "Owner (TEST_MODE redirect)";
+    ccList = undefined;
+    subjectPrefix = "[TEST] ";
+    console.log(`TEST_MODE active: U2 redirected to ${ownerTestEmail} (submission ${submissionId})`);
   }
 
   const leadRef = `#${submissionId}`;
@@ -442,16 +512,11 @@ async function sendProviderNotifyU2(submissionId: number, row: EmployerSubmissio
   `.trim();
 
   await sendBrevoEmail({
-    to: [{
-      email: providerRow.contact_email,
-      name: providerRow.contact_name ?? providerRow.company_name,
-    }],
-    cc: providerRow.cc_emails && providerRow.cc_emails.length > 0
-      ? providerRow.cc_emails.map((e: string) => ({ email: e }))
-      : undefined,
-    subject: `New employer enquiry - ${leadRef}`,
+    to: [{ email: recipientEmail, name: recipientName }],
+    cc: ccList,
+    subject: `${subjectPrefix}New employer enquiry - ${leadRef}`,
     htmlContent: html,
-    tags: ["route-lead", "employer-notification"],
+    tags: testMode ? ["route-lead", "employer-notification", "test-mode"] : ["route-lead", "employer-notification"],
   });
 }
 

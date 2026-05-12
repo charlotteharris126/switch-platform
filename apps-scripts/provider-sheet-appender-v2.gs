@@ -173,6 +173,31 @@ const FIELD_MAP = {
   'fastrackdetails':           'fastrack_notes',
   'fastracknotes':             'fastrack_notes',
   'lostreason':                'lost_reason',
+
+  // Employer / B2B fields (s4b-employer-lead-v1, lead_type='employer_apprenticeship',
+  // added 2026-05-12 for Riverside apprenticeship pilot). These columns appear
+  // on apprenticeship-provider sheets only; funded-provider sheets won't have
+  // these headers and the lookups stay no-ops.
+  'submissiontime':       'submitted_at',
+  'role':                 'role_title',
+  'roletitle':            'role_title',
+  'company':              'company_name',
+  'companyname':          'company_name',
+  'companysize':          'company_size_band',
+  'companysizeband':      'company_size_band',
+  'sector':               'sector',
+  'levystatus':           'levy_status',
+  'levy':                 'levy_status',
+  'urgency':              'urgency',
+  'candidateinmind':      'candidate_in_mind',
+  'candidate':            'candidate_in_mind',
+  'existingapprentices':  'existing_apprentices',
+  'headcountestimate':    'headcount_estimate',
+  'headcount':            'headcount_estimate',
+  'standardsinterested':  'standards_interested',
+  'standards':            'standards_interested',
+  'additionalnotes':      'additional_notes',
+  'ern':                  'ern',
 };
 
 function doPost(e) {

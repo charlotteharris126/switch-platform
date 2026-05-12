@@ -36,6 +36,7 @@ interface BillingRow {
   still_open: number;
   free_enrolments_used: number;
   free_enrolments_remaining: number;
+  free_enrolments_cap: number;
   billable_count: number;
   conversion_rate_pct: number | null;
 }
@@ -53,7 +54,7 @@ export default async function ProvidersPage() {
     supabase
       .schema("crm")
       .from("vw_provider_billing_state")
-      .select("provider_id, total_routed, confirmed_enrolled, presumed_enrolled, cannot_reach, lost, still_open, free_enrolments_used, free_enrolments_remaining, billable_count, conversion_rate_pct"),
+      .select("provider_id, total_routed, confirmed_enrolled, presumed_enrolled, cannot_reach, lost, still_open, free_enrolments_used, free_enrolments_remaining, free_enrolments_cap, billable_count, conversion_rate_pct"),
     supabase
       .schema("crm")
       .from("providers")
@@ -156,9 +157,9 @@ export default async function ProvidersPage() {
                     </TableCell>
                     <TableCell className="text-xs text-right">
                       <span className={b && b.free_enrolments_remaining === 0 ? "font-bold text-[#cd8b76]" : ""}>
-                        {b?.free_enrolments_remaining ?? "—"}
+                        {b?.free_enrolments_used ?? "—"}
                       </span>
-                      <span className="text-[10px] text-[#5a6a72]"> / 3</span>
+                      <span className="text-[10px] text-[#5a6a72]"> / {b?.free_enrolments_cap ?? "—"}</span>
                     </TableCell>
                     <TableCell className="text-xs text-right">
                       {(b?.billable_count ?? 0) > 0 ? (

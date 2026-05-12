@@ -13,6 +13,7 @@ interface ProviderBillingRow {
   confirmed_enrolled: number;
   presumed_enrolled: number;
   free_enrolments_remaining: number;
+  free_enrolments_cap: number;
   billable_count: number;
   conversion_rate_pct: number | null;
 }
@@ -203,13 +204,13 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
       ? supabase
           .schema("crm")
           .from("vw_provider_billing_state")
-          .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, billable_count, conversion_rate_pct")
+          .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, free_enrolments_cap, billable_count, conversion_rate_pct")
           .not("provider_id", "in", demoInClause)
           .order("total_routed", { ascending: false })
       : supabase
           .schema("crm")
           .from("vw_provider_billing_state")
-          .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, billable_count, conversion_rate_pct")
+          .select("provider_id, company_name, active, total_routed, confirmed_enrolled, presumed_enrolled, free_enrolments_remaining, free_enrolments_cap, billable_count, conversion_rate_pct")
           .order("total_routed", { ascending: false }),
     supabase.schema("crm").from("providers").select("provider_id, company_name, per_enrolment_fee, pricing_model").eq("is_demo", false),
     // Attention — unrouted has primary_routed_to IS NULL by definition (no demo possible)
@@ -284,8 +285,8 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
   const profitLossThisPeriod = metaIngestionLive ? revenueConfirmedGBP - metaSpendThis : null;
 
   const totalFreeRemaining = billingRows.reduce((s, r) => s + (r.free_enrolments_remaining ?? 0), 0);
-  const totalFreeUsed = billingRows.reduce((s, r) => s + Math.min(3, r.confirmed_enrolled + r.presumed_enrolled), 0);
-  const totalFreeAvailable = billingRows.length * 3;
+  const totalFreeUsed = billingRows.reduce((s, r) => s + (r.free_enrolments_cap - r.free_enrolments_remaining), 0);
+  const totalFreeAvailable = billingRows.reduce((s, r) => s + (r.free_enrolments_cap ?? 0), 0);
 
   // Attention
   const unrouted = unroutedRes.count ?? 0;
@@ -468,9 +469,9 @@ export default async function AdminHomePage({ searchParams }: { searchParams: Pr
                       </td>
                       <td className="px-4 py-3 text-right">
                         <span className={r.free_enrolments_remaining === 0 ? "font-bold text-[#cd8b76]" : ""}>
-                          {r.free_enrolments_remaining}
+                          {r.free_enrolments_cap - r.free_enrolments_remaining}
                         </span>
-                        <span className="text-[10px] text-[#5a6a72]"> / 3</span>
+                        <span className="text-[10px] text-[#5a6a72]"> / {r.free_enrolments_cap}</span>
                       </td>
                       <td className="px-4 py-3 text-right">
                         {r.billable_count > 0 ? (

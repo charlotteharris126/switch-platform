@@ -132,6 +132,29 @@ When the Phase 4 provider dashboard ships and a provider cuts over:
 
 ---
 
+## Apprenticeship (employer-lead) providers — onboarding
+
+Apprenticeship providers receive **Employer Leads** (we source the employer; the provider matches an apprentice or accepts one the employer puts forward). The onboarding shape differs from funded-course providers — there's no shared lead Sheet (the portal is the delivery surface from day one), and the site-side artefact is a per-provider thank-you page rather than per-course landing pages.
+
+**Pre-reqs:**
+- Signed PPA v2 (dual-route apprenticeship terms + VAT clause)
+- Provider row seeded in `crm.providers` with pricing covering the Employer Lead route at the agreed fee
+- `data-ops/0NN_seed_<slug>.sql` or equivalent script in `platform/supabase/data-ops/`
+
+**Steps when a new apprenticeship provider signs:**
+
+1. **Mable (`switchable/site/`) drops a per-provider YAML** at `data/apprenticeship-providers/<slug>.yml`, copying `riverside.yml` and replacing fields. The thank-you page builds automatically at `/business/thank-you/<slug>/` after `npm run build`. See `switchable/site/CLAUDE.md` § "Apprenticeship-provider YAML" for the required field list.
+
+2. **Decide and ship the form-action redirect.** Important: `netlify-employer-lead-router` is an outgoing webhook that fires server-side AFTER the user has already navigated to the post-submit URL — it cannot change the destination. The post-submit redirect is set by the form's `action` attribute (site-side), not by the Edge Function. For v1 (Riverside only) the action is statically `/business/thank-you/riverside/`. For v2+, the action can't be a single static slug — options: (a) Netlify form-success-URL with branching, (b) client-side JS rewrites action before submit based on routing decision, (c) slug realignment so DB + site share one canonical slug per provider (add `crm.providers.site_slug` as the mapping column). Coordinate site-side change + Edge Function awareness at the time of the second provider signing. Slug parity check: DB row's `id` and the site-side YAML's `slug` field should match where possible — flag if they diverge (`riverside-training` in DB vs `riverside` on site is the current drift, dormant for v1, surfacing in v2).
+
+3. **Provider goes live in the portal** following the standard sign-in / SLA acceptance flow.
+
+4. **First Employer Lead test** end-to-end: site form submit → Edge Function → DB row → portal visible → thank-you renders the matched provider.
+
+**The site is multi-provider-ready from day one.** No template or build-script change needed when the second apprenticeship provider signs — just the YAML drop + Edge Function routing update.
+
+---
+
 ## References
 
 - Canonical script: `platform/apps-scripts/provider-sheet-appender-v2.gs`

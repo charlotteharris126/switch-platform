@@ -4,6 +4,20 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-12 (Session 42, addendum) — S4B Riverside launch fixes
+
+- **0134** Added `crm.providers.site_slug TEXT` (nullable) + partial unique index `providers_site_slug_unique WHERE site_slug IS NOT NULL`. Backfilled Riverside to `'riverside'` (DB provider_id stays `'riverside-training'`). Additive, no consumer today. Drives v2+ apprenticeship redirect derivation; v1 unaffected because the form action is statically `/business/thank-you/riverside/` (Mable, commit 2efba5c in switchable/site).
+- **0135** Exposed `free_enrolments_cap` on `crm.vw_provider_billing_state` SELECT. Additive view column. Surfaces the per-provider cap that migration 0132 had moved into the view's CTE but not exposed. Admin UI updated in lockstep (`platform/app/app/admin/page.tsx` + `platform/app/app/admin/providers/page.tsx`) so the "X / Y free" display reads the per-provider cap instead of the hardcoded "/ 3". Riverside (PPA v2 apprenticeship, cap 1) now renders correctly as "1 / 1" instead of "1 / 3".
+- **`netlify-employer-lead-router` redeployed** with three fixes after Charlotte's happy-path test:
+  - Sheet append shape rewritten to mirror `_shared/route-lead.ts` (token + flat snake_case payload keys; previous shape `{mode, fields: {"Header Name": value}}` returned `unauthorized` silently because the v2 appender requires a token and reads `body[payload_key]`).
+  - Per-leg `Promise.allSettled` outcomes now logged by leg name (`post-route leg <name> failed`) so silent leg failures stop disappearing. Lost ~90 min on the unauthorized return because the rejection wasn't surfaced.
+  - `TEST_MODE` + `OWNER_TEST_EMAIL` env vars: when `TEST_MODE='true'`, U2 (provider notification) redirects to `OWNER_TEST_EMAIL` instead of the provider `contact_email`, cc_emails stripped, subject prefixed `[TEST]`. Added after Jane received three test U2s when the SQL-swap-then-test pattern was skipped.
+- **`provider-sheet-appender-v2.gs`** FIELD_MAP extended with 19 employer / B2B field aliases (`submissiontime`, `role`/`roletitle`, `company`/`companyname`, `companysize`/`companysizeband`, `sector`, `levystatus`/`levy`, `urgency`, `candidateinmind`/`candidate`, `existingapprentices`, `headcountestimate`/`headcount`, `standardsinterested`/`standards`, `additionalnotes`, `ern`). Apps Script redeployed by Charlotte. v1 funded provider scripts unaffected (their sheets have no matching headers).
+- **Admin lead detail page** branched on `lead_type`. Employer leads now render a Company + apprenticeship card (company_name, sector, company_size_band, levy_status, interest, urgency, candidate_in_mind, existing_apprentices, headcount_estimate, standards_interested, ern, additional_notes) in place of the Course + qualification card, and the Contact card shows Role instead of postcode/LA/region. Fastrack + referral cards stay gated to learner leads.
+- **Riverside `free_enrolments_remaining` data fix** (UPDATE, not migration): flipped 3 → 1 in `crm.providers` to match PPA v2 apprenticeship pilot (1 free Employer Signed, not 3 like funded providers).
+- **Test cleanup**: submissions 408 / 410 / 411 / 412 marked `is_dq=true, dq_reason='owner_test'` and their open enrolment rows deleted from `crm.enrolments`. None ever exited `open` status, so no billing impact.
+- Data-architecture doc updated for the new `site_slug` column. Mable's `switchable/site/CLAUDE.md` § Apprenticeship-provider YAML and `provider-onboarding-playbook.md` already log the v2 options that consume that column.
+
 ## 2026-05-12 (Session 42) — Switchable for Business backend + per-provider SLA template + auto-flip rewrite + reconciliation pass
 
 **Type:** 12 migrations (0122-0133), 1 new Edge Function, 1 cron schedule, 1 data-ops seed, several Edge Function patches, multiple portal/admin UI changes, 1 Brevo backfill semantics fix.
