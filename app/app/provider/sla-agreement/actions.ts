@@ -14,8 +14,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-
-export const SLA_VERSION = "v1-2026-05-12";
+import { SLA_VERSION } from "./version";
 
 // Form-action signature: takes FormData (unused — this is a "click I
 // agree" form with no fields) and returns void (redirect throws). Any

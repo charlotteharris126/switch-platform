@@ -14,7 +14,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { acceptSlaAction, SLA_VERSION } from "./actions";
+import { acceptSlaAction } from "./actions";
+import { SLA_VERSION } from "./version";
 
 interface ProviderSlaRow {
   provider_id: string;

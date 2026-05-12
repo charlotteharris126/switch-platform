@@ -16,10 +16,12 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 // SLA version that providers need to have accepted to access the portal.
-// When the SLA copy materially changes, bump this in
-// app/provider/sla-agreement/actions.ts AND here in lockstep; providers
-// last accepted an earlier version then get redirected to re-confirm.
-import { SLA_VERSION } from "@/app/provider/sla-agreement/actions";
+// Lives in a sibling non-action file so the "use server" file in
+// app/provider/sla-agreement/actions.ts doesn't try to export a
+// non-async value (Next.js rejects that). Bump version.ts when SLA
+// copy materially changes; providers last accepted an earlier version
+// then get redirected to re-confirm.
+import { SLA_VERSION } from "@/app/provider/sla-agreement/version";
 
 export interface ProviderUserContext {
   authUserId: string;
