@@ -125,6 +125,16 @@ async function getAuditSharedSecret(): Promise<string> {
 }
 
 async function loadAudienceMap(): Promise<Map<string, SubmissionDesired>> {
+  // Two queries, joined on email:
+  //   - `latest` carries the most recent submission per email (drives
+  //      the fastrack URL, client_nonce, course_id, marketing_opt_in).
+  //   - `first_with_code` carries the EARLIEST submission per email that
+  //      has a non-null referral_code (drives SW_REFERRAL_CODE +
+  //      SW_REFERRAL_URL). Keeps each learner's referral code stable
+  //      even when they enquire about additional courses later.
+  //      Multi-course enquiries don't reset their referral identity,
+  //      so any share-with-friend link they already received still
+  //      credits them.
   const rows = await sql<Array<{
     email: string;
     referral_code: string | null;
@@ -132,16 +142,35 @@ async function loadAudienceMap(): Promise<Map<string, SubmissionDesired>> {
     course_id: string | null;
     marketing_opt_in: boolean | null;
   }>>`
-    SELECT DISTINCT ON (lower(email))
-      lower(email) AS email,
-      referral_code,
-      client_nonce,
-      course_id,
-      marketing_opt_in
-    FROM leads.submissions
-    WHERE email IS NOT NULL
-      AND marketing_opt_in = true
-    ORDER BY lower(email), submitted_at DESC
+    WITH latest AS (
+      SELECT DISTINCT ON (lower(email))
+        lower(email) AS email,
+        client_nonce,
+        course_id,
+        marketing_opt_in
+      FROM leads.submissions
+      WHERE email IS NOT NULL
+        AND marketing_opt_in = true
+      ORDER BY lower(email), submitted_at DESC
+    ),
+    first_code AS (
+      SELECT DISTINCT ON (lower(email))
+        lower(email) AS email,
+        referral_code
+      FROM leads.submissions
+      WHERE email IS NOT NULL
+        AND marketing_opt_in = true
+        AND referral_code IS NOT NULL
+      ORDER BY lower(email), submitted_at ASC
+    )
+    SELECT
+      l.email,
+      fc.referral_code,
+      l.client_nonce,
+      l.course_id,
+      l.marketing_opt_in
+    FROM latest l
+    LEFT JOIN first_code fc ON fc.email = l.email
   `;
 
   const map = new Map<string, SubmissionDesired>();
