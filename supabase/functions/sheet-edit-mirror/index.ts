@@ -75,16 +75,30 @@ const sql = postgres(DATABASE_URL, {
 
 // ---- Status mapping (Channel A) ----
 //
-// Maps the provider sheet's existing dropdown vocabulary to crm.enrolments.status
-// values. Sheet template (column N) carries: open, enrolled, presumed enrolled,
-// cannot reach, lost. We honour all five.
+// Maps the provider sheet's dropdown vocabulary to crm.enrolments.status
+// values. Two vocabularies coexist:
+//   - Learner providers (EMS, CD, WYK): open / enrolled / presumed
+//     enrolled / cannot reach / lost.
+//   - Employer provider (Riverside, S4B v1): open / engaged / in progress
+//     / signed / not signed / presumed signed.
+// Same lookup map — labels are unique across both sets, so a single
+// dictionary covers both. The provider's lead_type discriminates at the
+// transition-check stage if it ever matters; for now the permissive
+// isAllowedTransition below works for both.
 
 const STATUS_MAP: Record<string, string> = {
+  // Learner
   open: "open",
   enrolled: "enrolled",
   "presumed enrolled": "presumed_enrolled",
   "cannot reach": "cannot_reach",
   lost: "lost",
+  // Employer (Riverside)
+  engaged: "engaged",
+  "in progress": "in_progress",
+  signed: "signed",
+  "not signed": "not_signed",
+  "presumed signed": "presumed_employer_signed",
 };
 
 // Transition rules (permissive, with three guardrails):

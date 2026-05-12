@@ -320,6 +320,15 @@ async function appendToRiversideSheet(submissionId: number, row: EmployerSubmiss
     console.warn("Riverside sheet_webhook_url not set on crm.providers — skipping sheet append");
     return;
   }
+  // Field keys match the column headers on the Riverside Employer Leads
+  // sheet exactly — the v2 appender script keys FIELD_MAP off normalised
+  // header text, so any rename here must be mirrored in the sheet header
+  // (or the cell stays empty). Marketing consent + 60-day clock columns
+  // intentionally absent — marketing consent is a SwitchLeads/Brevo
+  // concern (not provider-facing), and the 60-day clock is auto-tracked
+  // off status_updated_at in the DB (not a column Jane fills in).
+  // Provider notes column exists on the sheet for Jane's free-text per
+  // lead — not sent from here, stays empty for her to fill.
   const body = {
     mode: "append",
     fields: {
@@ -334,15 +343,13 @@ async function appendToRiversideSheet(submissionId: number, row: EmployerSubmiss
       "Company size": row.company_size_band ?? "",
       "Levy status": row.levy_status ?? "",
       "Interest": row.interest ?? "",
-      "Candidate in mind": row.candidate_in_mind ?? "",
+      "Candidate in mind?": row.candidate_in_mind ?? "",
       "Urgency": row.urgency ?? "",
-      "Headcount estimate": row.headcount_estimate ?? "",
+      "Head count estimate": row.headcount_estimate ?? "",
       "Existing apprentices": row.existing_apprentices ?? "",
-      "Standards interested": row.standards_interested ?? "",
-      "Additional notes": row.additional_notes ?? "",
-      "Marketing consent": row.marketing_opt_in ? "Yes" : "No",
+      "Standards Interested": row.standards_interested ?? "",
+      "Additional notes entered": row.additional_notes ?? "",
       "Status": "",
-      "60-day clock started": "",
     },
   };
   const res = await fetch(url, {
