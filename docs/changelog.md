@@ -4,6 +4,42 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-12 (Session 42) — Switchable for Business backend + per-provider SLA template + auto-flip rewrite + reconciliation pass
+
+**Type:** 12 migrations (0122-0133), 1 new Edge Function, 1 cron schedule, 1 data-ops seed, several Edge Function patches, multiple portal/admin UI changes, 1 Brevo backfill semantics fix.
+
+- **0122** Added `lead_type` discriminator (`learner` | `employer_apprenticeship`) to `leads.submissions` + 14 employer-only columns + `routing_outcome` + `terms_accepted_at` + composite index `(provider_id, routed_at)` for sibling-lead lookups.
+- **0123** Added `agreement_version` (v1/v2 CHECK), `sla_provider_obligations` text[], `sla_switchleads_obligations` text[] to `crm.providers`. Drives the portal `/provider/agreement` page.
+- **0125** Extended `crm.email_log` email_type CHECK to include `s4b_employer_u1` + `s4b_employer_ud`.
+- **0126** Rewrote `upsert_enrolment_outcome` RPC with extended status + lost_reason whitelists covering both lead types.
+- **0127** Added 5 per-provider SLA columns to `crm.providers` with PPA v1 defaults (24h first attempt / 6 attempts / 7-day window / 36h stale / 14-day flip). Riverside v2 set to 24h / 6 / 14-day window / 120h stale / 60-day flip. CD set to 17-day flip as grace.
+- **0128** Added `auto_flip_enabled` (default true), `sla_accepted_at`, `sla_accepted_by_user_id` (FK), `sla_accepted_version` to `crm.providers`. Drives the first-sign-in SLA agreement gate.
+- **0129** Rewrote `crm.run_enrolment_auto_flip` to use per-provider `sla_presumed_flip_days`, branch presumed-target by `lead_type`, gate on `auto_flip_enabled AND sla_accepted_at IS NOT NULL`. Dispute window stays hardcoded 7 days for now (followup ticket).
+- **0130** Added `provider_presumed_flipped` email_type to `crm.email_log`.
+- **0131** Scheduled `email-presumed-flipped-cron-daily` at 07:00 UTC.
+- **0132** Rewrote `crm.vw_provider_billing_state` to use `crm.providers.free_enrolments_remaining` as per-provider cap (replaces hardcoded `3`) and added employer success states (`signed`, `presumed_employer_signed`) to `billable_or_pending_count`. Surfaced by Charlotte spotting Riverside displaying "3/3 free" on admin list when the v2 PPA cap is 1.
+- **0133** Rewrote `crm.vw_provider_performance` (counts `signed` alongside `enrolled` in 30-day window) and `leads.vw_needs_status_update` (per-provider threshold + simpler "open or no enrolment" actioned-leads filter). Replaces hardcoded 14 days and learner-only filters that would have silently misreported for Riverside.
+- **New Edge Function `netlify-employer-lead-router`.** Receives `s4b-employer-lead-v1` form webhook from Netlify. Inserts lead with `lead_type='employer_apprenticeship'`, fires `crm.ensure_open_enrolment`, writes `leads.routing_log` with canonical column names mirrored from `_shared/route-lead.ts`, sends U1 (sendTransactional) + U2 (inline HTML provider notice) emails, appends to Riverside sheet via Apps Script v2 appender. Three failed test submissions chased out invented column names — process learning saved as memory.
+- **`netlify-lead-router` patched** to ignore `s4b-employer-lead-v1` form (defensive, in case site-wide webhook fires).
+- **`sheet-edit-mirror` STATUS_MAP extended** with employer values (engaged, in_progress, signed, not_signed, presumed signed).
+- **`email-presumed-warning-cron` made per-provider aware** (day-12 v1 / day-58 v2) + gated on `auto_flip_enabled AND sla_accepted_at`.
+- **New Edge Function `email-presumed-flipped-cron`.** Picks up newly-flipped leads from the previous 24h, sends batched per-provider notification with 7-day dispute deadline.
+- **data-ops/026** seeded Riverside provider row + PPA bullets for all four pilot providers (v1/v2 wording divergence).
+- **Portal-to-sheet status sync** new helper `app/lib/sheet-status-sync.ts`. Server Actions fire `pushSheetStatus()` on major transitions (skips sub-states like attempt_1/2/3, in_progress, meeting_booked). Uses `SHEETS_APPEND_TOKEN`.
+- **First-sign-in SLA acceptance page** `/provider/sla-agreement` (admin-only accept, checkbox-gated submit, sign-out button). `require-provider.ts` redirects when `sla_accepted_at IS NULL` or version drift. Server Actions split: `SLA_VERSION` in `version.ts` (Server Action files can only export async functions).
+- **Provider agreement page in portal** `/provider/agreement` renders PPA bullets + SLA thresholds from `crm.providers` columns. Notion link hidden when `agreement_notion_page_id` is null.
+- **Lead 128 (Jyotika Mark) orphan fixed** via `crm.ensure_open_enrolment(128, ...)` — routing_log row from 25 April with no enrolment row.
+- **`backfill-referral-fastrack-urls` semantics fix.** Now uses first-submission per email for `referral_code` (stable share-with-friend links) and latest-submission for fastrack URL (current course intent). Two CTEs joined on email. Applied clean (~20 contacts changed: swaldby-class learner referrals stabilising + two historical drift corrections from previous "latest wins" applies).
+- **Impact assessment** (per `.claude/rules/data-infrastructure.md §8`):
+  - Change: 12 migrations + 1 new Edge Function + 1 cron schedule + view rewrites. Some DDL (new columns), some view replacements, no destructive operations.
+  - Readers: every cron + UI consumer of `crm.providers` benefits from new SLA columns. Views consumed by admin and Iris's flags. Brevo backfill function consumed via `/admin/data-ops` panel.
+  - Writers: `auto_flip_enabled` / `sla_accepted_at` / `sla_accepted_version` written via SLA acceptance flow (admin role only). Lead writes via `netlify-employer-lead-router`.
+  - Schema versions: lead payload bumped for employer fields (additive — old consumers continue to work).
+  - Rollback: each migration carries its own DOWN section. Views replaced with prior bodies if needed. Edge Function removable via `supabase functions delete`.
+- **Sign-off:** owner-approved each migration in-session; auto-flip migration 0129 applied behind dual gate so it's safe even without immediate sign-off from any provider.
+
+---
+
 ## 2026-05-11 (Session 40) — Daily sheet ↔ DB drift reconcile cron
 
 **Type:** 1 new Edge Function + 1 migration (0115) + 1 Apps Script mode + 1 shared module extraction.
