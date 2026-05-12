@@ -36,6 +36,9 @@ interface ProviderUserRow {
 interface ProviderRow {
   company_name: string;
   funding_types: string[] | null;
+  sla_stale_attempt_hours: number;
+  sla_presumed_flip_days: number;
+  sla_first_attempt_hours: number;
 }
 
 interface EnrolmentCountRow {
@@ -134,7 +137,7 @@ export default async function ProviderHomePage() {
     admin
       .schema("crm")
       .from("providers")
-      .select("company_name, funding_types")
+      .select("company_name, funding_types, sla_stale_attempt_hours, sla_presumed_flip_days, sla_first_attempt_hours")
       .eq("provider_id", pu.provider_id)
       .maybeSingle<ProviderRow>(),
     recentIds.length
@@ -177,11 +180,13 @@ export default async function ProviderHomePage() {
   });
   const fastrackReadyCount = fastrackReadyIds.length;
 
-  // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at >36h ago.
-  // Provider rang once, no answer, hasn't tried again. Caller's nudge.
-  // Threshold lowered from 48h to 36h on 2026-05-11 to match Charlotte's
-  // overdue-badge spec.
-  const STALE_ATTEMPT_HOURS = 36;
+  // Stale follow-ups = leads in attempt_1/2/3 with status_updated_at older
+  // than the provider's SLA stale-attempt threshold. PPA v1 providers
+  // default to 36h (daily-cadence learner workflow); PPA v2 (Riverside)
+  // is set to 120h (5 days, weekly-cadence B2B). Read per-provider from
+  // crm.providers.sla_stale_attempt_hours so each pilot carries its own
+  // value.
+  const STALE_ATTEMPT_HOURS = provider?.sla_stale_attempt_hours ?? 36;
   const staleAttemptCutoff = Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000;
   const staleAttempts = enrolments.filter(
     (e) =>
@@ -236,9 +241,12 @@ export default async function ProviderHomePage() {
   // Overdue thresholds — when the oldest item in a bucket has been
   // waiting longer than these, the home card shows an Overdue badge.
   // Mirrors the per-row overdue logic in leads-table.tsx so the home
-  // glance matches the list-level signal.
-  const OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000; // 24h
-  const OVERDUE_36H_MS = 36 * 60 * 60 * 1000;
+  // glance matches the list-level signal. Open-overdue follows the
+  // first-attempt SLA; the 36h-style threshold for callback +
+  // stale-attempt follows the provider's stale-attempt SLA so the
+  // signal matches the cadence Jane / Andy work to.
+  const OVERDUE_OPEN_MS = (provider?.sla_first_attempt_hours ?? 24) * 60 * 60 * 1000;
+  const OVERDUE_36H_MS = STALE_ATTEMPT_HOURS * 60 * 60 * 1000;
   const overdueOpen = isOlderThan(oldestOpenSince, OVERDUE_OPEN_MS);
   const overdueCallback = isOlderThan(oldestCallbackSince, OVERDUE_36H_MS);
   const overdueStaleAttempt = isOlderThan(oldestStaleAttemptSince, OVERDUE_36H_MS);

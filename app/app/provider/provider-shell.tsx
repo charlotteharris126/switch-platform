@@ -72,11 +72,17 @@ async function LeadsNavLink({ active }: { active: boolean }) {
   const supabase = await createClient();
   // The badge needs to match what the "Action needed" filter shows on click.
   // Action = (open) ∪ (callback_pending) ∪ (attempt_X with status_updated_at
-  // >36h ago). Fastrack alone no longer gates action — once the provider
-  // moves status off open, the fastrack signal is considered handled
-  // (re-fires via the stale-attempt timer if the new state goes cold).
-  // RLS scopes everything to this provider.
-  const STALE_ATTEMPT_HOURS = 36;
+  // older than the provider's stale-attempt SLA). Per-provider since
+  // migration 0127: PPA v1 = 36h, PPA v2 = 120h. Falls back to 36h if
+  // the provider row is missing (shouldn't happen post-auth but defensive).
+  // RLS scopes everything to this provider's leads; the provider-row
+  // SELECT is service-role for the auth_user → provider_id resolution.
+  const { data: providerSla } = await supabase
+    .schema("crm")
+    .from("providers")
+    .select("sla_stale_attempt_hours")
+    .maybeSingle<{ sla_stale_attempt_hours: number }>();
+  const STALE_ATTEMPT_HOURS = providerSla?.sla_stale_attempt_hours ?? 36;
   const cutoff = new Date(Date.now() - STALE_ATTEMPT_HOURS * 60 * 60 * 1000).toISOString();
 
   const { data: enrolmentsData } = await supabase

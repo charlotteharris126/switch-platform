@@ -103,9 +103,11 @@ const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string }> = [
 ];
 
 // Overdue thresholds. Mirror the home page so the badge logic is
-// consistent across surfaces.
-const OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000; // 24h
-const OVERDUE_36H_MS = 36 * 60 * 60 * 1000; // callback / attempt stale
+// consistent across surfaces. Defaults match PPA v1 funded-pilot cadence;
+// callers (provider page, admin preview) override with per-provider
+// values from crm.providers.sla_* columns when the rows are loaded.
+const DEFAULT_OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000; // 24h first-attempt SLA
+const DEFAULT_OVERDUE_36H_MS = 36 * 60 * 60 * 1000; // 36h stale-attempt SLA
 
 // "Action needed" = anything where the next move is on the provider:
 //   - callback flag pending
@@ -115,15 +117,17 @@ const OVERDUE_36H_MS = 36 * 60 * 60 * 1000; // callback / attempt stale
 // the status off open, they've actioned the fastrack signal. If the new
 // status goes stale, it returns to actions via the stale-attempt timer.
 // Fastrack stays visible as a row badge + own filter pill regardless.
-const STALE_ATTEMPT_MS = OVERDUE_36H_MS;
-function isActionRow(r: LeadRow): boolean {
+// Threshold-aware helpers. Each takes the per-provider SLA durations in
+// milliseconds so the same component renders correctly for any provider
+// SLA (PPA v1 default 24h first-attempt / 36h stale; PPA v2 24h / 120h).
+function isActionRow(r: LeadRow, staleAttemptMs: number): boolean {
   if (r.callback_pending) return true;
   if (r.status === "open") return true;
-  if (isStaleAttempt(r)) return true;
+  if (isStaleAttempt(r, staleAttemptMs)) return true;
   return false;
 }
 
-function isStaleAttempt(r: LeadRow): boolean {
+function isStaleAttempt(r: LeadRow, staleAttemptMs: number): boolean {
   if (
     r.status !== "attempt_1_no_answer"
     && r.status !== "attempt_2_no_answer"
@@ -132,20 +136,22 @@ function isStaleAttempt(r: LeadRow): boolean {
     return false;
   }
   if (!r.status_updated_at) return false;
-  return Date.now() - new Date(r.status_updated_at).getTime() > STALE_ATTEMPT_MS;
+  return Date.now() - new Date(r.status_updated_at).getTime() > staleAttemptMs;
 }
 
-// Per-row overdue: any of (a) open + routed >24h ago, (b) callback flag
-// pending + status hasn't moved in 36h, (c) attempt status stale (already
-// >36h). Surfaces a red badge on the row plus a red dot on the lead name.
-function isOverdueRow(r: LeadRow): boolean {
+// Per-row overdue: any of (a) open + routed older than the first-attempt
+// SLA, (b) callback flag pending + status hasn't moved in stale-attempt
+// SLA hours, (c) attempt status stale (already past stale-attempt SLA).
+// Both thresholds passed in so the function reads consistent with the
+// provider's configured pace.
+function isOverdueRow(r: LeadRow, openMs: number, staleAttemptMs: number): boolean {
   if (r.status === "open" && r.routed_at) {
-    if (Date.now() - new Date(r.routed_at).getTime() > OVERDUE_OPEN_MS) return true;
+    if (Date.now() - new Date(r.routed_at).getTime() > openMs) return true;
   }
   if (r.callback_pending && r.status_updated_at) {
-    if (Date.now() - new Date(r.status_updated_at).getTime() > OVERDUE_36H_MS) return true;
+    if (Date.now() - new Date(r.status_updated_at).getTime() > staleAttemptMs) return true;
   }
-  if (isStaleAttempt(r)) return true;
+  if (isStaleAttempt(r, staleAttemptMs)) return true;
   return false;
 }
 
@@ -183,6 +189,13 @@ interface Props {
   // set of currently-open dates — even if no routed lead has populated
   // intake fields yet.
   seededCohortIds?: string[];
+  // Per-provider SLA durations in hours. Drive the Overdue badge + stale
+  // attempt detection. PPA v1 defaults to {first: 24, stale: 36}; PPA v2
+  // (Riverside) is {first: 24, stale: 120}. Callers source from
+  // crm.providers.sla_* columns. Optional — falls back to PPA v1 if not
+  // supplied so admin preview etc. don't break.
+  slaFirstAttemptHours?: number;
+  slaStaleAttemptHours?: number;
 }
 
 const LOST_REASON_LABEL: Record<LostReason, string> = {
@@ -205,7 +218,12 @@ export function LeadsTable({
   onBulkMark,
   linkPrefix = "/provider/leads/",
   seededCohortIds = [],
+  slaFirstAttemptHours = 24,
+  slaStaleAttemptHours = 36,
 }: Props) {
+  // Per-provider SLA durations in ms, computed once.
+  const openMs = slaFirstAttemptHours * 60 * 60 * 1000;
+  const staleAttemptMs = slaStaleAttemptHours * 60 * 60 * 1000;
   // Lead-type detected from the loaded rows. In practice a provider's
   // leads are all one type (Riverside = employer, EMS/CD/WYK = learner)
   // so the first row is authoritative. If rows are empty, default to
@@ -285,7 +303,7 @@ export function LeadsTable({
     let near_60_day = 0;
     const FIFTY_DAYS_MS = 50 * 24 * 60 * 60 * 1000;
     for (const r of rows) {
-      if (isActionRow(r)) action += 1;
+      if (isActionRow(r, staleAttemptMs)) action += 1;
       if (r.callback_pending) callback += 1;
       // Fastrack count excludes already-settled leads (lost, enrolled,
       // presumed_enrolled) — once a lead is closed out the fastrack is
@@ -296,7 +314,7 @@ export function LeadsTable({
       if (r.status === "enrolment_meeting_booked") meeting += 1;
       if (ENROLLED.has(r.status)) enrolled += 1;
       if (COLD.has(r.status)) cold += 1;
-      if (isStaleAttempt(r)) stale_attempts += 1;
+      if (isStaleAttempt(r, staleAttemptMs)) stale_attempts += 1;
       // Employer counts
       if (r.status === "engaged") engaged += 1;
       if (r.status === "in_progress") in_progress += 1;
@@ -323,9 +341,9 @@ export function LeadsTable({
       if (filter === "all") {
         // pass
       } else if (filter === "action") {
-        if (!isActionRow(r)) return false;
+        if (!isActionRow(r, staleAttemptMs)) return false;
       } else if (filter === "stale_attempts") {
-        if (!isStaleAttempt(r)) return false;
+        if (!isStaleAttempt(r, staleAttemptMs)) return false;
       } else if (filter === "callback") {
         if (!r.callback_pending) return false;
       } else if (filter === "fastrack") {
@@ -378,8 +396,8 @@ export function LeadsTable({
     // visible inside Open / Calling / etc. The server returns routed_at desc
     // already, so the final tier mostly reinforces that.
     return [...subset].sort((a, b) => {
-      const aOver = isOverdueRow(a) ? 1 : 0;
-      const bOver = isOverdueRow(b) ? 1 : 0;
+      const aOver = isOverdueRow(a, openMs, staleAttemptMs) ? 1 : 0;
+      const bOver = isOverdueRow(b, openMs, staleAttemptMs) ? 1 : 0;
       if (aOver !== bOver) return bOver - aOver;
       const aFast = (a.has_fastrack && !FASTRACK_SETTLED.has(a.status)) ? 1 : 0;
       const bFast = (b.has_fastrack && !FASTRACK_SETTLED.has(b.status)) ? 1 : 0;
@@ -568,7 +586,7 @@ export function LeadsTable({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((r) => {
-                  const overdue = isOverdueRow(r);
+                  const overdue = isOverdueRow(r, openMs, staleAttemptMs);
                   const isEmployer = r.lead_type === "employer_apprenticeship";
                   const courseOrCompanyLabel = isEmployer
                     ? (r.company_name ?? "-")

@@ -70,6 +70,18 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   const ctx = await requireProviderUser();
   const supabase = await createClient();
 
+  // Provider SLA values drive the Overdue badge + stale-attempt detection.
+  // Source from crm.providers.sla_* columns per migration 0127. Defaults
+  // are PPA v1 funded shape; Riverside overrides to PPA v2 in the seed.
+  const { data: providerSla } = await supabase
+    .schema("crm")
+    .from("providers")
+    .select("sla_first_attempt_hours, sla_stale_attempt_hours")
+    .eq("provider_id", ctx.providerId)
+    .maybeSingle<{ sla_first_attempt_hours: number; sla_stale_attempt_hours: number }>();
+  const slaFirstAttemptHours = providerSla?.sla_first_attempt_hours ?? 24;
+  const slaStaleAttemptHours = providerSla?.sla_stale_attempt_hours ?? 36;
+
   const [submissionsResult, fastrackResult, courseIntakesResult] = await Promise.all([
     supabase
       .schema("leads")
@@ -247,6 +259,8 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
                 initialFilter={initialFilter}
                 onBulkMark={bulkMarkOutcomeAction}
                 seededCohortIds={seededIntakeIds}
+                slaFirstAttemptHours={slaFirstAttemptHours}
+                slaStaleAttemptHours={slaStaleAttemptHours}
               />
             </div>
             <div className="lg:col-span-1 lg:sticky lg:top-6">
