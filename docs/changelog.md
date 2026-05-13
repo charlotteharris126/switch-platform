@@ -4,6 +4,14 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-13 (Session 44, addendum) — Employer-router source_form wiring + Riverside test-lead cleanup
+
+Triggered by Solis Session 3 handoff pushing the question of why every `/business/*` submission landed with `source_form=NULL`. Confirmed in DB: ids 421, 422, 425, 426, 427 (and 423, 424 earlier the same day) all carried NULL despite the Edge Function validating `form_name === 's4b-employer-lead-v1'` on the way in.
+
+- **`netlify-employer-lead-router` redeployed** with `source_form` now written to `leads.submissions`. Added `source_form: string` to the `EmployerSubmissionRow` interface, set it to the hardcoded `'s4b-employer-lead-v1'` value in `normalise()` (only valid form for this router; the guard at top of the handler rejects anything else), and threaded it through the INSERT column list. No payload-schema bump — the source-of-truth form_name is on the inbound payload already; this just persists it.
+- **Data-ops 030** Flips submissions 423, 424, 425, 426, 427 to `is_dq=true, dq_reason='owner_test_submission'` and deletes their downstream `crm.enrolments` rows (542-546). Audit row per submission via `audit.log_system_action`. Same pattern as data-ops 027. Reason: Charlotte 2026-05-13 — every routed-to-Riverside lead to date is a test (5 from this session plus 8 already-DQ from earlier sessions: 401, 408, 410-413, 421, 422). Real Riverside traffic begins after Wed paid-traffic flip confirms in Meta Events Manager (Solis Session 3 next step 1). Charlotte cleans the matching Riverside sheet rows manually after running (sheet → DB direction not auto-mirrored).
+- Signed off: Charlotte (session 2026-05-13).
+
 ## 2026-05-12 (Session 42, addendum 3) — Performance pass + agreement UI consolidation
 
 Triggered by Charlotte asking for a "speed and performance" sweep on the portal mindful of multi-user multi-provider scaling, plus a UX change folding the standalone `/provider/agreement` page into Account so the admin preview can see it too.

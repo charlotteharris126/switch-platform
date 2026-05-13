@@ -68,6 +68,7 @@ interface EmployerSubmissionRow {
   // Discriminator + identifiers
   schema_version: string;
   lead_type: "employer_apprenticeship";
+  source_form: string;
   // Routing fields
   primary_routed_to: string | null;
   routing_outcome: "routed" | "disqualified";
@@ -207,6 +208,7 @@ function normalise(data: Record<string, JsonValue>, rawBody: JsonValue): Employe
   return {
     schema_version: strOrNull(data.schema_version) ?? "1.0",
     lead_type: "employer_apprenticeship",
+    source_form: "s4b-employer-lead-v1",
     primary_routed_to: routing_outcome === "routed" ? RIVERSIDE_PROVIDER_ID : null,
     routing_outcome,
     routing_outcome_hint: strOrNull(data.routing_outcome_hint),
@@ -269,7 +271,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
     const nowIso = new Date().toISOString();
     const [inserted] = await tx<Array<{ id: number }>>`
       INSERT INTO leads.submissions (
-        schema_version, submitted_at, lead_type, primary_routed_to, routing_outcome,
+        schema_version, submitted_at, lead_type, source_form, primary_routed_to, routing_outcome,
         routing_outcome_hint, routed_at, provider_ids,
         first_name, last_name, email, phone, role_title,
         company_name, company_size_band, sector, levy_status,
@@ -279,7 +281,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         page_url, utm_source, utm_medium, utm_campaign, utm_content,
         fbclid, gclid, referrer, raw_payload, is_dq
       ) VALUES (
-        ${row.schema_version}, ${nowIso}, ${row.lead_type}, ${row.primary_routed_to}, ${row.routing_outcome},
+        ${row.schema_version}, ${nowIso}, ${row.lead_type}, ${row.source_form}, ${row.primary_routed_to}, ${row.routing_outcome},
         ${row.routing_outcome_hint}, ${row.routed_at}, ${providerIds},
         ${row.first_name}, ${row.last_name}, ${row.email}, ${row.phone}, ${row.role_title},
         ${row.company_name}, ${row.company_size_band}, ${row.sector}, ${row.levy_status},
