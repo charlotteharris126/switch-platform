@@ -514,3 +514,6 @@ verify_jwt = false
 
 [functions.email-presumed-flipped-cron]
 verify_jwt = false
+
+[functions.dead-letter-alert-cron]
+verify_jwt = false

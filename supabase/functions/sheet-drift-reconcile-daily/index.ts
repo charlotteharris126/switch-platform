@@ -321,8 +321,15 @@ async function checkProvider(
     }
 
     const kinds: DriftKind[] = [];
-    const sheetStatus = (sheetRow.status ?? "").trim();
-    if (sheetStatus !== expectedLabel) {
+    // Case-insensitive comparison: provider sheets historically have
+    // "Presumed Enrolled" with title-case E, but our canonical label is
+    // "Presumed enrolled" with lower-case e. The forward `sheetLabelToStatus`
+    // already normalises case for sheet → DB direction; the drift reconciler
+    // needs to do the same on the comparison side or every Presumed lead
+    // shows as cosmetic drift forever.
+    const sheetStatus = (sheetRow.status ?? "").trim().toLowerCase();
+    const expectedLabelNorm = expectedLabel.toLowerCase();
+    if (sheetStatus !== expectedLabelNorm) {
       // Sheet "" (blank) is a benign state when DB is "open" + nothing
       // has been written yet — append wrote nothing because the lead
       // is brand-new. Treat blank vs "Open" as drift anyway; the sheet
@@ -331,8 +338,19 @@ async function checkProvider(
       // is itself drift.
       kinds.push("status");
     }
-    const sheetLost = (sheetRow.lost_reason ?? "").trim();
-    if (sheetLost !== expectedLostReason) kinds.push("lost_reason");
+    // Only flag lost_reason drift when the sheet ACTUALLY HAS a lost_reason
+    // column. Current pilot sheets (EMS, WYK, CD) have a Status column but
+    // no separate Lost Reason column — the appender's read_all_status mode
+    // returns `lost_reason: undefined` for those. Flagging drift in that
+    // case is structurally impossible to resolve (you can't write a value
+    // into a column that doesn't exist) and just noise. When a provider
+    // adds a Lost Reason column to their sheet, the appender will start
+    // returning a non-undefined value and this check kicks in normally.
+    if (sheetRow.lost_reason !== undefined) {
+      const sheetLost = (sheetRow.lost_reason ?? "").trim().toLowerCase();
+      const expectedLostNorm = expectedLostReason.toLowerCase();
+      if (sheetLost !== expectedLostNorm) kinds.push("lost_reason");
+    }
     const sheetFast = (sheetRow.fastracked ?? "").trim().toLowerCase();
     const sheetFastFlag = sheetFast === "yes";
     if (sheetFastFlag !== expectedFastracked) kinds.push("fastracked");
