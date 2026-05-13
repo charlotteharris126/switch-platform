@@ -108,6 +108,7 @@ interface ProviderResult {
   drift_total: number;
   drift_new: number;
   drift_persisting: number;
+  drift_self_cleaned?: number;
   sheet_rows_skipped_no_sid?: number;
 }
 
@@ -271,13 +272,17 @@ async function checkProvider(
   }
 
   // 4. Load existing unresolved drift rows for this provider so we dedup
-  let priorKey: Set<string>;
+  // AND can self-clean rows whose drift no longer exists. Each row carries
+  // its id so step 7 can UPDATE the stale ones.
+  let priorByKey: Map<string, number[]>;
   try {
     const priorRows = await sql<Array<{
+      id: number;
       submission_id: string;
       kinds: string[];
     }>>`
-      SELECT raw_payload->>'submission_id' AS submission_id,
+      SELECT id,
+             raw_payload->>'submission_id' AS submission_id,
              ARRAY(
                SELECT jsonb_array_elements_text(raw_payload->'kinds')
              ) AS kinds
@@ -286,12 +291,19 @@ async function checkProvider(
          AND replayed_at IS NULL
          AND raw_payload->>'provider_id' = ${provider.provider_id}
     `;
-    priorKey = new Set(priorRows.map((r) => driftKey(r.submission_id, r.kinds)));
+    priorByKey = new Map();
+    for (const r of priorRows) {
+      const k = driftKey(r.submission_id, r.kinds);
+      const list = priorByKey.get(k) ?? [];
+      list.push(r.id);
+      priorByKey.set(k, list);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`prior drift load failed for ${provider.provider_id}:`, msg);
-    priorKey = new Set();
+    priorByKey = new Map();
   }
+  const priorKey = new Set(priorByKey.keys());
 
   // 5. Compare each DB lead against its sheet row
   const drifts: DriftRow[] = [];
@@ -414,6 +426,36 @@ async function checkProvider(
     }
   }
 
+  // 7. Self-clean stale dead_letter rows. Any prior row whose drift key
+  // isn't present in this run's `drifts` is no longer drifting — sheet
+  // and DB now agree on that submission_id × kind combo. Mark the row
+  // replayed so /admin/errors stops surfacing it. This makes the table
+  // self-converge: clear up real drift via republish or sheet edits,
+  // and the alert clears itself on the next run rather than sitting
+  // there until someone clicks "I've handled this".
+  const currentKeys = new Set(drifts.map((d) => driftKey(String(d.submission_id), d.kinds)));
+  const staleIds: number[] = [];
+  for (const [key, ids] of priorByKey) {
+    if (!currentKeys.has(key)) staleIds.push(...ids);
+  }
+  let driftSelfCleaned = 0;
+  if (staleIds.length > 0) {
+    try {
+      const result = await sql.begin(async (trx) => {
+        await trx`SET LOCAL ROLE functions_writer`;
+        return await trx`
+          UPDATE leads.dead_letter
+             SET replayed_at = now()
+           WHERE id = ANY(${staleIds})
+             AND replayed_at IS NULL
+        `;
+      });
+      driftSelfCleaned = result.count;
+    } catch (err) {
+      console.error(`self-clean update failed for ${provider.provider_id}:`, String(err));
+    }
+  }
+
   return {
     provider_id: provider.provider_id,
     company_name: provider.company_name,
@@ -422,6 +464,7 @@ async function checkProvider(
     drift_total: drifts.length,
     drift_new: driftNew,
     drift_persisting: driftPersisting,
+    drift_self_cleaned: driftSelfCleaned,
     sheet_rows_skipped_no_sid: skippedNoSid,
   };
 }
