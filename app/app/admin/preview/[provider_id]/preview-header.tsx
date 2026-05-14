@@ -59,6 +59,11 @@ export function PreviewHeader({ providerId, companyName, isDemo, active }: Props
             label="Their account"
             active={active === "account"}
           />
+          <TabLink
+            href={`/preview/${encoded}/support`}
+            label="Their support"
+            active={active === "support"}
+          />
           <Link
             href={`/providers/${encoded}`}
             className="ml-2 px-3 py-1.5 rounded-md text-amber-900 hover:bg-amber-100 transition-colors"

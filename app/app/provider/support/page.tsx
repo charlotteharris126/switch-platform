@@ -154,8 +154,8 @@ export default async function ProviderSupportPage() {
 // Plain ASCII quotes only in q/a strings: q is rendered as a JSX expression
 // (not text), so HTML entities show literally; consistent with the rest of
 // the codebase. No em dashes per copy.md.
-type GuideAudience = "learner" | "employer" | "both";
-const GUIDES: Array<{ q: string; a: React.ReactNode; for: GuideAudience }> = [
+export type GuideAudience = "learner" | "employer" | "both";
+export const GUIDES: Array<{ q: string; a: React.ReactNode; for: GuideAudience }> = [
   {
     for: "learner",
     q: "How do I mark an outcome on a lead?",
