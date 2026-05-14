@@ -4,6 +4,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-14 (Session 45, addendum) — Data-ops 031 closes Riverside test-enrolment gap
+
+Solis flagged that data-ops 030 left two leftover open enrolment rows (540, 541) attached to subs 421 and 422 — both already flagged `is_dq=true, dq_reason='owner_test_submission'` from earlier sessions, but outside 030's narrow id range (423-427). Enrolment-id sequence jumps 541 → 547 after 030 confirmed the gap.
+
+- **Data-ops 031** Deletes any `crm.enrolments` row whose `submission_id` carries `is_dq=true` and a `dq_reason` in the owner-test family (six values, same filter as 027). Idempotent re-runnable script — catches today's gap (540, 541) and any future leftover surfacing from the same class. Replaces the narrow-id-range pattern from 030 as the canonical recovery shape going forward. Submissions kept for audit.
+- Signed off: Charlotte (session 2026-05-14).
+
 ## 2026-05-13 (Session 44, addendum) — Employer-router source_form wiring + Riverside test-lead cleanup
 
 Triggered by Solis Session 3 handoff pushing the question of why every `/business/*` submission landed with `source_form=NULL`. Confirmed in DB: ids 421, 422, 425, 426, 427 (and 423, 424 earlier the same day) all carried NULL despite the Edge Function validating `form_name === 's4b-employer-lead-v1'` on the way in.
