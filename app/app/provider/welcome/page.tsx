@@ -1,16 +1,19 @@
-// /provider/welcome. Swipe-through introduction to the portal for
-// brand-new provider users. Shareable URL — linked from the invite
-// email body and from /provider/support. Not gated to first-login;
-// any team member can revisit it.
+// /provider/welcome. First-login forced walkthrough.
 //
-// Audience-aware: reads the provider's funding_types and renders the
-// employer-apprenticeship deck for Riverside, the learner deck for
-// EMS / CD / WYK. Same vocabulary as the rest of the portal so the
-// mini-visuals match what the user actually sees once they're in.
+// Gated by requireProviderUser({ skipWelcomeGate: true }) so it doesn't
+// bounce to itself. Every other /provider/* route redirects HERE when
+// crm.provider_users.welcome_completed_at is NULL. The deck's final-slide
+// CTA fires markWelcomeCompleted() which flips that timestamp and
+// redirects to /provider.
+//
+// Repeat visits (via the Support tab's "Get started" card) re-render
+// the deck the same way; the Server Action is idempotent so revisiting
+// doesn't break anything.
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireProviderUser } from "@/lib/auth/require-provider";
 import { WelcomeDeck } from "./welcome-deck";
+import { markWelcomeCompleted } from "./actions";
 
 export const metadata = {
   title: "Welcome, SwitchLeads",
@@ -18,7 +21,7 @@ export const metadata = {
 };
 
 export default async function ProviderWelcomePage() {
-  const ctx = await requireProviderUser();
+  const ctx = await requireProviderUser({ skipWelcomeGate: true });
 
   const admin = createAdminClient();
   const { data: provider } = await admin
@@ -42,6 +45,7 @@ export default async function ProviderWelcomePage() {
       audience={isEmployer ? "employer" : "learner"}
       greetingName={greetingName}
       providerLabel={provider?.company_name ?? "Your account"}
+      onComplete={markWelcomeCompleted}
     />
   );
 }

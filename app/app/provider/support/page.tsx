@@ -59,25 +59,41 @@ export default async function ProviderSupportPage() {
           </p>
         </div>
 
-        {/* Long-form intro guide. Same page that lives outside the login
-            for first-time access — useful to share with a teammate before
-            their invite lands. */}
-        <section className="bg-white border border-slate-200 rounded-xl p-5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-            New to the portal?
-          </p>
-          <p className="text-sm text-slate-700">
-            The full first-time-access walkthrough lives at{" "}
-            <a
-              href="/help/getting-started"
-              target="_blank"
-              rel="noreferrer"
-              className="font-semibold text-slate-900 underline-offset-2 hover:underline"
-            >
-              /help/getting-started
-            </a>
-            . Shareable with anyone, no sign-in required.
-          </p>
+        {/* Get started card. Re-runs the welcome deck on demand — same
+            forced walkthrough every user sees on first login, but no
+            longer gated. Sits above the FAQ as the canonical "I want to
+            re-orient" entry point. */}
+        <section className="bg-white border border-slate-200 rounded-xl p-5 flex items-start justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+              Get started
+            </p>
+            <p className="text-sm text-slate-700">
+              Walk back through the portal tour any time. Same one we show
+              every new team member on their first sign-in.
+            </p>
+          </div>
+          <a
+            href="/provider/welcome"
+            className="inline-flex items-center justify-center rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold px-4 py-2 transition-colors shrink-0"
+          >
+            Open the tour →
+          </a>
+        </section>
+
+        {/* Public first-time-access guide. Kept as a shareable link for
+            teammates who don't yet have a sign-in. */}
+        <section className="text-xs text-slate-500">
+          Share with a teammate before their invite lands:{" "}
+          <a
+            href="/help/getting-started"
+            target="_blank"
+            rel="noreferrer"
+            className="font-semibold text-slate-700 underline-offset-2 hover:underline"
+          >
+            /help/getting-started
+          </a>
+          . No sign-in required.
         </section>
 
         {/* Help guides: short answers to the things providers most often ask. */}

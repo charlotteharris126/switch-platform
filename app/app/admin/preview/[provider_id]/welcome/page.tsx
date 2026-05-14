@@ -11,6 +11,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdminUser } from "@/lib/auth/require-admin";
 import { PreviewHeader } from "../preview-header";
 import { WelcomeDeck } from "@/app/provider/welcome/welcome-deck";
+import { previewWelcomeComplete } from "./actions";
 
 interface ProviderRow {
   provider_id: string;
@@ -53,6 +54,7 @@ export default async function PreviewWelcomePage({ params }: Props) {
         audience={isEmployer ? "employer" : "learner"}
         greetingName="there"
         providerLabel={provider.company_name}
+        onComplete={previewWelcomeComplete.bind(null, providerId)}
       />
     </>
   );

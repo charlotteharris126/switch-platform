@@ -32,7 +32,17 @@ export interface ProviderUserContext {
   role: string;
 }
 
-export async function requireProviderUser(): Promise<ProviderUserContext> {
+export interface RequireProviderUserOptions {
+  // Set true when the caller is the /provider/welcome page itself, so
+  // it doesn't bounce back to itself before the user has completed
+  // the deck. Also used by the welcome's own Server Action when
+  // marking completion. Every other caller leaves this false.
+  skipWelcomeGate?: boolean;
+}
+
+export async function requireProviderUser(
+  options: RequireProviderUserOptions = {},
+): Promise<ProviderUserContext> {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.getUser();
   const user = data?.user;
@@ -44,7 +54,7 @@ export async function requireProviderUser(): Promise<ProviderUserContext> {
   const { data: pu } = await admin
     .schema("crm")
     .from("provider_users")
-    .select("id, provider_id, contact_email, display_name, role, status")
+    .select("id, provider_id, contact_email, display_name, role, status, welcome_completed_at")
     .eq("auth_user_id", user.id)
     .eq("status", "active")
     .maybeSingle<{
@@ -54,11 +64,21 @@ export async function requireProviderUser(): Promise<ProviderUserContext> {
       display_name: string | null;
       role: string;
       status: string;
+      welcome_completed_at: string | null;
     }>();
 
   if (!pu) {
     await supabase.auth.signOut();
     redirect("/provider-login?error=no_active_account");
+  }
+
+  // Welcome-deck gate. Every new provider user clicks through the
+  // /provider/welcome deck once before reaching any other portal
+  // route. The deck has no skip; the final-slide CTA marks this
+  // column. Runs BEFORE the SLA gate so even the first admin sees
+  // the deck before they hit the SLA-acceptance page.
+  if (!options.skipWelcomeGate && !pu.welcome_completed_at) {
+    redirect("/provider/welcome");
   }
 
   // SLA acceptance gate. Provider must have re-accepted the current
