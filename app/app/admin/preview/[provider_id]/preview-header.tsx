@@ -15,7 +15,7 @@
 
 import Link from "next/link";
 
-type Active = "home" | "leads" | "account" | "welcome";
+type Active = "home" | "leads" | "account" | "support" | "welcome";
 
 interface Props {
   providerId: string;
@@ -58,11 +58,6 @@ export function PreviewHeader({ providerId, companyName, isDemo, active }: Props
             href={`/preview/${encoded}/account`}
             label="Their account"
             active={active === "account"}
-          />
-          <TabLink
-            href={`/preview/${encoded}/welcome`}
-            label="Their welcome"
-            active={active === "welcome"}
           />
           <Link
             href={`/providers/${encoded}`}
