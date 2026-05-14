@@ -181,53 +181,53 @@ interface Slide {
 function learnerSlides(name: string, providerLabel: string): Slide[] {
   return [
     {
-      title: `Welcome to your SwitchLeads portal, ${name}.`,
-      body: "Quick walk through what's where so you know how everything fits together. About a minute.",
+      title: `Welcome to your portal, ${name}!`,
+      body: "Quick lay of the land. Takes about a minute.",
       visual: <HeroVisual providerLabel={providerLabel} />,
     },
     {
-      title: "Your home page tells you what needs you now.",
-      body: "Four cards at the top. Each one only shows a number when there's something to do, so a quiet screen means you really are caught up. The numbers are the leads waiting on you, not a running total.",
+      title: "Your home page.",
+      body: "Four cards at the top. Each only shows a count if there's something to do, so quiet means you're caught up.",
       visual: <AnimatedActionCards audience="learner" />,
     },
     {
       title: "All your leads in one place.",
-      body: "Filterable by status. The badge on the Leads tab tells you what needs picking up. Anything we've flagged for you, fastrack-ready or a callback request, pins to the top so you don't have to hunt for it.",
+      body: "Filter by status. Anything we've flagged for you pins to the top.",
       visual: <AnimatedLeadsList audience="learner" />,
     },
     {
-      title: "Open a lead to see everything we've got on them.",
-      body: "Their details, what course they want, which funding route they're eligible for, anything they told us on the fastrack form. Notes from your team and from us sit on the right. Same panel, you both write in it.",
+      title: "Open one up.",
+      body: "Their details, course, funding route, fastrack answers if they've done it. Notes on the right, shared between your team and us.",
       visual: <LeadDetailVisual audience="learner" />,
     },
     {
       title: "Move them through the stages.",
-      body: "Open, then three call-attempt states, then Meeting booked, then Enrolled. Tap the next step when you've actually moved them there. You can jump forward if they sign up on the first call, but the attempt count only goes one way.",
+      body: "Open, three attempt states, Meeting booked, Enrolled. Jump forward when they sign up on the first call. The attempt count only goes one way.",
       visual: <AnimatedStepper audience="learner" />,
     },
     {
-      title: "This is the bit we really need from you.",
-      body: "Every status you set fires something on our side. We send the right nurture emails to the learner based on where you've got to. We start and reset the 14-day clock that auto-confirms an enrolment if no one says otherwise. We learn which leads to send you next from how previous ones turned out. None of that works if a lead sits at Open when it's actually mid-conversation. If you only do one thing in here, keep statuses honest.",
+      title: "This bit's important.",
+      body: "Every status you set fires something on our side. Nurture emails, the 14-day auto-enrol clock, the next batch of leads we send you. Keep them updated as you work.",
       visual: <AutomationsVisual audience="learner" />,
     },
     {
       title: "Closing one out.",
-      body: "Cannot reach if three real call attempts go nowhere. Lost with a reason if it's gone cold. Both are reversible, tap a different state and they're back. The reasons help us tighten what we send you next time.",
+      body: "Cannot reach after three solid attempts. Lost with a reason if it's gone cold. Both reversible if you misclick.",
       visual: <CloseOutVisual audience="learner" />,
     },
     {
-      title: "Notes for your team and us, never the learner.",
-      body: "Anything you type on a lead is visible to your team and to us. The learner never sees it. We chip in too, in blue. Two timers sit at the top of every lead: one for how long they've been in your queue overall, one for how long since you last updated their status. The second one is what the 14-day clock watches.",
+      title: "Notes and timers.",
+      body: "Anything you type stays inside your team and us. The learner never sees it. We chip in too, in blue. Two timers at the top: total time in your queue, time since the last status change.",
       visual: <AnimatedNotes audience="learner" />,
     },
     {
-      title: "Your first three enrolments are on us.",
-      body: "After that, £150 per funded enrolment, or 15% of fee on self-funded and loan-funded (capped £75 to £150). One invoice a month, paid by Direct Debit. Your free-three progress is on your Account page.",
+      title: "First three on us.",
+      body: "After that, £150 a funded enrolment, or 15% on self-funded and loan-funded (£75 to £150). One invoice a month, Direct Debit.",
       visual: <AnimatedFreeThree />,
     },
     {
-      title: "You're set.",
-      body: "Anything off, the Support tab has shortcuts to the questions we get asked most and a form that comes straight to us. Or email support@switchleads.co.uk. We reply within one working day.",
+      title: "You're set!",
+      body: "Anything off, hit Support or email support@switchleads.co.uk. We reply within a working day.",
       visual: <ReadyVisual />,
     },
   ];
@@ -236,58 +236,58 @@ function learnerSlides(name: string, providerLabel: string): Slide[] {
 function employerSlides(name: string, providerLabel: string): Slide[] {
   return [
     {
-      title: `Welcome to your SwitchLeads portal, ${name}.`,
-      body: "Quick walk through what's where so you know how everything fits together. About a minute.",
+      title: `Welcome to your portal, ${name}!`,
+      body: "Quick lay of the land. Takes about a minute.",
       visual: <HeroVisual providerLabel={providerLabel} />,
     },
     {
-      title: "Your home page tells you what needs you now.",
-      body: "Four cards at the top. Each one only shows a number when there's something to do, so a quiet screen means you really are caught up. The numbers are the leads waiting on you, not a running total.",
+      title: "Your home page.",
+      body: "Four cards at the top. Each only shows a count if there's something to do, so quiet means you're caught up.",
       visual: <AnimatedActionCards audience="employer" />,
     },
     {
       title: "All your leads in one place.",
-      body: "Filterable by status. The badge on the Leads tab tells you what needs picking up. Anything close to its 60-day clock pins to the top so you don't have to hunt for the ones at risk.",
+      body: "Filter by status. Anything near its 60-day clock pins to the top.",
       visual: <AnimatedLeadsList audience="employer" />,
     },
     {
-      title: "Open a lead to see everything we've got on them.",
-      body: "The employer's contact, the company context, the standard they're after, and anything they told us about levy, headcount, and timing. Notes from your team and from us sit on the right. Same panel, you both write in it.",
+      title: "Open one up.",
+      body: "Employer contact, company context, the standard they're after, levy and headcount details. Notes on the right, shared between your team and us.",
       visual: <LeadDetailVisual audience="employer" />,
     },
     {
       title: "Move them through the stages.",
-      body: "Engaged once you've made first contact, In progress while the deal's moving, Signed when the apprenticeship agreement is executed. Forward only on the main stepper. You can mark Not signed at any point if it falls through.",
+      body: "Engaged on first contact, In progress while the deal's moving, Signed when the agreement's executed. Mark Not signed if it falls through.",
       visual: <AnimatedStepper audience="employer" />,
     },
     {
-      title: "This is the bit we really need from you.",
-      body: "Every status you set fires something on our side. We follow up with the employer based on where you've got to. We start and reset the 60-day clock that auto-presumes a Signed outcome if no one says otherwise. We learn which leads to send you next from how previous ones turned out. None of that works if a lead sits at Engaged when it's actually about to sign. If you only do one thing in here, keep statuses honest.",
+      title: "This bit's important.",
+      body: "Every status you set fires something on our side. Follow-up emails, the 60-day auto-signed clock, the next batch of leads we send you. Keep them updated as you work.",
       visual: <AutomationsVisual audience="employer" />,
     },
     {
-      title: "About that 60-day clock.",
-      body: "Once a lead is Engaged or In progress, you've got 60 days from your last status update to confirm a Signed outcome. Day 50: you'll see a clock-approaching flag. Day 60: if nothing's changed, the lead auto-flips to Presumed signed and you're invoiced unless you raise a dispute in the next 7 days. Updating status resets the clock, so move them forward as soon as anything actually shifts.",
+      title: "The 60-day clock.",
+      body: "Engaged or In progress gives you 60 days from your last status update to confirm Signed. Day 50, you'll see a flag. Day 60 with nothing changed, the lead auto-flips to Presumed signed and you're invoiced, unless you raise a dispute in the next 7 days. Status updates reset it.",
       visual: <AnimatedSixtyDayClock />,
     },
     {
       title: "Closing one out.",
-      body: "Mark Not signed when an employer won't proceed and tell us why. It's reversible, from the Not signed screen you can flip them back to Engaged, In progress, or Signed. The reasons help us tighten what we send you next time.",
+      body: "Mark Not signed with a reason if it falls through. Reversible if you misclick.",
       visual: <CloseOutVisual audience="employer" />,
     },
     {
-      title: "Notes for your team and us, never the employer.",
-      body: "Anything you type on a lead is visible to your team and to us. The employer never sees it. We chip in too, in blue. Two timers sit at the top of every lead: one for how long they've been in your queue, one for how long since you last updated their status. The second one is what the 60-day clock watches.",
+      title: "Notes and timers.",
+      body: "Anything you type stays inside your team and us. The employer never sees it. We chip in too, in blue. Two timers at the top: total time in your queue, time since the last status change.",
       visual: <AnimatedNotes audience="employer" />,
     },
     {
-      title: "Your first Employer Signed is on us.",
-      body: "After that, £400 flat per Employer Signed across all levels (L2 to L7). One invoice a month, paid by Direct Debit. Fees are ex VAT for now; once SwitchLeads is VAT-registered the rate stays the same and VAT is added on top.",
+      title: "First Signed on us.",
+      body: "After that, £400 flat per Employer Signed, all levels L2 to L7. One invoice a month, Direct Debit. Ex VAT for now; once we're VAT-registered the rate stays the same and VAT is added on top.",
       visual: <AnimatedFreeOne />,
     },
     {
-      title: "You're set.",
-      body: "Anything off, the Support tab has shortcuts to the questions we get asked most and a form that comes straight to us. Or email support@switchleads.co.uk. We reply within one working day.",
+      title: "You're set!",
+      body: "Anything off, hit Support or email support@switchleads.co.uk. We reply within a working day.",
       visual: <ReadyVisual />,
     },
   ];
