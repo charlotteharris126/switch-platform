@@ -25,7 +25,12 @@
 // every transaction via SET LOCAL ROLE.
 
 import postgres from "npm:postgres@3";
-import { sendBrevoEmail, sendTransactional } from "../_shared/brevo.ts";
+import {
+  sendBrevoEmail,
+  sendTransactional,
+  upsertBrevoContact,
+  type BrevoAttributes,
+} from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -163,9 +168,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // rejections without surfacing them — bit us 2026-05-12 with the sheet
   // append returning {ok:false, error:'unauthorized'}).
   const task = (async () => {
+    // U1 leg runs the Brevo contact upsert sequentially BEFORE the
+    // transactional send, mirroring the upsertLearnerInBrevo →
+    // sendU1Transactional pattern in _shared/route-lead.ts. The upsert
+    // lands FIRSTNAME + B2B_* attributes per
+    // switchable/site/docs/switchable-for-business/note-for-sasha.md §5
+    // so any Brevo Automation triggered by attribute or by U1 send has
+    // the namespaced employer attributes available. Failures inside
+    // the leg are logged by the per-leg surfacing below.
     const results = await Promise.allSettled([
       appendToRiversideSheet(insertedId, row),
-      sendEmployerAckU1(insertedId, row),
+      (async () => {
+        await upsertEmployerInBrevo(insertedId, row);
+        await sendEmployerAckU1(insertedId, row);
+      })(),
       sendProviderNotifyU2(insertedId, row),
     ]);
     const legNames = ["sheet-append", "U1-employer", "U2-provider"];
@@ -401,6 +417,53 @@ async function appendToRiversideSheet(submissionId: number, row: EmployerSubmiss
   }
   if (!parsed?.ok) {
     throw new Error(`sheet append rejected: ${parsed?.error ?? responseText.slice(0, 300)}`);
+  }
+}
+
+async function upsertEmployerInBrevo(submissionId: number, row: EmployerSubmissionRow): Promise<void> {
+  // Mirrors upsertLearnerInBrevo in _shared/route-lead.ts. Pushes the
+  // employer as a Brevo contact with FIRSTNAME / LASTNAME (built-in
+  // Brevo defaults) plus the B2B_* namespaced attributes from
+  // switchable/site/docs/switchable-for-business/note-for-sasha.md §5.
+  // B2B_ namespace keeps employer contacts non-colliding with B2C
+  // SW_* learner contacts if the same email ever appears in both lists.
+  //
+  // Best-effort: failure logs to console but does not throw, so the
+  // downstream U1 transactional send still fires (params travel
+  // inline so U1 can interpolate FIRSTNAME without the contact
+  // existing). Dead-letter is owned by the leg-surfacing path in the
+  // main handler.
+  if (!row.email) return;
+
+  const attributes: BrevoAttributes = {
+    FIRSTNAME: row.first_name ?? "",
+    LASTNAME: row.last_name ?? "",
+    B2B_COMPANY_NAME: row.company_name ?? "",
+    B2B_ROLE_TITLE: row.role_title ?? "",
+    B2B_INTEREST: row.interest ?? "",
+    B2B_CANDIDATE_IN_MIND: row.candidate_in_mind ?? "",
+    B2B_URGENCY: row.urgency ?? "",
+    B2B_LEVY_STATUS: row.levy_status ?? "",
+    B2B_SECTOR: row.sector ?? "",
+    B2B_COMPANY_SIZE: row.company_size_band ?? "",
+    B2B_EXISTING_APPRENTICES: row.existing_apprentices ?? "",
+    B2B_HEADCOUNT_ESTIMATE: row.headcount_estimate ?? "",
+    B2B_LEAD_TYPE: "employer_apprenticeship",
+    B2B_MATCHED_PROVIDER: row.routing_outcome === "routed" ? "riverside" : "",
+    B2B_ROUTING_OUTCOME: row.routing_outcome,
+    B2B_FIRST_SUBMISSION_AT: new Date().toISOString(),
+  };
+
+  const result = await upsertBrevoContact({
+    email: row.email,
+    attributes,
+    marketingOptIn: row.marketing_opt_in,
+  });
+
+  if (!result.ok) {
+    console.error(
+      `upsert employer contact failed (submission ${submissionId}): ${result.error ?? "unknown"}`,
+    );
   }
 }
 
