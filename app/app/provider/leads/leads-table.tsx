@@ -53,6 +53,10 @@ export interface LeadRow {
   company_name: string | null;
   role_title: string | null;
   sector: string | null;
+  // Region label for learner leads — pulled from leads.submissions.region.
+  // Surfaced on the leads table so the working user can spot routing /
+  // travel implications at a glance. NULL on employer rows.
+  region: string | null;
 }
 
 export type Filter =
@@ -580,6 +584,9 @@ export function LeadsTable({
                   <th className="text-left px-4 py-3 font-semibold w-20">ID</th>
                   <th className="text-left px-4 py-3 font-semibold">Name</th>
                   <th className="text-left px-4 py-3 font-semibold">{isEmployerView ? "Company" : "Course"}</th>
+                  {!isEmployerView && (
+                    <th className="text-left px-4 py-3 font-semibold">Region</th>
+                  )}
                   <th className="text-left px-4 py-3 font-semibold">In your queue</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
                 </tr>
@@ -660,6 +667,11 @@ export function LeadsTable({
                         <div className="text-xs text-slate-500">{subLabel}</div>
                       )}
                     </td>
+                    {!isEmployerView && (
+                      <td className="px-4 py-3 text-slate-700 text-xs">
+                        {r.region ?? <span className="text-slate-400">-</span>}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-slate-700 tabular-nums">
                       <DurationTimer since={r.routed_at} />
                     </td>

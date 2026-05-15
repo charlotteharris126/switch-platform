@@ -15,24 +15,37 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 type Audience = "learner" | "employer";
 
+export interface SlaTerms {
+  agreementVersion: "v1" | "v2";
+  firstAttemptHours: number;
+  attemptsRequired: number;
+  attemptWindowDays: number;
+  staleAttemptHours: number;
+  presumedFlipDays: number;
+}
+
 interface Props {
   audience: Audience;
   greetingName: string;
   providerLabel: string;
-  // Server Action that flips crm.provider_users.welcome_completed_at and
-  // redirects to /provider. Fired by the final-slide CTA. No-op if the
-  // user has already completed previously (revisits from /provider/support).
+  slaTerms: SlaTerms;
+  // Server Action that flips crm.provider_users.welcome_completed_at
+  // + sla_accepted_at + writes an audit row, then redirects to
+  // /provider. Fired by the final-slide "I agree" button.
   onComplete: () => Promise<void>;
 }
 
-export function WelcomeDeck({ audience, greetingName, providerLabel, onComplete }: Props) {
+export function WelcomeDeck({ audience, greetingName, providerLabel, slaTerms, onComplete }: Props) {
   const slides = audience === "employer"
     ? employerSlides(greetingName, providerLabel)
     : learnerSlides(greetingName, providerLabel);
 
   const [index, setIndex] = useState(0);
   const [completing, startCompleteTransition] = useTransition();
-  const total = slides.length;
+  const [agreed, setAgreed] = useState(false);
+  // total = data slides (1..N-1) + 1 SLA terminator (index N-1).
+  const total = slides.length + 1;
+  const slaIndex = slides.length;
   const touchStartX = useRef<number | null>(null);
 
   const goTo = useCallback(
@@ -64,8 +77,9 @@ export function WelcomeDeck({ audience, greetingName, providerLabel, onComplete 
     touchStartX.current = null;
   };
 
-  const current = slides[index];
-  const isLast = index === total - 1;
+  const isSlaSlide = index === slaIndex;
+  const isLast = isSlaSlide;
+  const current = isSlaSlide ? null : slides[index];
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white flex flex-col">
@@ -80,7 +94,7 @@ export function WelcomeDeck({ audience, greetingName, providerLabel, onComplete 
         </div>
 
         <div className="mt-4 flex items-center gap-1.5" aria-label="Progress">
-          {slides.map((_, i) => (
+          {Array.from({ length: total }).map((_, i) => (
             <button
               key={i}
               type="button"
@@ -108,15 +122,26 @@ export function WelcomeDeck({ audience, greetingName, providerLabel, onComplete 
             <p className="text-xs uppercase tracking-widest text-slate-500 font-semibold mb-2">
               Step {index + 1} of {total}
             </p>
-            <h1 className="text-3xl md:text-4xl font-semibold text-slate-900 leading-tight">
-              {current.title}
-            </h1>
-            <p className="mt-4 text-base md:text-lg text-slate-700 leading-relaxed">
-              {current.body}
-            </p>
-            {current.visual ? (
-              <div className="mt-8">{current.visual}</div>
-            ) : null}
+            {isSlaSlide ? (
+              <SlaSlide
+                audience={audience}
+                slaTerms={slaTerms}
+                agreed={agreed}
+                onAgreedChange={setAgreed}
+              />
+            ) : (
+              <>
+                <h1 className="text-3xl md:text-4xl font-semibold text-slate-900 leading-tight">
+                  {current!.title}
+                </h1>
+                <p className="mt-4 text-base md:text-lg text-slate-700 leading-relaxed">
+                  {current!.body}
+                </p>
+                {current!.visual ? (
+                  <div className="mt-8">{current!.visual}</div>
+                ) : null}
+              </>
+            )}
           </div>
         </div>
       </main>
@@ -134,15 +159,15 @@ export function WelcomeDeck({ audience, greetingName, providerLabel, onComplete 
           {isLast ? (
             <button
               type="button"
-              disabled={completing}
+              disabled={completing || !agreed}
               onClick={() => {
                 startCompleteTransition(() => {
                   onComplete().catch(() => {});
                 });
               }}
-              className="inline-flex items-center justify-center rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold px-5 py-2.5 transition-colors disabled:opacity-60"
+              className="inline-flex items-center justify-center rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold px-5 py-2.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {completing ? "Taking you in..." : "Take me to my portal →"}
+              {completing ? "Taking you in..." : "I agree, take me in →"}
             </button>
           ) : (
             <button
@@ -182,12 +207,12 @@ function learnerSlides(name: string, providerLabel: string): Slide[] {
   return [
     {
       title: `Welcome, ${name}!`,
-      body: "Lovely to have you with us. This is a quick tour of the portal so you can find your way around, it should only take a minute.",
+      body: "This is a quick tour of the portal so you can find your way around.",
       visual: <HeroVisual providerLabel={providerLabel} />,
     },
     {
       title: "Your home page is built around what needs you now.",
-      body: "Four cards sit at the top, and each one only shows a number when there's something for you to action. So if it's quiet, you really are on top of things.",
+      body: "Four cards sit at the top, and each one only shows a number when there's something for you to action. So if it's quiet, you really are on top of things. Each card shows how long the oldest item has been waiting, and an Overdue badge fires when something needs urgent attention, so the most pressing leads are always the first thing you see.",
       visual: <AnimatedActionCards audience="learner" />,
     },
     {
@@ -207,7 +232,7 @@ function learnerSlides(name: string, providerLabel: string): Slide[] {
     },
     {
       title: "And this part really matters.",
-      body: "Every status you set kicks off something on our side. Nurture emails go out to the learner, the 14-day auto-enrol clock starts and resets, and the leads we send you next get smarter from how previous ones turned out. So keeping statuses up to date is the single most useful thing you can do in here.",
+      body: "Every status you set kicks off something on our side. Nurture emails go out to the learner based on where you've got to, and the leads we send you next get smarter from how previous ones turned out. So keeping statuses up to date is the single most useful thing you can do in here.",
       visual: <AutomationsVisual audience="learner" />,
     },
     {
@@ -217,18 +242,13 @@ function learnerSlides(name: string, providerLabel: string): Slide[] {
     },
     {
       title: "Notes are for your team and ours, never the learner.",
-      body: "Anything you type on a lead stays inside your team and our support team. The learner never sees it. We'll chime in occasionally too, our notes show up in blue. There are two timers at the top of every lead, one for total time in your queue, and one for how long it's been since you last updated their status.",
+      body: "Anything you type on a lead stays inside your team and our support team. The learner never sees it. When we leave a note for you, like a callback request or anything time-sensitive, our note shows up in blue and we email you straight away so it doesn't get missed. Two timers sit at the top of every lead, one for total time in your queue, and one for how long it's been since you last updated their status.",
       visual: <AnimatedNotes audience="learner" />,
     },
     {
-      title: "Your first three enrolments are on us.",
-      body: "After that it's £150 per funded enrolment, or 15% of fee for self-funded and loan-funded (capped between £75 and £150). One invoice a month, paid by Direct Debit. You can see your free-three progress on the Account page any time.",
-      visual: <AnimatedFreeThree />,
-    },
-    {
-      title: "And that's you, all set!",
-      body: "If anything ever looks off, the Support tab has answers to the things we get asked most, plus a quick form that comes straight to us. You can also email support@switchleads.co.uk and we'll come back to you within one working day.",
-      visual: <ReadyVisual />,
+      title: "Got a question? Support is one click away.",
+      body: "The Support tab inside the portal has shortcuts to the questions we get asked most, plus a quick form that comes straight to us. You can also email support@switchleads.co.uk if that's easier. Either way, we aim to come back to you within one working day.",
+      visual: <SupportVisual />,
     },
   ];
 }
@@ -237,12 +257,12 @@ function employerSlides(name: string, providerLabel: string): Slide[] {
   return [
     {
       title: `Welcome, ${name}!`,
-      body: "Lovely to have you with us. This is a quick tour of the portal so you can find your way around, it should only take a minute.",
+      body: "This is a quick tour of the portal so you can find your way around.",
       visual: <HeroVisual providerLabel={providerLabel} />,
     },
     {
       title: "Your home page is built around what needs you now.",
-      body: "Four cards sit at the top, and each one only shows a number when there's something for you to action. So if it's quiet, you really are on top of things.",
+      body: "Four cards sit at the top, and each one only shows a number when there's something for you to action. So if it's quiet, you really are on top of things. Each card shows how long the oldest item has been waiting, and an Overdue badge fires when something needs urgent attention, so the most pressing leads are always the first thing you see.",
       visual: <AnimatedActionCards audience="employer" />,
     },
     {
@@ -262,13 +282,8 @@ function employerSlides(name: string, providerLabel: string): Slide[] {
     },
     {
       title: "And this part really matters.",
-      body: "Every status you set kicks off something on our side. Follow-up emails go out to the employer, the 60-day auto-signed clock starts and resets, and the leads we send you next get smarter from how previous ones turned out. So keeping statuses up to date is the single most useful thing you can do in here.",
+      body: "Every status you set kicks off something on our side. Follow-up emails go out to the employer based on where you've got to, and the leads we send you next get smarter from how previous ones turned out. So keeping statuses up to date is the single most useful thing you can do in here.",
       visual: <AutomationsVisual audience="employer" />,
-    },
-    {
-      title: "About that 60-day clock.",
-      body: "Once a lead is at Engaged or In progress, you've got 60 days from your last status update to confirm a Signed outcome. At day 50 you'll see a clock-approaching flag, and at day 60 it auto-flips to Presumed signed, which means we'll invoice unless you raise a dispute within 7 days. Every status update resets the clock, so move leads forward as soon as anything changes.",
-      visual: <AnimatedSixtyDayClock />,
     },
     {
       title: "Closing one out is just as easy.",
@@ -277,18 +292,13 @@ function employerSlides(name: string, providerLabel: string): Slide[] {
     },
     {
       title: "Notes are for your team and ours, never the employer.",
-      body: "Anything you type on a lead stays inside your team and our support team. The employer never sees it. We'll chime in occasionally too, our notes show up in blue. There are two timers at the top of every lead, one for total time in your queue, and one for how long it's been since you last updated their status.",
+      body: "Anything you type on a lead stays inside your team and our support team. The employer never sees it. When we leave a note for you, like a callback request or anything time-sensitive, our note shows up in blue and we email you straight away so it doesn't get missed. Two timers sit at the top of every lead, one for total time in your queue, and one for how long it's been since you last updated their status.",
       visual: <AnimatedNotes audience="employer" />,
     },
     {
-      title: "Your first Employer Signed is on us.",
-      body: "After that it's £400 flat per Employer Signed, across all apprenticeship levels (L2 to L7). One invoice a month, paid by Direct Debit. Fees are ex VAT for now, and once we're VAT-registered the rate stays the same with VAT added on top.",
-      visual: <AnimatedFreeOne />,
-    },
-    {
-      title: "And that's you, all set!",
-      body: "If anything ever looks off, the Support tab has answers to the things we get asked most, plus a quick form that comes straight to us. You can also email support@switchleads.co.uk and we'll come back to you within one working day.",
-      visual: <ReadyVisual />,
+      title: "Got a question? Support is one click away.",
+      body: "The Support tab inside the portal has shortcuts to the questions we get asked most, plus a quick form that comes straight to us. You can also email support@switchleads.co.uk if that's easier. Either way, we aim to come back to you within one working day.",
+      visual: <SupportVisual />,
     },
   ];
 }
@@ -369,24 +379,12 @@ function useStaggeredReveal(count: number, msPerItem = 220): boolean[] {
 function HeroVisual({ providerLabel }: { providerLabel: string }) {
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
-            {providerLabel}
-          </p>
-          <p className="text-base font-semibold text-slate-900 mt-1">
-            Welcome back
-          </p>
-        </div>
-        <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-right">
-          <p className="text-[9px] uppercase tracking-widest text-slate-500 font-semibold">
-            Enrolments, 30d
-          </p>
-          <p className="text-2xl font-semibold tabular-nums text-slate-900 leading-none mt-0.5">
-            0
-          </p>
-        </div>
-      </div>
+      <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
+        {providerLabel}
+      </p>
+      <p className="text-base font-semibold text-slate-900 mt-1">
+        Welcome back
+      </p>
     </div>
   );
 }
@@ -756,13 +754,12 @@ function AutomationsVisual({ audience }: { audience: Audience }) {
   const rows = audience === "employer"
     ? [
         { status: "Engaged", pillTone: "blue" as const, fires: "Follow-up email to the employer" },
-        { status: "In progress", pillTone: "amber" as const, fires: "60-day clock resets" },
-        { status: "Signed", pillTone: "emerald" as const, fires: "Billable enrolment logged + invoice queued" },
+        { status: "Signed", pillTone: "emerald" as const, fires: "Confirmation email + your enrolment is logged" },
       ]
     : [
         { status: "1st no answer", pillTone: "amber" as const, fires: "Nudge email to the learner" },
         { status: "Meeting booked", pillTone: "blue" as const, fires: "Chaser emails pause" },
-        { status: "Enrolled", pillTone: "emerald" as const, fires: "14-day clock resets, success email sends" },
+        { status: "Enrolled", pillTone: "emerald" as const, fires: "Success email sends to the learner" },
       ];
   const reveal = useStaggeredReveal(rows.length, 380);
   const pillPalette = {
@@ -797,119 +794,169 @@ function AutomationsVisual({ audience }: { audience: Audience }) {
   );
 }
 
-// ---------- 60-day clock (animated progress bar) ----------
+// ---------- Support area (FAQ + send-message preview) ----------
 
-function AnimatedSixtyDayClock() {
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    const t = window.setTimeout(() => setWidth(83), 300);
-    return () => clearTimeout(t);
-  }, []);
-
+function SupportVisual() {
+  const reveal = useStaggeredReveal(3, 220);
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5">
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <p className="text-xs font-semibold text-slate-900">Engaged on 12 Mar</p>
-        <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded border bg-orange-50 text-orange-800 border-orange-200">
-          Day 52 of 60
-        </span>
+    <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+      <div
+        className={`bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 transition-all duration-500 ${
+          reveal[0] ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"
+        }`}
+      >
+        <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
+          Common questions
+        </p>
+        <div className="mt-2 space-y-1.5 text-xs text-slate-700">
+          <p>• How do I mark an outcome on a lead?</p>
+          <p>• What does the Fastrack badge mean?</p>
+          <p>• Where do my notes go?</p>
+        </div>
       </div>
-      <div className="relative h-3 bg-slate-100 rounded-full overflow-hidden">
-        <div
-          className="absolute inset-y-0 left-0 bg-gradient-to-r from-amber-300 to-amber-500 transition-all"
-          style={{ width: `${width}%`, transitionDuration: "1400ms", transitionTimingFunction: "cubic-bezier(0.16, 1, 0.3, 1)" }}
-        />
-        <div className="absolute inset-y-0 right-[17%] w-px bg-rose-500" />
-      </div>
-      <div className="flex items-center justify-between mt-2 text-[10px] text-slate-500">
-        <span>Engaged</span>
-        <span>Day 50: clock-approaching flag</span>
-        <span>Day 60: auto-flip</span>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Free-three / free-one widgets (sequential dot light-up) ----
-
-function AnimatedFreeThree() {
-  const reveal = useStaggeredReveal(3, 280);
-  // First slot lights up emerald to signal "1 of 3 used"
-  return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-        Your free three
-      </p>
-      <div className="flex items-center gap-2">
-        {[0, 1, 2].map((i) => (
-          <div
-            key={i}
-            className={`flex-1 h-14 rounded-lg border flex items-center justify-center text-xs font-semibold transition-all duration-500 ${
-              reveal[i]
-                ? i === 0
-                  ? "bg-emerald-50 border-emerald-200 text-emerald-800 scale-100"
-                  : "bg-slate-50 border-slate-200 text-slate-500 scale-100"
-                : "bg-slate-50 border-slate-200 text-slate-300 scale-95 opacity-0"
-            }`}
-          >
-            {i === 0 ? "Enrolled" : `Free #${i + 1}`}
+      <div
+        className={`border border-slate-200 rounded-lg p-3 transition-all duration-500 ${
+          reveal[1] ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"
+        }`}
+      >
+        <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-2">
+          Send us a message
+        </p>
+        <div className="space-y-1.5">
+          <div className="h-7 rounded border border-slate-200 bg-slate-50 px-2 flex items-center text-[11px] text-slate-400">
+            Subject
           </div>
-        ))}
+          <div className="h-12 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-400">
+            How can we help?
+          </div>
+        </div>
+        <button
+          type="button"
+          tabIndex={-1}
+          className="mt-2 inline-flex items-center justify-center rounded-md bg-slate-900 text-white text-[11px] font-semibold px-3 py-1.5 cursor-default"
+        >
+          Send message
+        </button>
       </div>
-      <p className="text-[11px] text-slate-500 mt-3">
-        Funded: £150 each after. Self-funded and loan-funded: 15%, capped £75 to £150.
+      <p
+        className={`text-[11px] text-slate-500 transition-all duration-500 ${
+          reveal[2] ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        Or email <span className="font-semibold text-slate-700">support@switchleads.co.uk</span> — one working day max.
       </p>
     </div>
   );
 }
 
-function AnimatedFreeOne() {
-  const reveal = useStaggeredReveal(2, 380);
+// ---------- SLA terminator slide (final step of the deck) ----------
+
+function SlaSlide({
+  audience,
+  slaTerms,
+  agreed,
+  onAgreedChange,
+}: {
+  audience: Audience;
+  slaTerms: SlaTerms;
+  agreed: boolean;
+  onAgreedChange: (next: boolean) => void;
+}) {
+  const presumedLabel = audience === "employer" ? "Presumed signed" : "Presumed enrolled";
+  const closeoutLabel = audience === "employer" ? "signed" : "enrolled";
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-        Your first Signed
+    <>
+      <h1 className="text-3xl md:text-4xl font-semibold text-slate-900 leading-tight">
+        One last thing &mdash; your SLA.
+      </h1>
+      <p className="mt-4 text-base md:text-lg text-slate-700 leading-relaxed">
+        This is the day-to-day version of the PPA. Tick to confirm
+        you&apos;ve read it and you&apos;re happy to work to this shape.
       </p>
-      <div className="flex items-center gap-2">
-        <div
-          className={`flex-1 h-14 rounded-lg border flex items-center justify-center text-xs font-semibold transition-all duration-500 ${
-            reveal[0]
-              ? "bg-slate-50 border-slate-200 text-slate-500 opacity-100 scale-100"
-              : "opacity-0 scale-95"
-          }`}
-        >
-          Free one
-        </div>
-        <div
-          className={`flex-1 h-14 rounded-lg border flex items-center justify-center text-xs font-semibold transition-all duration-500 ${
-            reveal[1]
-              ? "bg-white border-slate-200 text-slate-600 opacity-100 scale-100"
-              : "opacity-0 scale-95"
-          }`}
-        >
-          £400 flat after
-        </div>
+
+      <div className="mt-8 bg-white border border-slate-200 rounded-xl divide-y divide-slate-100">
+        <SlaBlock title="Your side">
+          <SlaBullet>
+            First contact with every routed lead within{" "}
+            <strong>{slaTerms.firstAttemptHours} hours</strong> of arrival.
+          </SlaBullet>
+          <SlaBullet>
+            Up to{" "}
+            <strong>
+              {slaTerms.attemptsRequired} attempts over {slaTerms.attemptWindowDays} days
+            </strong>
+            {" "}before marking <em>Cannot reach</em>. The portal nudges you when an attempt
+            has been sitting more than <strong>{slaTerms.staleAttemptHours} hours</strong>.
+          </SlaBullet>
+          <SlaBullet>
+            Keep statuses up to date in the portal as you work each lead.
+          </SlaBullet>
+        </SlaBlock>
+        <SlaBlock title="Our side">
+          <SlaBullet>
+            Every routed lead is pre-screened to match your eligibility criteria.
+            We only bill on confirmed enrolments.
+          </SlaBullet>
+          <SlaBullet>
+            We surface stale leads on your home page with an Overdue badge.
+          </SlaBullet>
+          <SlaBullet>
+            We&apos;re reachable on{" "}
+            <a href="mailto:support@switchleads.co.uk" className="font-semibold text-slate-900 underline-offset-2 hover:underline">
+              support@switchleads.co.uk
+            </a>{" "}
+            for anything that doesn&apos;t look right.
+          </SlaBullet>
+        </SlaBlock>
+        <SlaBlock title={`The ${slaTerms.presumedFlipDays}-day rule`}>
+          <p className="text-sm text-slate-700 leading-relaxed">
+            If a lead stays at <strong>Open</strong> with no outcome for{" "}
+            <strong>{slaTerms.presumedFlipDays} days</strong>, the system marks it{" "}
+            <strong>{presumedLabel}</strong> and triggers billing for that {closeoutLabel}.
+            You&apos;ve got a 7-day window after that to raise a dispute. Updating the
+            status as you work a lead resets the clock and keeps things clean.
+          </p>
+        </SlaBlock>
       </div>
-      <p className="text-[11px] text-slate-500 mt-3">
-        All apprenticeship levels (L2 to L7). Ex VAT pilot rate locked.
-      </p>
-    </div>
-  );
-}
 
-// ---------- Ready ----------
-
-function ReadyVisual() {
-  return (
-    <div className="bg-slate-900 text-white rounded-xl p-5 animate-fade-up">
-      <p className="text-sm font-semibold mb-1">Need anything?</p>
-      <p className="text-sm text-slate-200 leading-relaxed">
-        Support tab inside the portal, or{" "}
-        <span className="font-semibold text-white">
-          support@switchleads.co.uk
+      <label className="mt-6 flex items-start gap-3 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={agreed}
+          onChange={(e) => onAgreedChange(e.target.checked)}
+          className="mt-0.5 w-5 h-5 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+        />
+        <span className="text-sm text-slate-800 leading-snug">
+          I&apos;ve read the above and agree to work to this SLA. I&apos;ll
+          keep lead statuses up to date in the portal.
         </span>
-        . One working day max, usually faster.
+      </label>
+    </>
+  );
+}
+
+function SlaBlock({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="p-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+        {title}
       </p>
+      <div className="space-y-2 text-sm text-slate-800">{children}</div>
     </div>
+  );
+}
+
+function SlaBullet({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex gap-2 leading-snug">
+      <span className="text-slate-400 select-none mt-0.5">•</span>
+      <span>{children}</span>
+    </p>
   );
 }

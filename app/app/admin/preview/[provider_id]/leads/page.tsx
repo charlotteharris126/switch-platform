@@ -56,6 +56,7 @@ interface SubmissionRow {
   company_name: string | null;
   role_title: string | null;
   sector: string | null;
+  region: string | null;
 }
 
 interface EnrolmentRow {
@@ -94,7 +95,7 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
   const submissionsResult = await admin
     .schema("leads")
     .from("submissions")
-    .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector")
+    .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region")
     .eq("primary_routed_to", providerId)
     .not("routed_at", "is", null)
     .is("archived_at", null)
@@ -164,6 +165,7 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
       company_name: s.company_name,
       role_title: s.role_title,
       sector: s.sector,
+      region: s.region,
     };
   });
 
