@@ -1192,12 +1192,17 @@ export async function sendProviderNotification(
   const ownerEmail = getOwnerEmail();
   const ccList = buildCcList(ownerEmail, provider.cc_emails);
 
-  // Action link block — portal first when available, sheet as fallback.
-  const actionBlock = portalLink
-    ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>`
-    : sheetLink
-      ? `<p><a href="${sheetLink}">Open your sheet</a></p>`
-      : "";
+  // Action link block — portal as primary CTA when available, sheet
+  // always rendered as a fallback link below it when present, so the
+  // provider can still reach the lead if the portal misbehaves.
+  const actionBlock = portalLink && sheetLink
+    ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>
+       <p style="font-size:13px;color:#64748b;">Backup: <a href="${sheetLink}">open your sheet</a> if the portal isn't loading.</p>`
+    : portalLink
+      ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>`
+      : sheetLink
+        ? `<p><a href="${sheetLink}">Open your sheet</a></p>`
+        : "";
 
   // Re-application: PII-free, references the parent lead by its label.
   if (trigger === "re_application" && reApplicationContext) {

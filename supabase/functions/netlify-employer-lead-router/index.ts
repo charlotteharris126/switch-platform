@@ -590,11 +590,17 @@ async function sendProviderNotifyU2(submissionId: number, row: EmployerSubmissio
   const sheetLink = providerRow.sheet_id
     ? `https://docs.google.com/spreadsheets/d/${providerRow.sheet_id}/edit`
     : null;
-  const actionBlock = portalLink
-    ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>`
-    : sheetLink
-      ? `<p><a href="${sheetLink}">Open your sheet</a></p>`
-      : "";
+  // Always surface sheet as fallback when present. Portal is primary CTA
+  // for portal-enabled providers; sheet sits below as a backup if the
+  // portal misbehaves. For pre-portal providers, sheet is the only link.
+  const actionBlock = portalLink && sheetLink
+    ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>
+       <p style="font-size:13px;color:#64748b;">Backup: <a href="${sheetLink}">open your sheet</a> if the portal isn't loading.</p>`
+    : portalLink
+      ? `<p><a href="${portalLink}">Open this lead in your SwitchLeads portal</a></p>`
+      : sheetLink
+        ? `<p><a href="${sheetLink}">Open your sheet</a></p>`
+        : "";
   const contextLine = portalLink
     ? `<p>The lead is at status <strong>open</strong>. Click through to see the employer's details, mark outcomes as you progress, and add notes.</p>`
     : `<p>The lead has been added with status <strong>open</strong>. Please update the status and notes as you work through.</p>`;
