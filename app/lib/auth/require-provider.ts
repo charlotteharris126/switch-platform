@@ -54,7 +54,7 @@ export async function requireProviderUser(
   const { data: pu } = await admin
     .schema("crm")
     .from("provider_users")
-    .select("id, provider_id, contact_email, display_name, role, status, welcome_completed_at")
+    .select("id, provider_id, contact_email, display_name, role, status, welcome_completed_at, sla_accepted_at, sla_accepted_version")
     .eq("auth_user_id", user.id)
     .eq("status", "active")
     .maybeSingle<{
@@ -65,6 +65,8 @@ export async function requireProviderUser(
       role: string;
       status: string;
       welcome_completed_at: string | null;
+      sla_accepted_at: string | null;
+      sla_accepted_version: string | null;
     }>();
 
   if (!pu) {
@@ -81,20 +83,15 @@ export async function requireProviderUser(
     redirect("/provider/welcome");
   }
 
-  // SLA acceptance gate. Provider must have re-accepted the current
-  // version (signed via the in-portal /provider/sla-agreement page)
-  // before any other portal route renders. Acceptance lives on the
-  // provider record (per-provider, not per-user), so once any team
-  // member accepts, the whole team is unblocked.
-  const { data: providerRow } = await admin
-    .schema("crm")
-    .from("providers")
-    .select("sla_accepted_at, sla_accepted_version")
-    .eq("provider_id", pu.provider_id)
-    .maybeSingle<{ sla_accepted_at: string | null; sla_accepted_version: string | null }>();
+  // SLA acceptance gate. Per-user as of 2026-05-15 (Charlotte's call):
+  // every team member accepts individually so managers don't have to
+  // forward the SLA on to new staff. Each acceptance writes an audit
+  // row via /provider/sla-agreement actions.ts. Provider-level columns
+  // on crm.providers stay as historical first-acceptance markers but
+  // are no longer the gate.
   const hasAcceptedCurrent =
-    !!providerRow?.sla_accepted_at
-    && providerRow?.sla_accepted_version === SLA_VERSION;
+    !!pu.sla_accepted_at
+    && pu.sla_accepted_version === SLA_VERSION;
   if (!hasAcceptedCurrent) {
     redirect("/provider/sla-agreement");
   }

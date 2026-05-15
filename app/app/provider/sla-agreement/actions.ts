@@ -1,8 +1,12 @@
 "use server";
 
 // Server actions for the SLA agreement page:
-//   - acceptSlaAction: provider admin clicks "I agree", stamps the
-//     provider row + writes audit, redirects to portal home.
+//   - acceptSlaAction: ANY signed-in provider user (admin or regular)
+//     clicks "I agree", stamps their own crm.provider_users row +
+//     writes an audit row, redirects to portal home. Per-user, not
+//     per-provider: every team member accepts individually so managers
+//     don't have to forward the SLA on to new staff (Charlotte
+//     2026-05-15).
 //   - signOutFromSlaAction: handles the sign-out button on the SLA
 //     page (the page sits OUTSIDE the standard ProviderShell so it
 //     doesn't get the shell's signout for free).
@@ -30,7 +34,7 @@ export async function acceptSlaAction(_formData: FormData): Promise<void> {
   }
 
   const admin = createAdminClient();
-  // Find this user's provider_users row → which provider they belong to.
+  // Find this user's provider_users row.
   const { data: pu, error: puErr } = await admin
     .schema("crm")
     .from("provider_users")
@@ -41,41 +45,39 @@ export async function acceptSlaAction(_formData: FormData): Promise<void> {
   if (puErr || !pu) {
     throw new Error("Couldn't resolve your provider account. Email support@switchleads.co.uk.");
   }
-  // Only the provider admin can accept on behalf of the company. Defends
-  // against a misordered invite where a team member signs in before the
-  // admin (rare — admin is always the first invitee — but defensive
-  // belt-and-braces). UI also enforces this so the button isn't even
-  // shown for non-admins.
-  if (pu.role !== "provider_admin") {
-    throw new Error("Only the provider admin can accept the SLA. Ask your admin to sign in first.");
-  }
 
   const nowIso = new Date().toISOString();
+  // Per-user acceptance row. Writes to crm.provider_users instead of
+  // crm.providers. Provider-level columns on crm.providers stay as
+  // historical first-acceptance marker but are no longer the auth gate.
   const { error: updErr } = await admin
     .schema("crm")
-    .from("providers")
+    .from("provider_users")
     .update({
-      sla_accepted_at:         nowIso,
-      sla_accepted_by_user_id: pu.id,
-      sla_accepted_version:    SLA_VERSION,
-      updated_at:              nowIso,
+      sla_accepted_at:      nowIso,
+      sla_accepted_version: SLA_VERSION,
     })
-    .eq("provider_id", pu.provider_id);
+    .eq("id", pu.id);
 
   if (updErr) {
     throw new Error(`SLA acceptance save failed: ${updErr.message}`);
   }
 
-  // Audit. Uses the public RPC wrapper so the audit schema doesn't have
-  // to be in the Data API exposed-schemas list. Best-effort: if audit
-  // write fails, the acceptance still landed — log but don't block.
+  // Audit: one row per acceptance, named by user. Best-effort: if
+  // audit write fails, the acceptance still landed — log but don't
+  // block.
   const { error: auditErr } = await admin.rpc("log_provider_action_v1", {
     p_action:       "accept_sla",
-    p_target_table: "crm.providers",
-    p_target_id:    pu.provider_id,
+    p_target_table: "crm.provider_users",
+    p_target_id:    String(pu.id),
     p_before:       null,
     p_after:        { sla_accepted_at: nowIso, sla_accepted_version: SLA_VERSION },
-    p_context:      { provider_user_id: pu.id, accepted_by_auth_user_id: userData.user.id },
+    p_context:      {
+      provider_user_id:        pu.id,
+      provider_id:             pu.provider_id,
+      role:                    pu.role,
+      accepted_by_auth_user_id: userData.user.id,
+    },
   });
   if (auditErr) {
     console.error("SLA acceptance audit write failed:", auditErr.message);

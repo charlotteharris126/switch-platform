@@ -1,0 +1,41 @@
+-- Migration 0144 — per-user SLA acceptance on crm.provider_users
+-- Date:   2026-05-15
+-- Author: Sasha (Charlotte's session)
+-- Reason:
+--   SLA acceptance up to now has lived on crm.providers (per-provider).
+--   First admin from a provider accepts, every later team member is
+--   unblocked. Charlotte's call 2026-05-15: every user accepts
+--   individually, with an audit row per acceptance. Reason: managers
+--   don't always pass the SLA on to new staff, so we can't assume
+--   transitive consent within a provider's team.
+--
+--   New columns on crm.provider_users:
+--     - sla_accepted_at      TIMESTAMPTZ NULL
+--     - sla_accepted_version TEXT NULL
+--
+--   The existing per-provider columns on crm.providers stay in place
+--   as historical record (first-acceptance markers) but are no longer
+--   read at the auth gate — that switches to the user row in this
+--   migration's app-code companion (require-provider.ts).
+--
+--   Users who've already signed in pre-migration had their provider
+--   row marked accepted but no personal row. On next sign-in they'll
+--   be re-prompted to accept individually. Pilot scale is small
+--   (Charlotte + a handful of test users) so re-prompting is fine.
+--
+-- Impact:
+--   - crm.provider_users gains two nullable columns. Existing rows
+--     unaffected; both columns default NULL on existing rows.
+--   - require-provider.ts will read these columns going forward.
+--   - /provider/sla-agreement Server Action will write these columns
+--     AND an audit.actions row per acceptance.
+--
+-- UP
+ALTER TABLE crm.provider_users
+  ADD COLUMN sla_accepted_at      TIMESTAMPTZ,
+  ADD COLUMN sla_accepted_version TEXT;
+
+-- DOWN
+-- ALTER TABLE crm.provider_users
+--   DROP COLUMN sla_accepted_at,
+--   DROP COLUMN sla_accepted_version;

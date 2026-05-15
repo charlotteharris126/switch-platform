@@ -42,15 +42,28 @@ export default async function SlaAgreementPage() {
   const { data: pu } = await admin
     .schema("crm")
     .from("provider_users")
-    .select("provider_id, display_name, contact_email, role")
+    .select("provider_id, display_name, contact_email, role, sla_accepted_at, sla_accepted_version")
     .eq("auth_user_id", userData.user.id)
     .eq("status", "active")
-    .maybeSingle<{ provider_id: string; display_name: string | null; contact_email: string; role: string }>();
+    .maybeSingle<{
+      provider_id: string;
+      display_name: string | null;
+      contact_email: string;
+      role: string;
+      sla_accepted_at: string | null;
+      sla_accepted_version: string | null;
+    }>();
   if (!pu) {
     await supabase.auth.signOut();
     redirect("/provider-login?error=no_active_account");
   }
-  const isAdminRole = pu.role === "provider_admin";
+
+  // Per-user acceptance gate: if this user has already accepted the
+  // current version, send them through. Provider-level columns on
+  // crm.providers are no longer read for the gate (Charlotte 2026-05-15).
+  if (pu.sla_accepted_at && pu.sla_accepted_version === SLA_VERSION) {
+    redirect("/provider");
+  }
 
   const { data: row } = await admin
     .schema("crm")
@@ -75,12 +88,9 @@ export default async function SlaAgreementPage() {
     );
   }
 
-  // If they've already accepted the current version, send them to /provider.
-  // (Layout gate handles the reverse direction.)
-  if (row.sla_accepted_at && row.sla_accepted_version === SLA_VERSION) {
-    redirect("/provider");
-  }
-
+  // Per-user check above is now the auth gate; provider-level
+  // sla_accepted_at remains on the row as historical first-acceptance
+  // marker but is not read for redirect.
   const presumedLabel = row.agreement_version === "v2" ? "Presumed signed" : "Presumed enrolled";
   const closeoutLabel = row.agreement_version === "v2" ? "signed" : "enrolled";
   const greetingName = pu.display_name ?? pu.contact_email;
@@ -163,22 +173,7 @@ export default async function SlaAgreementPage() {
           </p>
         </Section>
 
-        {isAdminRole ? (
-          <AcceptForm />
-        ) : (
-          <div className="bg-amber-50 border border-amber-200 rounded-md p-4">
-            <p className="text-sm text-amber-900 font-semibold">
-              Your admin needs to sign in and accept this first.
-            </p>
-            <p className="text-sm text-amber-800 mt-2">
-              The provider admin on your team has to read and confirm this
-              agreement before anyone else on the team gets portal access.
-              Ping them to log in, or email{" "}
-              <a href="mailto:support@switchleads.co.uk" className="underline">support@switchleads.co.uk</a>
-              {" "}if you&apos;re not sure who that is.
-            </p>
-          </div>
-        )}
+        <AcceptForm />
       </div>
     </FallbackShell>
   );
