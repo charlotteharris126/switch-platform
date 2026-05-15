@@ -428,12 +428,40 @@ async function upsertEmployerInBrevo(submissionId: number, row: EmployerSubmissi
   // B2B_ namespace keeps employer contacts non-colliding with B2C
   // SW_* learner contacts if the same email ever appears in both lists.
   //
-  // Best-effort: failure logs to console but does not throw, so the
-  // downstream U1 transactional send still fires (params travel
-  // inline so U1 can interpolate FIRSTNAME without the contact
-  // existing). Dead-letter is owned by the leg-surfacing path in the
-  // main handler.
+  // Provider-level attributes (B2B_PROVIDER_NAME +
+  // B2B_PROVIDER_TRUST_LINE) come from a SELECT against crm.providers
+  // keyed by row.primary_routed_to. For v1 that's always
+  // 'riverside-training' on the routed path. For DQ leads (no
+  // primary_routed_to), both attributes ship as empty strings so the
+  // U1 template renders cleanly even if it's ever fired against a
+  // DQ branch.
+  //
+  // Best-effort: failure of either the provider lookup or the upsert
+  // logs to console but does not throw, so the downstream U1
+  // transactional send still fires (FIRSTNAME / COMPANY / etc. travel
+  // inline as transactional params). Dead-letter is owned by the
+  // leg-surfacing path in the main handler.
   if (!row.email) return;
+
+  let providerName = "";
+  let providerTrustLine = "";
+  if (row.primary_routed_to) {
+    try {
+      const providerRows = await sql<Array<{ name: string | null; b2b_trust_line: string | null }>>`
+        SELECT name, b2b_trust_line
+          FROM crm.providers
+         WHERE provider_id = ${row.primary_routed_to}
+         LIMIT 1
+      `;
+      const provider = providerRows[0];
+      providerName = provider?.name ?? "";
+      providerTrustLine = provider?.b2b_trust_line ?? "";
+    } catch (err) {
+      console.error(
+        `provider lookup failed (submission ${submissionId}, provider ${row.primary_routed_to}): ${describeError(err)}`,
+      );
+    }
+  }
 
   const attributes: BrevoAttributes = {
     FIRSTNAME: row.first_name ?? "",
@@ -450,6 +478,8 @@ async function upsertEmployerInBrevo(submissionId: number, row: EmployerSubmissi
     B2B_HEADCOUNT_ESTIMATE: row.headcount_estimate ?? "",
     B2B_LEAD_TYPE: "employer_apprenticeship",
     B2B_MATCHED_PROVIDER: row.routing_outcome === "routed" ? "riverside" : "",
+    B2B_PROVIDER_NAME: providerName,
+    B2B_PROVIDER_TRUST_LINE: providerTrustLine,
     B2B_ROUTING_OUTCOME: row.routing_outcome,
     B2B_FIRST_SUBMISSION_AT: new Date().toISOString(),
   };

@@ -4,6 +4,17 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-15 (Session 46) — B2B_PROVIDER_NAME + B2B_PROVIDER_TRUST_LINE on employer router
+
+Wren rewrote U1-employer to reference `{{contact.B2B_PROVIDER_NAME}}` + `{{contact.B2B_PROVIDER_TRUST_LINE}}` instead of hardcoding Riverside trust prose, so the same template serves v2+ providers without re-templating. The 2026-05-14 employer upsert was pushing neither attribute, so live sends would render two blanks until the parallel work lands.
+
+- **Migration 0142** Adds `crm.providers.b2b_trust_line TEXT` (nullable). New column rather than reusing `trust_line` because the audience register diverges (HRD/L&D vs adult learner). Per `feedback_no_patchwork.md`, forking at the schema layer beats re-templating at v2.
+- **Data-ops 032** Backfills Riverside's `b2b_trust_line` with the canonical prose Wren had hardcoded ("30 years … NHS / BMW / MINI / Five Guys / Wiley"). One-row UPDATE + audit row. Charlotte runs after migration 0142 lands.
+- **`netlify-employer-lead-router` upsertEmployerInBrevo extended** to SELECT `name` + `b2b_trust_line` from `crm.providers` keyed by `row.primary_routed_to`. For v1 that resolves to riverside-training; v2+ resolves dynamically from routing. Pushes `B2B_PROVIDER_NAME` + `B2B_PROVIDER_TRUST_LINE` alongside the other B2B_* attributes. Provider-lookup failure logs but doesn't throw — attributes ship as empty strings rather than blocking the upsert.
+- Sequence: Charlotte applies 0142, runs 032, pings me to deploy the function, then pastes the new U1-employer template HTML into the live Brevo template. Current Brevo template stays serving until 5 (avoid blank placeholders in real employer inboxes).
+- Cross-project: Mable updates `data/apprenticeship-providers/<slug>.yml` + `/new-apprenticeship-provider` skill to prompt for `b2b_trust_line` at onboarding once 0142 is live (her skill insert needs the column to exist).
+- Signed off: Charlotte (session 2026-05-15).
+
 ## 2026-05-14 (Session 45, addendum) — Data-ops 031 closes Riverside test-enrolment gap
 
 Solis flagged that data-ops 030 left two leftover open enrolment rows (540, 541) attached to subs 421 and 422 — both already flagged `is_dq=true, dq_reason='owner_test_submission'` from earlier sessions, but outside 030's narrow id range (423-427). Enrolment-id sequence jumps 541 → 547 after 030 confirmed the gap.
