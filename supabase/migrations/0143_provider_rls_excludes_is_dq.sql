@@ -38,7 +38,7 @@ DROP POLICY IF EXISTS provider_read_submissions ON leads.submissions;
 CREATE POLICY provider_read_submissions
   ON leads.submissions
   FOR SELECT
-  TO provider_user
+  TO authenticated
   USING (
     primary_routed_to = crm.provider_user_provider_id()
     AND is_dq IS NOT TRUE
@@ -51,5 +51,5 @@ COMMIT;
 -- CREATE POLICY provider_read_submissions
 --   ON leads.submissions
 --   FOR SELECT
---   TO provider_user
+--   TO authenticated
 --   USING (primary_routed_to = crm.provider_user_provider_id());
