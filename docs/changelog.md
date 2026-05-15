@@ -4,6 +4,17 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-15 (Session 47) — U1 funded splits by fastrack state
+
+Wren is splitting the U1 funded template into pre-fastrack vs post-fastrack variants. Pre-fastrack keeps the "Get a head start" push; post-fastrack drops it (the learner has already fastracked, the push would be redundant). Split via two templates rather than Liquid conditional per `feedback_brevo_no_liquid_conditionals.md`. Platform side reads a second env var and branches.
+
+- **`_shared/route-lead.ts` `sendU1Transactional` branches on `submission.fastracked_at`.** New `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` env var used for funded leads with `fastracked_at IS NOT NULL`. Pre-fastrack funded leads + self-funded leads unchanged. Self has no fastrack flow so stays single-template.
+- **Safe rollback path: `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` falls back to `BREVO_TEMPLATE_U1_FUNDED` when unset.** Until Charlotte creates the new template in Brevo and sets the Vault key, fastracked leads keep receiving the original `U1_FUNDED` template (current behaviour). Deploy is safe at any time relative to the Brevo-side work.
+- **No DB migration. No payload schema change. No `crm.email_log` change.** `email_type` stays `u1_funded` for both variants (idempotency keys `(submission_id, email_type)` are unaffected; the per-submission idempotency check inside `sendTransactional` prevents double-sends regardless of which template was chosen).
+- **Infrastructure manifest updated** with the new env var row and a note on the existing `BREVO_TEMPLATE_U1_FUNDED` row that it doubles as the fallback.
+- Sequence: Charlotte creates the post-fastrack template in Brevo Transactional templates, sets `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` in Supabase Vault, then pings me to deploy `routing-confirm` + `netlify-lead-router`. Code is shipped; deploy held pending Charlotte's go.
+- Signed off: Charlotte (session 2026-05-15).
+
 ## 2026-05-15 (Session 46, late) — EMS regional contacts wired into U1 funded ack
 
 Charlotte's call: every EMS Tees Valley funded learner should know which named rep will be ringing them and what mobile number to expect. EMS routes by local authority, three reps cover the five LAs.

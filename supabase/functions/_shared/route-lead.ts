@@ -774,10 +774,13 @@ function renderProviderContactBlock(
 // + submission shape that upsertLearnerInBrevo uses (so contact attributes and
 // transactional params stay consistent), routes to U1_FUNDED vs U1_SELF based
 // on funding_category, and delegates idempotency / retry / dead_letter to
-// sendTransactional. Best-effort: missing template env, missing email, or null
-// funding_category all skip silently. Re-applications skip too — the parent
-// submission already received U1, the new submission_id would otherwise pass
-// the per-submission idempotency check and double-send.
+// sendTransactional. Funded leads further split by fastrack state: leads with
+// fastracked_at set go to U1_FUNDED_POST_FASTRACK (no "Get a head start"
+// push, since they've already done it), all others go to U1_FUNDED.
+// Best-effort: missing template env, missing email, or null funding_category
+// all skip silently. Re-applications skip too — the parent submission already
+// received U1, the new submission_id would otherwise pass the per-submission
+// idempotency check and double-send.
 async function sendU1Transactional(
   sql: Sql,
   provider: ProviderRow,
@@ -792,10 +795,24 @@ async function sendU1Transactional(
   }
 
   const isFunded = submission.funding_category === "gov" || submission.funding_category === "loan";
-  const templateEnvName = isFunded ? "BREVO_TEMPLATE_U1_FUNDED" : "BREVO_TEMPLATE_U1_SELF";
+  const isPostFastrack = isFunded && submission.fastracked_at != null;
+  const templateEnvName = isPostFastrack
+    ? "BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK"
+    : isFunded
+    ? "BREVO_TEMPLATE_U1_FUNDED"
+    : "BREVO_TEMPLATE_U1_SELF";
   const emailType: "u1_funded" | "u1_self" = isFunded ? "u1_funded" : "u1_self";
 
-  const templateId = parseEnvInt(templateEnvName);
+  let templateId = parseEnvInt(templateEnvName);
+  // Safe rollback path: if the post-fastrack template env var isn't set
+  // (rollout in progress, or temporary rollback after a template issue),
+  // fall back to the pre-fastrack funded template. Until Charlotte sets
+  // BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK in Supabase Vault, fastracked
+  // funded leads keep receiving the original U1_FUNDED template, same
+  // behaviour as before the split.
+  if (templateId == null && isPostFastrack) {
+    templateId = parseEnvInt("BREVO_TEMPLATE_U1_FUNDED");
+  }
   if (templateId == null) {
     // Silently skip if the U1 template env var isn't set — no dead_letter
     // spam during shadow setup or template-rebuild windows. Live in
