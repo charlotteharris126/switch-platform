@@ -1,5 +1,33 @@
 # Platform Handoff, Session 45, 2026-05-13
 
+## ⚡ PUSH FROM switchable/email 2026-05-15: B2B_PROVIDER_NAME + B2B_PROVIDER_TRUST_LINE for U1-employer parity with funded path
+
+U1-employer template has been rewritten to mirror the funded U1 pattern: hardcoded Riverside trust prose replaced with `{{contact.B2B_PROVIDER_NAME}}` + `{{contact.B2B_PROVIDER_TRUST_LINE}}`. Sasha-side gap: the upsert added on 2026-05-14 doesn't push either of these attributes yet, so the template will render two blanks on live send until you ship the parallel work below.
+
+**What's needed (three changes):**
+
+1. **Migration** — add `b2b_trust_line TEXT` (nullable) to `crm.providers`. New B2B-specific column rather than reusing `trust_line` because the audience register diverges (employer/HRD vs learner). Per `feedback_no_patchwork.md`, proper architecture now beats a re-template at v2.
+
+2. **Edge Function** — extend the employer upsert in `netlify-employer-lead-router/index.ts` (the one you added 2026-05-14) to also push:
+   - `B2B_PROVIDER_NAME` ← `crm.providers.name` for the matched provider
+   - `B2B_PROVIDER_TRUST_LINE` ← `crm.providers.b2b_trust_line` for the matched provider
+   
+   For v1 the matched provider is hardcoded "riverside-training" per existing routing; lookup is one SELECT against `crm.providers` keyed by `provider_id`.
+
+3. **Riverside data backfill** — populate Riverside's `b2b_trust_line` with the canonical prose I had hardcoded:
+
+   > They've been delivering apprenticeships for over 30 years, are rated Good by Ofsted, have a 98.4% pass rate and run programmes nationwide for employers including the NHS, BMW, MINI, Five Guys and Wiley.
+
+   `UPDATE crm.providers SET b2b_trust_line = '...' WHERE provider_id = 'riverside-training';` Same data-ops pattern as 030.
+
+**Brevo workspace (Charlotte UI step, blocks nothing on your side):** Add `B2B_PROVIDER_NAME` and `B2B_PROVIDER_TRUST_LINE` as TEXT contact attributes at workspace level.
+
+**Cross-project coordination:** Mable is updating the `new-apprenticeship-provider` skill + apprenticeship-provider YAML to mirror this field (push in `switchable/site/docs/current-handoff.md`). When her skill writes new providers to crm.providers, the column from step 1 needs to exist or her insert fails. Sequence: your migration first, then her skill update can use the column.
+
+**Why this matters now (not a future ticket):** U1-employer is currently live with template ID set in Supabase Vault as of 2026-05-14. Every employer submission today renders blank `{{contact.B2B_PROVIDER_NAME}}` + `{{contact.B2B_PROVIDER_TRUST_LINE}}` until your upsert change deploys. Visible regression in real employer inboxes. Priority for next platform session.
+
+---
+
 ## Current state
 
 Provider portal welcome deck shipped to production (audience-aware learner / employer carousel at `/provider/welcome`, admin preview at `/preview/<provider_id>/welcome`). Employer router patched to persist `source_form='s4b-employer-lead-v1'` (Solis Session 3 carry-forward resolved). Data-ops 030 staged but not yet applied; five test leads routed to Riverside still sit live in DB pending the run. Wed paid traffic readiness from prior handoff unchanged: Edge Functions clean, dead-letter signal active, drift reconciler self-healing.
@@ -29,6 +57,7 @@ Provider portal welcome deck shipped to production (audience-aware learner / emp
 11. **RLS `(SELECT fn())` wrap on `crm.disputes` + `leads.fastrack_submissions` (carry forward).** Backlog 869d994un. Trigger: either table crosses ~1000 rows.
 12. **Owner invites for Andy / Jane / Marty (carry forward).** Republish EMS + WYK sheets from DB before sending invites (mostly done in spirit via reconcile work).
 13. **Solis carry-forward.** Schema naming decision `ads_business` vs `ads_switchable_business` before B2B Meta ad ingest. `crm.employer_signings` design before first Riverside Employer Signed event fires.
+14. **(2026-05-14 PUSH FROM Solis Session 3): data-ops 030 already applied + leftover cleanup gap for enrolments 540/541.** Solis confirmed DB state: subs 423-427 carry `is_dq=true, dq_reason='owner_test_submission'`, enrolment rows 542-546 deleted (gap in sequence between 541 and 547). Data-ops 030 ran cleanly. BUT — enrolments 540 (sub 421) and 541 (sub 422) still exist as open Riverside enrolments, same owner-test pattern (Charlotte's own email caught by server-side OWNER_TEST_EMAILS at insert) but predate data-ops 030's 423-427 scope. Please write data-ops 031 to delete these two using the same audit-log + DELETE pattern as 030, OR generalise into a re-usable "test-flagged submission with lingering open enrolment" cleanup script for any future drift between is_dq classification timing and enrolment creation. Quick-glance verification query: `SELECT id, submission_id, provider_id, status FROM crm.enrolments WHERE submission_id IN (421, 422) AND provider_id = 'riverside-training';` — should be empty post-cleanup.
 
 ## Decisions and open questions
 
