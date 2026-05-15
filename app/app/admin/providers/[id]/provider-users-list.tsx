@@ -21,6 +21,9 @@ export interface ProviderUserRow {
   invited_at: string;
   enrolled_at: string | null;
   last_login_at: string | null;
+  sla_accepted_at: string | null;
+  sla_accepted_version: string | null;
+  welcome_completed_at: string | null;
 }
 
 interface Props {

@@ -63,7 +63,7 @@ export default async function ProviderDetailPage({
     supabase
       .schema("crm")
       .from("provider_users")
-      .select("id, contact_email, display_name, role, status, invited_at, enrolled_at, last_login_at")
+      .select("id, contact_email, display_name, role, status, invited_at, enrolled_at, last_login_at, sla_accepted_at, sla_accepted_version, welcome_completed_at")
       .eq("provider_id", providerId)
       .order("invited_at", { ascending: true }),
   ]);
@@ -98,13 +98,37 @@ export default async function ProviderDetailPage({
           {provider.agreement_version && (
             <Badge variant="secondary">PPA {provider.agreement_version}</Badge>
           )}
-          {provider.sla_accepted_at ? (
-            <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
-              SLA accepted {new Date(provider.sla_accepted_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
-            </Badge>
-          ) : (
-            <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">SLA not accepted</Badge>
-          )}
+          {(() => {
+            // SLA acceptance is per-user (crm.provider_users.sla_accepted_at)
+            // as of 2026-05-15. Provider-level columns on crm.providers are
+            // historical only. Badge now reports how many team members have
+            // accepted the current SLA version, derived from the team rows
+            // already loaded above.
+            const acceptedCount = providerUsers.filter(
+              (u) => u.sla_accepted_at != null && u.status !== "removed",
+            ).length;
+            const activeCount = providerUsers.filter((u) => u.status === "active").length;
+            const totalCount = providerUsers.filter((u) => u.status !== "removed").length;
+            if (acceptedCount === 0) {
+              return (
+                <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+                  SLA not accepted ({totalCount} pending)
+                </Badge>
+              );
+            }
+            if (acceptedCount === activeCount && acceptedCount === totalCount) {
+              return (
+                <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                  SLA accepted ({acceptedCount}/{totalCount})
+                </Badge>
+              );
+            }
+            return (
+              <Badge className="bg-amber-50 text-amber-800 hover:bg-amber-50">
+                SLA: {acceptedCount}/{totalCount} accepted
+              </Badge>
+            );
+          })()}
           {provider.auto_flip_enabled === false && (
             <Badge className="bg-rose-100 text-rose-800 hover:bg-rose-100">Auto-flip OFF</Badge>
           )}
