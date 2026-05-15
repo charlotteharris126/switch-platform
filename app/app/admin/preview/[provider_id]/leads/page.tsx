@@ -91,12 +91,15 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
 
   // Match /provider/leads/page.tsx query shape exactly, but manually
   // scope to this provider via primary_routed_to instead of relying on
-  // RLS (admin client bypasses RLS).
+  // RLS (admin client bypasses RLS). The is_dq filter mirrors the
+  // production RLS policy from migration 0143 — preview must hide test
+  // rows the same way the real portal does.
   const submissionsResult = await admin
     .schema("leads")
     .from("submissions")
     .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region")
     .eq("primary_routed_to", providerId)
+    .not("is_dq", "is", true)
     .not("routed_at", "is", null)
     .is("archived_at", null)
     .is("parent_submission_id", null)

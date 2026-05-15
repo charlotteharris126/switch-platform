@@ -72,17 +72,23 @@ export default async function PreviewHomePage({ params }: Props) {
 
   // Same fan-out as /provider/page.tsx but scoped manually to providerId
   // since we bypass RLS via the admin client.
+  // Admin client bypasses RLS, so manually mirror the production
+  // provider RLS policy (migration 0143): scope by primary_routed_to
+  // AND exclude is_dq=true. Without the is_dq filter, preview shows
+  // test rows the real provider never sees, defeating the purpose.
   const [enrolmentsRes, recentSubsRes, allRoutedRes, fastrackRes] = await Promise.all([
     admin
       .schema("crm")
       .from("enrolments")
-      .select("submission_id, status, status_updated_at, callback_requested_at")
-      .eq("provider_id", providerId),
+      .select("submission_id, status, status_updated_at, callback_requested_at, submission:submissions!inner(is_dq)")
+      .eq("provider_id", providerId)
+      .eq("submission.is_dq", false),
     admin
       .schema("leads")
       .from("submissions")
       .select("id, first_name, last_name, email, course_id, routed_at")
       .eq("primary_routed_to", providerId)
+      .not("is_dq", "is", true)
       .not("routed_at", "is", null)
       .is("archived_at", null)
       .is("parent_submission_id", null)
@@ -93,14 +99,16 @@ export default async function PreviewHomePage({ params }: Props) {
       .from("submissions")
       .select("id, routed_at, utm_source")
       .eq("primary_routed_to", providerId)
+      .not("is_dq", "is", true)
       .not("routed_at", "is", null)
       .is("archived_at", null)
       .is("parent_submission_id", null),
     admin
       .schema("leads")
       .from("fastrack_submissions")
-      .select("parent_submission_id, submitted_at, parent:submissions!inner(primary_routed_to)")
-      .eq("parent.primary_routed_to", providerId),
+      .select("parent_submission_id, submitted_at, parent:submissions!inner(primary_routed_to, is_dq)")
+      .eq("parent.primary_routed_to", providerId)
+      .eq("parent.is_dq", false),
   ]);
 
   const enrolments = (enrolmentsRes.data ?? []) as EnrolmentCountRow[];
