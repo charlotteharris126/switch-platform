@@ -4,6 +4,28 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-15 (Session 46, evening) — Portal launched: Riverside + EMS invited, Daniel first through
+
+First real provider users invited. Daniel Mearns (EMS admin) signed in at 15:20, completed welcome + SLA tick at 15:26. First production walkthrough of the new welcome deck v3 + per-user SLA flow.
+
+- **0143** Patches `provider_read_submissions` RLS policy on `leads.submissions` to add `AND is_dq IS NOT TRUE`. Test rows stop appearing in provider portal queries automatically. Mirrors the dashboard-view filter pattern from 0136.
+- **0144** Adds `sla_accepted_at TIMESTAMPTZ` + `sla_accepted_version TEXT` to `crm.provider_users`. Per-user SLA acceptance replaces per-provider per Charlotte 2026-05-15 — managers don't always forward the SLA on to new staff, so every team member accepts individually with an audit row per acceptance. Per-provider columns on `crm.providers` stay as historical first-acceptance markers but are no longer read at the gate.
+- **`requireProviderUser`** rewritten to read user-level SLA. `skipWelcomeGate` option also skips the SLA gate so the welcome deck's final slide can handle the tick inline.
+- **Welcome deck v3 shipped.** SLA folded into the deck as the final slide ("I agree, take me in" → `markWelcomeAndSlaAccepted` writes both timestamps + audit row). Admin-only "Bringing your team in" slide inserted before the SLA terminator for users with `role='provider_admin'`. Home slide adds timer/Overdue badge mention. Automations slide drops auto-flip clock line. Billing slide replaced with Support slide. HeroVisual loses the dead stat block. AutomationsVisual trimmed to 2 rows per audience. New SupportVisual + AddUsersVisual + SlaSlide components.
+- **Demo providers seeded.** Data-ops 035 created `demo-b2b` (apprenticeship, v2). Data-ops 036 created `demo-b2c` (gov-funded, v1). Both with `is_demo=true` and `portal_enabled=true`.
+- **Riverside contact update.** Data-ops 033 set `contact_name='Freya Kelly'` + `contact_email='Freya.Kelly@riverside-training.co.uk'` (was the mangled `<\tjane@riverside-training.co.uk>` from a paste). U2 greeting matches the actual recipient.
+- **U2 lead-notification sender split.** New `switchleads_leads` brand in `_shared/brevo.ts` reading `BREVO_SENDER_EMAIL_LEADS`. Applied to `_shared/route-lead.ts` B2C U2, `netlify-employer-lead-router` B2B U2, `email-presumed-warning-cron`, and `email-presumed-flipped-cron`. `resolveBrandSender` falls back to `BREVO_SENDER_EMAIL` when LEADS unset — deploy is safe before the env var is set, lead notifications keep coming from support@ until Charlotte flips to hello@switchleads.co.uk.
+- **`x-allow-real: true` always sent from admin invite Server Action** to bypass the demo-only fence in `provider-invite-link`. Edge Function-side gate stays in place defensively.
+- **U2 emails carry sheet fallback.** Both B2C funded and B2B employer U2 now render the sheet link below the portal CTA when both are present, so providers can still reach the lead if the portal misbehaves.
+- **OWNER_CC_ALL_EMAILS helper** added to `_shared/brevo.ts`. When the env var is set, every `sendBrevoEmail` + `sendTransactional` call cc's the owner for launch monitoring. Unset by default.
+- **Audit-trail bug fixed.** `markWelcomeAndSlaAccepted` was calling the audit RPC via the admin client (NULL `auth.uid()` → `audit.log_provider_action` rejected, silent fail). Switched to the authenticated supabase client for the RPC. Same fix on `/provider/sla-agreement/actions.ts`. Data-ops 037 backfilled Daniel's missed audit row.
+- **Admin preview is_dq filter.** `/admin/preview/<id>/leads` and `/admin/preview/<id>/home` now apply the same is_dq filter as the production RLS. Two-step query for home (the earlier nested-relation supabase-js filter silently dropped every row).
+- **Admin provider detail SLA badge** now derives from `crm.provider_users.sla_accepted_at` and shows `SLA: X/N accepted`. Was reading the deprecated per-provider column.
+- **Provider /leads gains a Region column** on learner views, sourced from `leads.submissions.region`.
+- **`B2B_STANDARD` attribute** added to `upsertEmployerInBrevo` so Wren's U1-employer template can reference `{{contact.B2B_STANDARD}}`.
+- **Edge Functions redeployed (9):** `netlify-employer-lead-router`, `netlify-lead-router`, `routing-confirm`, `admin-test-email`, `admin-brevo-resync`, `provider-invite-link`, `email-presumed-warning-cron`, `email-presumed-flipped-cron`. All pick up the shared `_shared/brevo.ts` brand + cc + sender resolution changes.
+- Signed off: Charlotte (session 2026-05-15).
+
 ## 2026-05-15 (Session 46) — B2B_PROVIDER_NAME + B2B_PROVIDER_TRUST_LINE on employer router
 
 Wren rewrote U1-employer to reference `{{contact.B2B_PROVIDER_NAME}}` + `{{contact.B2B_PROVIDER_TRUST_LINE}}` instead of hardcoding Riverside trust prose, so the same template serves v2+ providers without re-templating. The 2026-05-14 employer upsert was pushing neither attribute, so live sends would render two blanks until the parallel work lands.
