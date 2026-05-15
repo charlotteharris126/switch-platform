@@ -447,14 +447,14 @@ async function upsertEmployerInBrevo(submissionId: number, row: EmployerSubmissi
   let providerTrustLine = "";
   if (row.primary_routed_to) {
     try {
-      const providerRows = await sql<Array<{ name: string | null; b2b_trust_line: string | null }>>`
-        SELECT name, b2b_trust_line
+      const providerRows = await sql<Array<{ company_name: string | null; b2b_trust_line: string | null }>>`
+        SELECT company_name, b2b_trust_line
           FROM crm.providers
          WHERE provider_id = ${row.primary_routed_to}
          LIMIT 1
       `;
       const provider = providerRows[0];
-      providerName = provider?.name ?? "";
+      providerName = provider?.company_name ?? "";
       providerTrustLine = provider?.b2b_trust_line ?? "";
     } catch (err) {
       console.error(

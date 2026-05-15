@@ -18,7 +18,7 @@
 BEGIN;
 
 -- 1. Preview the current state.
-SELECT provider_id, name, b2b_trust_line
+SELECT provider_id, company_name, b2b_trust_line
   FROM crm.providers
  WHERE provider_id = 'riverside-training';
 
@@ -44,7 +44,7 @@ SELECT audit.log_system_action(
 );
 
 -- 4. Verification — row now non-null.
-SELECT provider_id, name, b2b_trust_line
+SELECT provider_id, company_name, b2b_trust_line
   FROM crm.providers
  WHERE provider_id = 'riverside-training';
 
