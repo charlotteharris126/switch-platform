@@ -29,16 +29,21 @@ interface Props {
   greetingName: string;
   providerLabel: string;
   slaTerms: SlaTerms;
+  // Determines whether the admin-only "Invite your team" slide is
+  // included. Pass `true` when the signed-in user is a provider_admin;
+  // regular provider_user accounts can't invite teammates so they
+  // never see the slide. Defaults to false on safety.
+  isAdmin: boolean;
   // Server Action that flips crm.provider_users.welcome_completed_at
   // + sla_accepted_at + writes an audit row, then redirects to
   // /provider. Fired by the final-slide "I agree" button.
   onComplete: () => Promise<void>;
 }
 
-export function WelcomeDeck({ audience, greetingName, providerLabel, slaTerms, onComplete }: Props) {
+export function WelcomeDeck({ audience, greetingName, providerLabel, slaTerms, isAdmin, onComplete }: Props) {
   const slides = audience === "employer"
-    ? employerSlides(greetingName, providerLabel)
-    : learnerSlides(greetingName, providerLabel);
+    ? employerSlides(greetingName, providerLabel, isAdmin)
+    : learnerSlides(greetingName, providerLabel, isAdmin);
 
   const [index, setIndex] = useState(0);
   const [completing, startCompleteTransition] = useTransition();
@@ -203,8 +208,8 @@ interface Slide {
   visual?: React.ReactNode;
 }
 
-function learnerSlides(name: string, providerLabel: string): Slide[] {
-  return [
+function learnerSlides(name: string, providerLabel: string, isAdmin: boolean): Slide[] {
+  const slides: Slide[] = [
     {
       title: `Welcome, ${name}!`,
       body: "This is a quick tour of the portal so you can find your way around.",
@@ -251,10 +256,12 @@ function learnerSlides(name: string, providerLabel: string): Slide[] {
       visual: <SupportVisual />,
     },
   ];
+  if (isAdmin) slides.push(adminTeamSlide());
+  return slides;
 }
 
-function employerSlides(name: string, providerLabel: string): Slide[] {
-  return [
+function employerSlides(name: string, providerLabel: string, isAdmin: boolean): Slide[] {
+  const slides: Slide[] = [
     {
       title: `Welcome, ${name}!`,
       body: "This is a quick tour of the portal so you can find your way around.",
@@ -301,6 +308,20 @@ function employerSlides(name: string, providerLabel: string): Slide[] {
       visual: <SupportVisual />,
     },
   ];
+  if (isAdmin) slides.push(adminTeamSlide());
+  return slides;
+}
+
+// Admin-only slide explaining how to invite teammates. Slotted in
+// between the Support slide and the SLA terminator when isAdmin = true.
+// Regular provider_user accounts never see it — they can't invite
+// teammates so it'd be noise.
+function adminTeamSlide(): Slide {
+  return {
+    title: "Bringing your team in.",
+    body: "From your Account tab, you can invite teammates by email. Pick whether they're another admin or a regular user. Each one walks through this same welcome and ticks their own SLA on first sign-in, so everyone on your team agrees individually before they get to work.",
+    visual: <AddUsersVisual />,
+  };
 }
 
 // ============================================================================
@@ -844,6 +865,60 @@ function SupportVisual() {
         }`}
       >
         Or email <span className="font-semibold text-slate-700">support@switchleads.co.uk</span> — one working day max.
+      </p>
+    </div>
+  );
+}
+
+// ---------- Add users (admin-only slide) ----------
+
+function AddUsersVisual() {
+  const reveal = useStaggeredReveal(3, 220);
+  const teammates = [
+    { name: "You", role: "Admin", tone: "slate" as const },
+    { name: "+ Invite teammate", role: "", tone: "dashed" as const },
+  ];
+  const palette = {
+    slate: "bg-slate-50 border-slate-200",
+    dashed: "bg-white border-slate-300 border-dashed",
+  };
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+      <div
+        className={`transition-all duration-500 ${
+          reveal[0] ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"
+        }`}
+      >
+        <p className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
+          Account &middot; Team
+        </p>
+        <p className="text-xs text-slate-700 mt-1">
+          Everyone with access to your account. Admins can invite teammates and
+          re-issue links if someone loses their device.
+        </p>
+      </div>
+      <div className="space-y-2">
+        {teammates.map((t, i) => (
+          <div
+            key={t.name}
+            className={`border rounded-lg px-3 py-2 flex items-center justify-between transition-all duration-500 ${palette[t.tone]} ${
+              reveal[i + 1] ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"
+            }`}
+          >
+            <p className={`text-xs ${t.tone === "dashed" ? "text-slate-500" : "text-slate-900 font-medium"}`}>
+              {t.name}
+            </p>
+            {t.role && (
+              <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                {t.role}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-slate-500">
+        Admin can invite more admins or regular users. Regular users work leads
+        and add notes, admins can also see business + pricing detail.
       </p>
     </div>
   );

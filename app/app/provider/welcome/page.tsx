@@ -67,6 +67,7 @@ export default async function ProviderWelcomePage() {
         staleAttemptHours: provider?.sla_stale_attempt_hours ?? 36,
         presumedFlipDays: provider?.sla_presumed_flip_days ?? 14,
       }}
+      isAdmin={ctx.role === "provider_admin"}
       onComplete={markWelcomeAndSlaAccepted}
     />
   );

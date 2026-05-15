@@ -68,6 +68,7 @@ export default async function PreviewWelcomePage({ params }: Props) {
           staleAttemptHours: provider.sla_stale_attempt_hours,
           presumedFlipDays: provider.sla_presumed_flip_days,
         }}
+        isAdmin={true}
         onComplete={previewWelcomeComplete.bind(null, providerId)}
       />
     </>
