@@ -59,6 +59,11 @@ export async function sendPortalInviteAction(args: Args): Promise<Result> {
       headers: {
         "content-type": "application/json",
         "x-audit-key": auditKey,
+        // Bypass the demo-only fence in provider-invite-link. Lifted
+        // 2026-05-15 per Charlotte for real-provider launch. The
+        // Edge Function-side gate stays in place as a vestigial guard
+        // (still requires the header); admin UI always sends it.
+        "x-allow-real": "true",
       },
       body: JSON.stringify(args),
     });
