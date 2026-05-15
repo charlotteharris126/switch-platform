@@ -33,10 +33,13 @@ export interface ProviderUserContext {
 }
 
 export interface RequireProviderUserOptions {
-  // Set true when the caller is the /provider/welcome page itself, so
-  // it doesn't bounce back to itself before the user has completed
-  // the deck. Also used by the welcome's own Server Action when
-  // marking completion. Every other caller leaves this false.
+  // Set true when the caller is the /provider/welcome page or its
+  // markWelcomeAndSlaAccepted Server Action. Skips BOTH the welcome
+  // redirect AND the SLA redirect, since the welcome deck's final
+  // slide is itself the SLA tick. Without this, a fresh user
+  // (welcome NULL + sla NULL) gets bounced from /provider/welcome to
+  // /provider/sla-agreement before the deck can render — they then
+  // see SLA twice. Every other caller leaves this false.
   skipWelcomeGate?: boolean;
 }
 
@@ -89,10 +92,17 @@ export async function requireProviderUser(
   // row via /provider/sla-agreement actions.ts. Provider-level columns
   // on crm.providers stay as historical first-acceptance markers but
   // are no longer the gate.
+  //
+  // SLA gate is ALSO skipped when skipWelcomeGate=true. The welcome
+  // flow's final slide IS the SLA tick, so the welcome page + its
+  // markWelcomeAndSlaAccepted action both bypass this gate to render
+  // the deck and let the user accept inline. Standalone
+  // /provider/sla-agreement remains the gate for users whose welcome
+  // is already complete but whose SLA version is stale.
   const hasAcceptedCurrent =
     !!pu.sla_accepted_at
     && pu.sla_accepted_version === SLA_VERSION;
-  if (!hasAcceptedCurrent) {
+  if (!options.skipWelcomeGate && !hasAcceptedCurrent) {
     redirect("/provider/sla-agreement");
   }
 

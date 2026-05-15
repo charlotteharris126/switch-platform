@@ -64,6 +64,29 @@ const BRANDS: Record<BrevoBrand, BrandConfig> = {
   switchable:  { senderEmailEnv: "BREVO_SENDER_EMAIL_SWITCHABLE", senderName: "Switchable" },
 };
 
+// Optional global cc. When OWNER_CC_ALL_EMAILS env var is set, every
+// email sent via sendBrevoEmail or sendTransactional gets the owner
+// cc'd. Comma-separated list supported. Used during launch monitoring
+// so Charlotte sees what every Edge Function actually sends. Unset
+// the env var to turn it off.
+function appendOwnerCc(
+  existing: Array<{ email: string; name?: string }> | undefined,
+): Array<{ email: string; name?: string }> | undefined {
+  const raw = Deno.env.get("OWNER_CC_ALL_EMAILS");
+  if (!raw) return existing;
+  const adds = raw.split(",").map((s) => s.trim()).filter(Boolean).map((email) => ({ email }));
+  if (adds.length === 0) return existing;
+  const seen = new Set((existing ?? []).map((c) => c.email.toLowerCase()));
+  const merged = [...(existing ?? [])];
+  for (const a of adds) {
+    if (!seen.has(a.email.toLowerCase())) {
+      merged.push(a);
+      seen.add(a.email.toLowerCase());
+    }
+  }
+  return merged.length > 0 ? merged : undefined;
+}
+
 export interface BrevoEmail {
   to: Array<{ email: string; name?: string }>;
   cc?: Array<{ email: string; name?: string }>;
@@ -93,10 +116,12 @@ export async function sendBrevoEmail(email: BrevoEmail): Promise<BrevoResult> {
   const senderEmail = Deno.env.get(cfg.senderEmailEnv);
   if (!senderEmail) return { ok: false, error: `${cfg.senderEmailEnv} not set` };
 
+  const ccList = appendOwnerCc(email.cc);
+
   const body = {
     sender: { email: senderEmail, name: cfg.senderName },
     to: email.to,
-    cc: email.cc,
+    cc: ccList,
     bcc: email.bcc,
     subject: email.subject,
     htmlContent: email.htmlContent,
@@ -401,9 +426,11 @@ export async function sendTransactional(args: SendTransactionalArgs): Promise<Se
     return { ok: false, status: "failed", error: reason, emailLogId, shadowMode };
   }
 
+  const ccList = appendOwnerCc(undefined);
   const body = {
     sender: { email: senderEmail, name: cfg.senderName },
     to: [args.recipient],
+    cc: ccList,
     templateId: Number(args.templateId),
     params: args.params,
     replyTo: args.replyTo,
