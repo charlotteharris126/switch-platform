@@ -476,6 +476,7 @@ async function upsertEmployerInBrevo(submissionId: number, row: EmployerSubmissi
     B2B_COMPANY_SIZE: row.company_size_band ?? "",
     B2B_EXISTING_APPRENTICES: row.existing_apprentices ?? "",
     B2B_HEADCOUNT_ESTIMATE: row.headcount_estimate ?? "",
+    B2B_STANDARD: row.standards_interested ?? "",
     B2B_LEAD_TYPE: "employer_apprenticeship",
     B2B_MATCHED_PROVIDER: row.routing_outcome === "routed" ? "riverside" : "",
     B2B_PROVIDER_NAME: providerName,
