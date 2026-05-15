@@ -15,7 +15,7 @@ Wren is splitting the U1 funded template into pre-fastrack vs post-fastrack vari
 - Sequence: Charlotte creates the post-fastrack template in Brevo Transactional templates, sets `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` in Supabase Vault, then pings me to deploy `routing-confirm` + `netlify-lead-router`. Code is shipped; deploy held pending Charlotte's go.
 - Signed off: Charlotte (session 2026-05-15).
 
-## 2026-05-15 (Session 46, late) — EMS regional contacts wired into U1 funded ack
+## 2026-05-15 (Session 47) — EMS regional contacts wired into U1 funded ack
 
 Charlotte's call: every EMS Tees Valley funded learner should know which named rep will be ringing them and what mobile number to expect. EMS routes by local authority, three reps cover the five LAs.
 
