@@ -72,49 +72,57 @@ export default async function PreviewHomePage({ params }: Props) {
 
   // Same fan-out as /provider/page.tsx but scoped manually to providerId
   // since we bypass RLS via the admin client.
-  // Admin client bypasses RLS, so manually mirror the production
+  // Admin client bypasses RLS, so we manually mirror the production
   // provider RLS policy (migration 0143): scope by primary_routed_to
-  // AND exclude is_dq=true. Without the is_dq filter, preview shows
-  // test rows the real provider never sees, defeating the purpose.
-  const [enrolmentsRes, recentSubsRes, allRoutedRes, fastrackRes] = await Promise.all([
-    admin
-      .schema("crm")
-      .from("enrolments")
-      .select("submission_id, status, status_updated_at, callback_requested_at, submission:submissions!inner(is_dq)")
-      .eq("provider_id", providerId)
-      .eq("submission.is_dq", false),
-    admin
-      .schema("leads")
-      .from("submissions")
-      .select("id, first_name, last_name, email, course_id, routed_at")
-      .eq("primary_routed_to", providerId)
-      .not("is_dq", "is", true)
-      .not("routed_at", "is", null)
-      .is("archived_at", null)
-      .is("parent_submission_id", null)
-      .order("routed_at", { ascending: false })
-      .limit(5),
-    admin
-      .schema("leads")
-      .from("submissions")
-      .select("id, routed_at, utm_source")
-      .eq("primary_routed_to", providerId)
-      .not("is_dq", "is", true)
-      .not("routed_at", "is", null)
-      .is("archived_at", null)
-      .is("parent_submission_id", null),
-    admin
-      .schema("leads")
-      .from("fastrack_submissions")
-      .select("parent_submission_id, submitted_at, parent:submissions!inner(primary_routed_to, is_dq)")
-      .eq("parent.primary_routed_to", providerId)
-      .eq("parent.is_dq", false),
+  // AND exclude is_dq=true. Earlier attempt used supabase-js nested-
+  // relation filtering (.eq("submission.is_dq", false)) which silently
+  // dropped every row and made the preview report "every lead tried".
+  // Replaced with a straight two-step: load the non-DQ submission IDs
+  // first, then load enrolments + fastrack scoped to those IDs.
+  const dqSafeSubsRes = await admin
+    .schema("leads")
+    .from("submissions")
+    .select("id, first_name, last_name, email, course_id, routed_at, utm_source")
+    .eq("primary_routed_to", providerId)
+    .not("is_dq", "is", true)
+    .not("routed_at", "is", null)
+    .is("archived_at", null)
+    .is("parent_submission_id", null)
+    .order("routed_at", { ascending: false });
+
+  const allDqSafeSubs = (dqSafeSubsRes.data ?? []) as Array<{
+    id: number;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+    course_id: string | null;
+    routed_at: string | null;
+    utm_source: string | null;
+  }>;
+  const allDqSafeIds = allDqSafeSubs.map((s) => s.id);
+
+  const [enrolmentsRes, fastrackRes] = await Promise.all([
+    allDqSafeIds.length
+      ? admin
+          .schema("crm")
+          .from("enrolments")
+          .select("submission_id, status, status_updated_at, callback_requested_at")
+          .eq("provider_id", providerId)
+          .in("submission_id", allDqSafeIds)
+      : Promise.resolve({ data: [] as EnrolmentCountRow[] }),
+    allDqSafeIds.length
+      ? admin
+          .schema("leads")
+          .from("fastrack_submissions")
+          .select("parent_submission_id, submitted_at")
+          .in("parent_submission_id", allDqSafeIds)
+      : Promise.resolve({ data: [] as FastrackTimedRow[] }),
   ]);
 
   const enrolments = (enrolmentsRes.data ?? []) as EnrolmentCountRow[];
-  const recentSubs = (recentSubsRes.data ?? []) as RecentLeadRow[];
+  const recentSubs = allDqSafeSubs.slice(0, 5) as RecentLeadRow[];
   const recentIds = recentSubs.map((s) => s.id);
-  const allRouted = (allRoutedRes.data ?? []) as RoutedIdRow[];
+  const allRouted = allDqSafeSubs as RoutedIdRow[];
   const fastrackRows = (fastrackRes.data ?? []) as FastrackTimedRow[];
 
   // recent enrolments only needed for the 5 most-recent leads, separate
