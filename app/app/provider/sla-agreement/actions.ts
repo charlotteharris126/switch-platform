@@ -65,8 +65,10 @@ export async function acceptSlaAction(_formData: FormData): Promise<void> {
 
   // Audit: one row per acceptance, named by user. Best-effort: if
   // audit write fails, the acceptance still landed — log but don't
-  // block.
-  const { error: auditErr } = await admin.rpc("log_provider_action_v1", {
+  // block. RPC must be called via the authenticated supabase client
+  // (not admin), because audit.log_provider_action requires auth.uid()
+  // to resolve to an active provider_users row.
+  const { error: auditErr } = await supabase.rpc("log_provider_action_v1", {
     p_action:       "accept_sla",
     p_target_table: "crm.provider_users",
     p_target_id:    String(pu.id),

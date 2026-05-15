@@ -15,6 +15,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireProviderUser } from "@/lib/auth/require-provider";
 import { SLA_VERSION } from "@/app/provider/sla-agreement/version";
@@ -39,9 +40,14 @@ export async function markWelcomeAndSlaAccepted(): Promise<void> {
     throw new Error(`Welcome + SLA save failed: ${updErr.message}`);
   }
 
-  // Audit row for the SLA acceptance. Welcome completion is not
-  // separately audited — it's a UX milestone, not a legal commitment.
-  const { error: auditErr } = await admin.rpc("log_provider_action_v1", {
+  // Audit row for the SLA acceptance. log_provider_action_v1 requires
+  // auth.uid() to be non-NULL inside the function (audit.log_provider_action
+  // gate). That means the RPC must be called via the AUTHENTICATED
+  // supabase client (the user's own JWT) rather than the admin/service-
+  // role client. The admin client is used for the table UPDATE above
+  // because crm.provider_users write RLS is admin-only.
+  const authed = await createClient();
+  const { error: auditErr } = await authed.rpc("log_provider_action_v1", {
     p_action:       "accept_sla",
     p_target_table: "crm.provider_users",
     p_target_id:    String(ctx.providerUserId),
