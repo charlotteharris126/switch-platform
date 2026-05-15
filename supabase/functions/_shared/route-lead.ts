@@ -1222,6 +1222,7 @@ export async function sendProviderNotification(
       cc: ccList.length > 0 ? ccList : undefined,
       subject: `Re-applied: ${reApplicationContext.parentLeadId}`,
       htmlContent: html,
+      brand: "switchleads_leads",
       tags: ["route-lead", "re-application", "provider-notification"],
     });
   }
@@ -1243,6 +1244,7 @@ export async function sendProviderNotification(
     cc: ccList.length > 0 ? ccList : undefined,
     subject: `New enquiry - ${leadId}`,
     htmlContent: html,
+    brand: "switchleads_leads",
     tags: ["route-lead", "provider-notification"],
   });
 }

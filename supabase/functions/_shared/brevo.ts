@@ -52,7 +52,7 @@ const BREVO_CONTACTS_ENDPOINT = "https://api.brevo.com/v3/contacts";
 // forever.
 const BREVO_TIMEOUT_MS = 15000;
 
-export type BrevoBrand = "switchleads" | "switchable";
+export type BrevoBrand = "switchleads" | "switchleads_leads" | "switchable";
 
 interface BrandConfig {
   senderEmailEnv: string;
@@ -60,9 +60,34 @@ interface BrandConfig {
 }
 
 const BRANDS: Record<BrevoBrand, BrandConfig> = {
+  // Portal-infra emails to providers (invite, password setup). Sends
+  // from BREVO_SENDER_EMAIL — set to support@switchleads.co.uk.
   switchleads: { senderEmailEnv: "BREVO_SENDER_EMAIL", senderName: "SwitchLeads" },
+  // Lead-notification emails to providers (U2 'new lead', presumed
+  // warnings, presumed flipped). Sends from BREVO_SENDER_EMAIL_LEADS —
+  // set to hello@switchleads.co.uk so the friendly inbox handles
+  // operational lead notifications and support@ stays for account /
+  // portal admin only.
+  switchleads_leads: { senderEmailEnv: "BREVO_SENDER_EMAIL_LEADS", senderName: "SwitchLeads" },
+  // Anything to a person who filled in a form on switchable.org.uk
+  // (B2C learner OR B2B employer). Sends from
+  // BREVO_SENDER_EMAIL_SWITCHABLE.
   switchable:  { senderEmailEnv: "BREVO_SENDER_EMAIL_SWITCHABLE", senderName: "Switchable" },
 };
+
+// Resolve a brand's sender email. Reads the brand-specific env var
+// first. If it's empty AND the brand isn't the canonical SwitchLeads
+// sender (BREVO_SENDER_EMAIL), fall back to BREVO_SENDER_EMAIL so
+// brand-specific senders default to the SwitchLeads sender rather
+// than failing. Lets us ship the switchleads_leads brand split
+// without requiring the LEADS env var to be set first — until it is,
+// lead notifications keep coming from support@ instead of breaking.
+function resolveBrandSender(envName: string): string | undefined {
+  const direct = Deno.env.get(envName);
+  if (direct) return direct;
+  if (envName === "BREVO_SENDER_EMAIL") return undefined;
+  return Deno.env.get("BREVO_SENDER_EMAIL");
+}
 
 // Optional global cc. When OWNER_CC_ALL_EMAILS env var is set, every
 // email sent via sendBrevoEmail or sendTransactional gets the owner
@@ -113,7 +138,7 @@ export async function sendBrevoEmail(email: BrevoEmail): Promise<BrevoResult> {
 
   const brand = email.brand ?? "switchleads";
   const cfg = BRANDS[brand];
-  const senderEmail = Deno.env.get(cfg.senderEmailEnv);
+  const senderEmail = resolveBrandSender(cfg.senderEmailEnv);
   if (!senderEmail) return { ok: false, error: `${cfg.senderEmailEnv} not set` };
 
   const ccList = appendOwnerCc(email.cc);
@@ -416,7 +441,7 @@ export async function sendTransactional(args: SendTransactionalArgs): Promise<Se
 
   const brand = args.brand ?? "switchable";
   const cfg = BRANDS[brand];
-  const senderEmail = Deno.env.get(cfg.senderEmailEnv);
+  const senderEmail = resolveBrandSender(cfg.senderEmailEnv);
   const apiKey = Deno.env.get("BREVO_API_KEY");
 
   if (!apiKey || !senderEmail) {

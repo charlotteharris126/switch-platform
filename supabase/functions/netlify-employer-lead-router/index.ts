@@ -618,6 +618,7 @@ async function sendProviderNotifyU2(submissionId: number, row: EmployerSubmissio
     cc: ccList,
     subject: `${subjectPrefix}New employer enquiry - ${leadRef}`,
     htmlContent: html,
+    brand: "switchleads_leads",
     tags: testMode ? ["route-lead", "employer-notification", "test-mode"] : ["route-lead", "employer-notification"],
   });
 }

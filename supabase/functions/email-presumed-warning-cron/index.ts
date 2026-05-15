@@ -229,7 +229,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       },
       submissionId: anchorLead.submission_id,
       emailType: "provider_presumed_warning",
-      brand: "switchleads",
+      brand: "switchleads_leads",
       tags: ["provider_presumed_warning", "cron", batch.provider_id],
     });
 

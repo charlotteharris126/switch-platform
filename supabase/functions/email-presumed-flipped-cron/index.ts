@@ -175,7 +175,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       recipient: { email: batch.contact_email, name: batch.contact_name ?? batch.company_name },
       submissionId: primaryLead.submission_id,
       emailType: "provider_presumed_flipped",
-      brand: "switchleads",
+      brand: "switchleads_leads",
       params: {
         PROVIDER_NAME: batch.contact_name ?? batch.company_name,
         COMPANY_NAME: batch.company_name,
