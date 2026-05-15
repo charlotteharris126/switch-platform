@@ -115,7 +115,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       SELECT provider_id, company_name, contact_email, contact_name,
              sheet_id, sheet_webhook_url, crm_webhook_url, cc_emails,
              active, archived_at, auto_route_enabled,
-             trust_line, regions, portal_enabled
+             trust_line, regions, portal_enabled, regional_contacts
         FROM crm.providers
        WHERE provider_id = ${submission.primary_routed_to}
     `;

@@ -1,0 +1,40 @@
+-- Migration 0145, add regional_contacts to crm.providers
+-- Date:   2026-05-15
+-- Author: Sasha (Charlotte's session)
+-- Reason:
+--   EMS routes Tees Valley funded learners to one of three regional
+--   reps depending on the local authority chosen on the form:
+--     George Taylor   stockton-on-tees + hartlepool
+--     Jake Balfour    middlesbrough + darlington
+--     Nick Rodgers    redcar-and-cleveland
+--
+--   The U1 funded ack will name the specific rep and give the
+--   learner the mobile number the call will come from, so they can
+--   save it in their contacts and pick up. Urgency framing (spaces
+--   fill fast) is owned by route-lead.ts in the rendered block.
+--
+--   Per-provider JSONB rather than a dedicated table: EMS is the
+--   only provider that needs this today, five LA entries of data,
+--   and the shape may evolve as we learn what other fields a rendered
+--   contact block wants (subject prefix, calendly link). JSONB keeps
+--   future additions additive. Reassess against a dedicated table
+--   only if a second provider adopts the pattern.
+--
+--   Resolver in route-lead.ts pre-renders the HTML block server-side
+--   (per memory: no Liquid conditionals in Brevo templates) and
+--   passes it as a single transactional param
+--   SW_PROVIDER_CONTACT_BLOCK. Empty string for providers without
+--   regional_contacts set, so non-EMS U1s render nothing in that
+--   spot. Wren's U1_FUNDED template just drops one placeholder.
+--
+--   Per-send transactional param, not a Brevo contact attribute,
+--   so no Brevo backfill is needed (the attribute-wiring rule in
+--   platform/CLAUDE.md applies to contact attributes, not per-send
+--   params).
+--
+-- UP
+ALTER TABLE crm.providers
+  ADD COLUMN regional_contacts JSONB;
+
+-- DOWN
+-- ALTER TABLE crm.providers DROP COLUMN regional_contacts;

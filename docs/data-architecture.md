@@ -62,6 +62,8 @@ These appear in design only except `reference`, which is scoped to ship in Sessi
 
 - Operational data: `contact_email`, `cc_emails`, `auto_route_enabled`, `billing_model`, sheet URLs, GoCardless mandate references.
 - Marketing content (added 0038): `trust_line`, `funding_types`, `regions`, `voice_notes`.
+- B2B trust content (added 0142): `b2b_trust_line` for the U1-employer ack.
+- Regional contact mapping (added 0145): `regional_contacts JSONB`, by-LA lookup keyed by `leads.submissions.la`. Resolved server-side in `_shared/route-lead.ts:renderProviderContactBlock` and pushed as a single transactional param `SW_PROVIDER_CONTACT_BLOCK` on U1 funded sends. NULL for every provider without regional reps; EMS is the only consumer at v1. Shape: `{ "by_la": { "<la-slug>": { "first_name": "...", "name": "...", "phone": "..." } } }`.
 
 **Future migration trigger** (consolidating all provider state — already happens here, but tracked for Phase 4 dashboard build):
 

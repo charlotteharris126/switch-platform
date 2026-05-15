@@ -172,7 +172,7 @@ async function resyncOne(submissionId: number): Promise<ResyncResult> {
       SELECT provider_id, company_name, contact_email, contact_name,
              sheet_id, sheet_webhook_url, cc_emails,
              active, archived_at, auto_route_enabled,
-             trust_line, regions
+             trust_line, regions, regional_contacts
         FROM crm.providers
        WHERE provider_id = ${submissionRow.primary_routed_to}
     `;

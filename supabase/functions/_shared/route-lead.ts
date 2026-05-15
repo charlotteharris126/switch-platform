@@ -33,6 +33,16 @@ import {
 
 // -------- Types --------
 
+export interface RegionalContactEntry {
+  first_name: string;
+  name: string;
+  phone: string;
+}
+
+export interface RegionalContacts {
+  by_la?: Record<string, RegionalContactEntry>;
+}
+
 export interface ProviderRow {
   provider_id: string;
   company_name: string;
@@ -48,6 +58,7 @@ export interface ProviderRow {
   trust_line: string | null;
   regions: string[] | null;
   portal_enabled: boolean;
+  regional_contacts: RegionalContacts | null;
 }
 
 export interface SubmissionRow {
@@ -144,7 +155,7 @@ export async function routeLead(
       SELECT provider_id, company_name, contact_email, contact_name,
              sheet_id, sheet_webhook_url, crm_webhook_url, cc_emails,
              active, archived_at, auto_route_enabled,
-             trust_line, regions, portal_enabled
+             trust_line, regions, portal_enabled, regional_contacts
         FROM crm.providers
        WHERE provider_id = ${providerId}
     `;
@@ -739,6 +750,26 @@ export async function upsertLearnerInBrevo(
   return { ok: true };
 }
 
+// Render the provider's regional contact block for the U1 funded ack.
+// Resolves provider.regional_contacts.by_la against submission.la. Returns
+// an HTML paragraph naming the rep + the mobile number the call will come
+// from, or an empty string when no mapping applies (every provider other
+// than EMS today, or an EMS lead with an LA outside the configured set).
+//
+// Pre-rendered server-side rather than templated in Brevo because Brevo's
+// Liquid conditionals are unreliable across sends; passing one fully-formed
+// HTML param keeps Wren's U1 template free of `{% if %}` logic.
+function renderProviderContactBlock(
+  provider: ProviderRow,
+  submission: SubmissionRow,
+): string {
+  const la = submission.la;
+  if (!la) return "";
+  const contact = provider.regional_contacts?.by_la?.[la];
+  if (!contact) return "";
+  return `<p>${escapeHtml(contact.first_name)} from ${escapeHtml(provider.company_name)} will give you a call to talk it through. Spaces fill fast, so save <strong>${escapeHtml(contact.phone)}</strong> in your contacts now and pick up when it rings.</p>`;
+}
+
 // Phase 2a U1 send. Composes the per-send template params from the same matrix
 // + submission shape that upsertLearnerInBrevo uses (so contact attributes and
 // transactional params stay consistent), routes to U1_FUNDED vs U1_SELF based
@@ -800,6 +831,10 @@ async function sendU1Transactional(
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
     SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
+    // Per-provider regional contact block. Empty string for providers with
+    // no regional_contacts mapping or LAs outside the mapping (every non-EMS
+    // lead today). Wren's U1_FUNDED template drops this as raw HTML.
+    SW_PROVIDER_CONTACT_BLOCK: renderProviderContactBlock(provider, submission),
   };
 
   const recipientName = [submission.first_name, submission.last_name]

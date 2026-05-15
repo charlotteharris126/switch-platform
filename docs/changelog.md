@@ -4,6 +4,19 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-15 (Session 46, late) — EMS regional contacts wired into U1 funded ack
+
+Charlotte's call: every EMS Tees Valley funded learner should know which named rep will be ringing them and what mobile number to expect. EMS routes by local authority, three reps cover the five LAs.
+
+- **Migration 0145** Adds `crm.providers.regional_contacts JSONB` (nullable, additive). Per-provider rep-by-LA mapping. JSONB chosen over a dedicated table because v1 is one provider, five LAs, and the shape may evolve as we learn what fields downstream emails want.
+- **Data-ops 038** Populates `enterprise-made-simple` with the flat-by-LA mapping (George Taylor → stockton-on-tees + hartlepool / 07955 265 739; Jake Balfour → middlesbrough + darlington / 07931 601 801; Nick Rodgers → redcar-and-cleveland / 07842 444 808).
+- **`_shared/route-lead.ts`** gains `renderProviderContactBlock(provider, submission)` which resolves `provider.regional_contacts?.by_la?.[submission.la]` and pre-renders an HTML paragraph. Empty string when no mapping applies. Passed as the transactional param `SW_PROVIDER_CONTACT_BLOCK` on `sendU1Transactional`. `ProviderRow` type extended with `regional_contacts: RegionalContacts | null`; the routing SELECT, `admin-test-email`, and `admin-brevo-resync` SELECTs all include the new column to keep ProviderRow shape consistent.
+- Pre-rendered HTML rather than discrete fields + Liquid `{% if %}` per the no-conditionals-in-Brevo rule (`feedback_brevo_no_liquid_conditionals.md`). Wren's U1_FUNDED template drops one `{{ params.SW_PROVIDER_CONTACT_BLOCK }}` placeholder; empty string renders as nothing for every non-EMS lead.
+- Per-send transactional param, not a Brevo contact attribute. No Brevo contact backfill required (the attribute-wiring rule applies to contact attributes only).
+- Impact: read by `sendU1Transactional` on funded ack send. No read from any other consumer at v1. Reversible via DOWN section in 0145 (drop column).
+- Sequence: Charlotte applies 0145, runs 038, redeploys `routing-confirm`, `netlify-lead-router`, `admin-test-email`, `admin-brevo-resync`. Cross-project handoff to Wren (`switchable/email/`) to drop `{{ params.SW_PROVIDER_CONTACT_BLOCK }}` into the live U1_FUNDED template after the matched-with-provider paragraph.
+- Signed off: Charlotte (session 2026-05-15).
+
 ## 2026-05-15 (Session 46, evening) — Portal launched: Riverside + EMS invited, Daniel first through
 
 First real provider users invited. Daniel Mearns (EMS admin) signed in at 15:20, completed welcome + SLA tick at 15:26. First production walkthrough of the new welcome deck v3 + per-user SLA flow.
