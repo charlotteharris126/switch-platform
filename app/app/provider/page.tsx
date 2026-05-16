@@ -22,6 +22,7 @@ import { ProviderHomeView } from "./home-view";
 import type { LeadStatus } from "@/lib/lead-status";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { requireProviderUser } from "@/lib/auth/require-provider";
+import { isOverdueWorkingHours } from "@/lib/working-hours";
 
 interface ProviderUserRow {
   id: number;
@@ -243,9 +244,14 @@ export default async function ProviderHomePage() {
   // first-attempt SLA; the 36h-style threshold for callback +
   // stale-attempt follows the provider's stale-attempt SLA so the
   // signal matches the cadence Jane / Andy work to.
-  const OVERDUE_OPEN_MS = (provider?.sla_first_attempt_hours ?? 24) * 60 * 60 * 1000;
+  // First-attempt SLA respects working hours (Mon-Fri, weekends don't count)
+  // because the provider portal SLA reads "1 working day to first contact" —
+  // a lead landing Friday 4pm shouldn't badge overdue Saturday. The
+  // sla_first_attempt_hours column is now interpreted as working hours.
+  // Callback + stale-attempt timers keep clock-hour semantics for now.
+  const OVERDUE_OPEN_WORKING_HOURS = provider?.sla_first_attempt_hours ?? 24;
   const OVERDUE_36H_MS = STALE_ATTEMPT_HOURS * 60 * 60 * 1000;
-  const overdueOpen = isOlderThan(oldestOpenSince, OVERDUE_OPEN_MS);
+  const overdueOpen = isOverdueWorkingHours(oldestOpenSince, OVERDUE_OPEN_WORKING_HOURS);
   const overdueCallback = isOlderThan(oldestCallbackSince, OVERDUE_36H_MS);
   const overdueStaleAttempt = isOlderThan(oldestStaleAttemptSince, OVERDUE_36H_MS);
   // Fastrack: don't flag overdue purely on age — the call-in window is

@@ -953,7 +953,7 @@ function SlaSlide({
         <SlaBlock title="Your side">
           <SlaBullet>
             First contact with every routed lead within{" "}
-            <strong>{slaTerms.firstAttemptHours} hours</strong> of arrival.
+            <strong>1 working day</strong> of arrival (weekends don&apos;t count).
           </SlaBullet>
           <SlaBullet>
             Up to{" "}

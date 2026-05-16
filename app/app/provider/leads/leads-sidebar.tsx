@@ -33,6 +33,10 @@ interface Props {
     signed: number;
     signed_this_month: number;
   };
+  // Base path for the snapshot StatLinks. Defaults to /provider/leads for
+  // the live provider portal. /admin/preview/[id]/leads passes its own
+  // scoped path so sidebar clicks stay inside the preview context.
+  leadsHrefBase?: string;
 }
 
 export function LeadsSidebar({
@@ -44,6 +48,7 @@ export function LeadsSidebar({
   weekStats,
   leadType = "learner",
   employerStats,
+  leadsHrefBase = "/provider/leads",
 }: Props) {
   const isEmployer = leadType === "employer_apprenticeship";
   if (isEmployer) {
@@ -53,10 +58,10 @@ export function LeadsSidebar({
         <Card>
           <CardTitle>At a glance</CardTitle>
           <div className="mt-3 space-y-0.5">
-            <StatLink href="/provider/leads?status=open" label="Open" value={open} tone="rose" emphasis />
-            <StatLink href="/provider/leads?status=engaged" label="Engaged" value={es.engaged} tone="blue" />
-            <StatLink href="/provider/leads?status=in_progress" label="In progress" value={es.in_progress} tone="amber" />
-            <StatLink href="/provider/leads?status=signed" label="Signed this month" value={es.signed_this_month} tone="emerald" />
+            <StatLink href={`${leadsHrefBase}?status=open`} label="Open" value={open} tone="rose" emphasis />
+            <StatLink href={`${leadsHrefBase}?status=engaged`} label="Engaged" value={es.engaged} tone="blue" />
+            <StatLink href={`${leadsHrefBase}?status=in_progress`} label="In progress" value={es.in_progress} tone="amber" />
+            <StatLink href={`${leadsHrefBase}?status=signed`} label="Signed this month" value={es.signed_this_month} tone="emerald" />
           </div>
         </Card>
 
@@ -98,7 +103,7 @@ export function LeadsSidebar({
         <div className="mt-3 space-y-0.5">
           {callbackPending > 0 && (
             <StatLink
-              href="/provider/leads?status=callback"
+              href={`${leadsHrefBase}?status=callback`}
               label="Needs callback"
               value={callbackPending}
               tone="rose"
@@ -106,26 +111,26 @@ export function LeadsSidebar({
             />
           )}
           <StatLink
-            href="/provider/leads?status=open"
+            href={`${leadsHrefBase}?status=open`}
             label="Open"
             value={open}
             tone={callbackPending > 0 ? "slate" : "rose"}
             emphasis={callbackPending === 0}
           />
           <StatLink
-            href="/provider/leads?status=calling"
+            href={`${leadsHrefBase}?status=calling`}
             label="Calling"
             value={calling}
             tone="amber"
           />
           <StatLink
-            href="/provider/leads?status=meeting"
+            href={`${leadsHrefBase}?status=meeting`}
             label="Meeting booked"
             value={meetingBooked}
             tone="blue"
           />
           <StatLink
-            href="/provider/leads?status=enrolled"
+            href={`${leadsHrefBase}?status=enrolled`}
             label="Enrolled this month"
             value={enrolledThisMonth}
             tone="emerald"

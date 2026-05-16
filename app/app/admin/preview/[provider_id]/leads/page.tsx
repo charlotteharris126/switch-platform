@@ -261,6 +261,7 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
                     lost: weekLost,
                     meetings_booked: weekMeetingsBooked,
                   }}
+                  leadsHrefBase={`/admin/preview/${encodeURIComponent(providerId)}/leads`}
                 />
               </div>
             </div>

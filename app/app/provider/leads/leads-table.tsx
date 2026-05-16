@@ -5,6 +5,7 @@ import Link from "next/link";
 import { DurationTimer } from "../duration-timer";
 import { STATUS_LABEL, type LeadStatus, type LostReason, VALID_LOST_REASONS } from "@/lib/lead-status";
 import { labelCourse, labelFunding } from "@/lib/lead-values";
+import { isOverdueWorkingHours } from "@/lib/working-hours";
 
 const STATUS_TONE: Record<LeadStatus, string> = {
   open: "bg-slate-100 text-slate-700 border-slate-200",
@@ -106,13 +107,6 @@ const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string }> = [
   { value: "near_60_day", label: "60-day clock" },
 ];
 
-// Overdue thresholds. Mirror the home page so the badge logic is
-// consistent across surfaces. Defaults match PPA v1 funded-pilot cadence;
-// callers (provider page, admin preview) override with per-provider
-// values from crm.providers.sla_* columns when the rows are loaded.
-const DEFAULT_OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000; // 24h first-attempt SLA
-const DEFAULT_OVERDUE_36H_MS = 36 * 60 * 60 * 1000; // 36h stale-attempt SLA
-
 // "Action needed" = anything where the next move is on the provider:
 //   - callback flag pending
 //   - status=open (no contact attempt yet, fastrack-or-not)
@@ -144,13 +138,14 @@ function isStaleAttempt(r: LeadRow, staleAttemptMs: number): boolean {
 }
 
 // Per-row overdue: any of (a) open + routed older than the first-attempt
-// SLA, (b) callback flag pending + status hasn't moved in stale-attempt
-// SLA hours, (c) attempt status stale (already past stale-attempt SLA).
+// SLA (working hours, Mon-Fri only — weekends excluded per the SLA
+// agreement), (b) callback flag pending + status hasn't moved in stale-
+// attempt SLA hours (clock hours), (c) attempt status stale (clock hours).
 // Both thresholds passed in so the function reads consistent with the
 // provider's configured pace.
-function isOverdueRow(r: LeadRow, openMs: number, staleAttemptMs: number): boolean {
+function isOverdueRow(r: LeadRow, openWorkingHours: number, staleAttemptMs: number): boolean {
   if (r.status === "open" && r.routed_at) {
-    if (Date.now() - new Date(r.routed_at).getTime() > openMs) return true;
+    if (isOverdueWorkingHours(r.routed_at, openWorkingHours)) return true;
   }
   if (r.callback_pending && r.status_updated_at) {
     if (Date.now() - new Date(r.status_updated_at).getTime() > staleAttemptMs) return true;
@@ -225,8 +220,10 @@ export function LeadsTable({
   slaFirstAttemptHours = 24,
   slaStaleAttemptHours = 36,
 }: Props) {
-  // Per-provider SLA durations in ms, computed once.
-  const openMs = slaFirstAttemptHours * 60 * 60 * 1000;
+  // First-attempt SLA is measured in working hours (Mon-Fri); stale-
+  // attempt + callback stay in clock ms. Both flow through to the row
+  // overdue check so per-provider pace stays consistent across surfaces.
+  const openWorkingHours = slaFirstAttemptHours;
   const staleAttemptMs = slaStaleAttemptHours * 60 * 60 * 1000;
   // Lead-type detected from the loaded rows. In practice a provider's
   // leads are all one type (Riverside = employer, EMS/CD/WYK = learner)
@@ -400,8 +397,8 @@ export function LeadsTable({
     // visible inside Open / Calling / etc. The server returns routed_at desc
     // already, so the final tier mostly reinforces that.
     return [...subset].sort((a, b) => {
-      const aOver = isOverdueRow(a, openMs, staleAttemptMs) ? 1 : 0;
-      const bOver = isOverdueRow(b, openMs, staleAttemptMs) ? 1 : 0;
+      const aOver = isOverdueRow(a, openWorkingHours, staleAttemptMs) ? 1 : 0;
+      const bOver = isOverdueRow(b, openWorkingHours, staleAttemptMs) ? 1 : 0;
       if (aOver !== bOver) return bOver - aOver;
       const aFast = (a.has_fastrack && !FASTRACK_SETTLED.has(a.status)) ? 1 : 0;
       const bFast = (b.has_fastrack && !FASTRACK_SETTLED.has(b.status)) ? 1 : 0;
@@ -593,7 +590,7 @@ export function LeadsTable({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((r) => {
-                  const overdue = isOverdueRow(r, openMs, staleAttemptMs);
+                  const overdue = isOverdueRow(r, openWorkingHours, staleAttemptMs);
                   const isEmployer = r.lead_type === "employer_apprenticeship";
                   const courseOrCompanyLabel = isEmployer
                     ? (r.company_name ?? "-")

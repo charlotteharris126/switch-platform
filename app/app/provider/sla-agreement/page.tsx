@@ -117,7 +117,7 @@ export default async function SlaAgreementPage() {
           <ul className="space-y-3 text-sm text-slate-800">
             <Bullet>
               First contact with every routed lead within{" "}
-              <strong>{row.sla_first_attempt_hours} hours</strong> of arrival.
+              <strong>1 working day</strong> of arrival (weekends don&apos;t count).
             </Bullet>
             <Bullet>
               Up to <strong>{row.sla_attempts_required} attempts over {row.sla_attempt_window_days} days</strong> before

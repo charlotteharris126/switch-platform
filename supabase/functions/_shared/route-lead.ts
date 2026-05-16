@@ -722,6 +722,11 @@ export async function upsertLearnerInBrevo(
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
     SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
+    // U1 funded "what's next" block. Regional-match leads (EMS today) get
+    // the named-rep + phone paragraph; everyone else gets a unified fallback.
+    // Carried as a contact attribute (not a per-send param) so Brevo template
+    // preview renders it and the wiring matches the rest of the SW_* set.
+    SW_PROVIDER_CONTACT_BLOCK: renderProviderContactBlock(provider, submission),
   };
 
   // One upsert call adds the contact to both lists atomically. Previously
@@ -750,24 +755,34 @@ export async function upsertLearnerInBrevo(
   return { ok: true };
 }
 
-// Render the provider's regional contact block for the U1 funded ack.
-// Resolves provider.regional_contacts.by_la against submission.la. Returns
-// an HTML paragraph naming the rep + the mobile number the call will come
-// from, or an empty string when no mapping applies (every provider other
-// than EMS today, or an EMS lead with an LA outside the configured set).
+// Render the "what's next" block for the U1 funded ack. Carries the
+// post-confirmation contact step the U1 paragraph used to state inline.
 //
-// Pre-rendered server-side rather than templated in Brevo because Brevo's
-// Liquid conditionals are unreliable across sends; passing one fully-formed
-// HTML param keeps Wren's U1 template free of `{% if %}` logic.
+// Two shapes:
+//   1. Regional match: provider.regional_contacts.by_la has an entry for
+//      submission.la. Renders the named-rep + phone paragraph.
+//   2. No match (every non-EMS provider, an EMS lead with an LA outside
+//      the mapping, or a pre-routing / unmatched lead with no provider):
+//      renders a unified fallback paragraph. Eligibility beat is omitted
+//      because the regular U1 template's next paragraph already covers it
+//      ("...so EMS can confirm you qualify ahead of the call...") and the
+//      post-fastrack template doesn't need it at all.
+//
+// Pushed as the Brevo contact attribute SW_PROVIDER_CONTACT_BLOCK on every
+// learner upsert (matched + no_match + pending), so U1 funded templates
+// reference `{{ contact.SW_PROVIDER_CONTACT_BLOCK }}` and the value survives
+// for re-sends / preview. Provider is nullable for the no_match / pending
+// paths where no provider exists yet — only the fallback branch fires.
 function renderProviderContactBlock(
-  provider: ProviderRow,
+  provider: ProviderRow | null,
   submission: SubmissionRow,
 ): string {
   const la = submission.la;
-  if (!la) return "";
-  const contact = provider.regional_contacts?.by_la?.[la];
-  if (!contact) return "";
-  return `<p>${escapeHtml(contact.first_name)} from ${escapeHtml(provider.company_name)} will give you a call to talk it through. Spaces fill fast, so save <strong>${escapeHtml(contact.phone)}</strong> in your contacts now and pick up when it rings.</p>`;
+  const contact = la && provider ? provider.regional_contacts?.by_la?.[la] : undefined;
+  if (contact && provider) {
+    return `<p>${escapeHtml(contact.first_name)} from ${escapeHtml(provider.company_name)} will give you a call to talk it through. Spaces fill fast, so save <strong>${escapeHtml(contact.phone)}</strong> in your contacts now and pick up when it rings.</p>`;
+  }
+  return `<p>They'll be in touch within the next few days by email or phone to talk you through your start date and answer anything you want to ask.</p>`;
 }
 
 // Phase 2a U1 send. Composes the per-send template params from the same matrix
@@ -848,9 +863,11 @@ async function sendU1Transactional(
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
     SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
-    // Per-provider regional contact block. Empty string for providers with
-    // no regional_contacts mapping or LAs outside the mapping (every non-EMS
-    // lead today). Wren's U1_FUNDED template drops this as raw HTML.
+    // Temporary duplicate of the contact attribute set in upsertLearnerInBrevo.
+    // Brevo U1 funded templates are mid-switch from `{{ params.SW_PROVIDER_CONTACT_BLOCK }}`
+    // to `{{ contact.SW_PROVIDER_CONTACT_BLOCK }}` (Wren, 2026-05-16). Param
+    // stays in place until both templates are switched live, then this line
+    // gets removed as dead code. Identical render to the contact attribute.
     SW_PROVIDER_CONTACT_BLOCK: renderProviderContactBlock(provider, submission),
   };
 
@@ -965,6 +982,11 @@ export async function upsertLearnerInBrevoNoMatch(
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
     SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
+    // No provider on no_match / pending paths, so the renderer always returns
+    // the unified fallback paragraph. Populated for consistency so the
+    // attribute is present on every Switchable contact (no blank reads if a
+    // future template ever references it for these lifecycle states).
+    SW_PROVIDER_CONTACT_BLOCK: renderProviderContactBlock(null, submission),
   };
 
   const listIds: number[] = [];

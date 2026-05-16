@@ -497,6 +497,9 @@ verify_jwt = false
 [functions.backfill-client-nonce]
 verify_jwt = false
 
+[functions.backfill-sw-provider-contact-block]
+verify_jwt = false
+
 [functions.republish-provider-sheet]
 verify_jwt = false
 

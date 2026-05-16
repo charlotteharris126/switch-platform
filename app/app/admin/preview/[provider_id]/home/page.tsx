@@ -16,6 +16,7 @@ import { requireAdminUser } from "@/lib/auth/require-admin";
 import { ProviderHomeView } from "@/app/provider/home-view";
 import type { LeadStatus } from "@/lib/lead-status";
 import { PreviewHeader } from "../preview-header";
+import { isOverdueWorkingHours } from "@/lib/working-hours";
 
 interface EnrolmentCountRow {
   submission_id: number;
@@ -196,10 +197,11 @@ export default async function PreviewHomePage({ params }: Props) {
   );
   const oldestStaleAttemptSince = oldestIso(staleAttempts.map((e) => e.status_updated_at));
 
-  // Overdue thresholds mirror /provider/page.tsx.
-  const OVERDUE_OPEN_MS = 24 * 60 * 60 * 1000;
+  // Overdue thresholds mirror /provider/page.tsx. First-attempt SLA is
+  // working hours (Mon-Fri), callback + stale-attempt stay clock hours.
+  const OVERDUE_OPEN_WORKING_HOURS = 24;
   const OVERDUE_36H_MS = 36 * 60 * 60 * 1000;
-  const overdueOpen = isOlderThan(oldestOpenSince, OVERDUE_OPEN_MS);
+  const overdueOpen = isOverdueWorkingHours(oldestOpenSince, OVERDUE_OPEN_WORKING_HOURS);
   const overdueCallback = isOlderThan(oldestCallbackSince, OVERDUE_36H_MS);
   const overdueStaleAttempt = isOlderThan(oldestStaleAttemptSince, OVERDUE_36H_MS);
   const overdueFastrack = false;

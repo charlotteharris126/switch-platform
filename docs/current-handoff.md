@@ -1,72 +1,74 @@
-# Platform Handoff, Session 47, 2026-05-15
+# Platform Handoff, Session 48, 2026-05-16
 
 ## Current state
 
-Two U1 funded ack improvements live end-to-end. (1) EMS regional contact branching: `crm.providers.regional_contacts` JSONB populated for EMS, `SW_PROVIDER_CONTACT_BLOCK` transactional param carries a pre-rendered HTML paragraph naming the regional rep + their mobile number. Placeholder live in the Brevo U1_FUNDED template. (2) U1 funded template split by fastrack state: `sendU1Transactional` branches on `submission.fastracked_at`, post-fastrack reads the new `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` Vault key (set by Wren) and falls back to the pre-fastrack template if unset. Self-funded path unchanged.
+`SW_PROVIDER_CONTACT_BLOCK` migrated from per-send transactional param to Brevo contact attribute (Wren push, mid-session). Wiring code shipped; Brevo attribute registration + redeploy + one-time backfill pending Charlotte. Per-send param kept in place temporarily so existing templates (still referencing `{{ params.X }}`) don't render blank in the gap window before Wren switches them to `{{ contact.X }}`. Once Wren confirms templates live, follow-up deploy removes the dead param. Wren's other template work (move placeholder to a Brevo HTML block + cut the duplicated "they'll be in touch..." sentence) lands at the same time.
 
 ## What was done this session
 
-- **Migration 0145 written + applied via Supabase SQL Editor.** Adds `crm.providers.regional_contacts JSONB` (additive, nullable, no schema_version bump).
-- **Data-ops 038 written + applied.** Populates EMS row with flat-by-LA mapping: George Taylor (07955 265 739) for Stockton-on-Tees + Hartlepool, Jake Balfour (07931 601 801) for Middlesbrough + Darlington, Nick Rodgers (07842 444 808) for Redcar and Cleveland. Audit row logged via `audit.log_system_action`.
-- **`_shared/route-lead.ts` extended.** New `RegionalContactEntry` + `RegionalContacts` interfaces, `regional_contacts` field added to `ProviderRow`, SELECT clause in `routeLead` updated to include the new column.
-- **`renderProviderContactBlock` helper added.** Resolves `provider.regional_contacts?.by_la?.[submission.la]` and pre-renders one `<p>` paragraph using `escapeHtml` for every field. Returns empty string when no mapping applies (every non-EMS provider, or EMS lead with no LA / unmapped LA).
-- **`SW_PROVIDER_CONTACT_BLOCK` transactional param wired into `sendU1Transactional`.** Per-send param, not a Brevo contact attribute, so no contact backfill required.
-- **`admin-test-email` and `admin-brevo-resync` SELECTs extended** to include `regional_contacts`, keeping `ProviderRow` shape consistent across every fetch site.
-- **Four Edge Functions redeployed.** `routing-confirm`, `netlify-lead-router`, `admin-test-email`, `admin-brevo-resync`. All read the new column and pass the new param.
-- **`platform/docs/data-architecture.md` updated** with the new column under "Provider trust content" (added 0145 line, shape documented).
-- **`platform/docs/changelog.md` entry added** at top dated 2026-05-15 (Session 47).
-- **Cross-project push written into `switchable/email/docs/current-handoff.md`** at the top of Wren's Next steps. Action, sample rendered HTML, three-rep LA map, two-lead test path. Uses `params.` not `contact.` (per-send variable, no Brevo attribute setup needed). Resolved same session: Wren's `{{ params.SW_PROVIDER_CONTACT_BLOCK }}` placeholder live in U1_FUNDED template, local export updated at `switchable/email/html-exports/u1-funded.html`.
-- **U1 funded template split by fastrack state.** Wren pushed mid-session: pre-fastrack vs post-fastrack templates should differ (drop the "Get a head start" CTA on post-fastrack leads, since they've already done it). Built in Brevo by Wren + Vault secret `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` set. Platform-side: `sendU1Transactional` extended to branch on `submission.fastracked_at != null`, mirroring the existing `templateEnvName → parseEnvInt → null-check` shape. Falls back to `BREVO_TEMPLATE_U1_FUNDED` when the new env var is unset (safe rollback). Self-funded path unchanged. `email_type` stays `u1_funded` for both variants so `(submission_id, email_type)` idempotency unaffected. No DB migration. `routing-confirm` + `netlify-lead-router` redeployed.
-- **`platform/docs/infrastructure-manifest.md` updated** with new `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` row + fallback note on existing `BREVO_TEMPLATE_U1_FUNDED` row.
-- **`platform/docs/changelog.md` second Session 47 entry added** for the fastrack split, on top of the regional contacts entry.
+- **`_shared/route-lead.ts` `renderProviderContactBlock` simplified.** Dropped `isPostFastrack` parameter, unified fallback wording: `<p>They'll be in touch within the next few days by email or phone to talk you through your start date and answer anything you want to ask.</p>`. The regular U1 template's next paragraph already covers eligibility; post-fastrack doesn't need it. `provider` arg typed `ProviderRow | null` so the function serves both matched and unmatched upserts.
+- **Attribute write added to `upsertLearnerInBrevo` + `upsertLearnerInBrevoNoMatch`.** Every Switchable learner upsert (matched + no_match + pending) now carries `SW_PROVIDER_CONTACT_BLOCK` on the contact. Regional-match leads render the named-rep + phone paragraph; everyone else renders the fallback.
+- **Per-send param kept temporarily** in `sendU1Transactional` to bridge the deploy-vs-template-switch gap. Identical render. Removed in a follow-up after Wren's templates go live.
+- **Migration 0145 header not edited** (immutable per `.claude/rules/data-infrastructure.md`). Switch documented in `platform/docs/changelog.md` and `platform/docs/data-architecture.md` instead.
+- **Earlier in the session (pre-Wren-push):** `renderProviderContactBlock` extended with `isPostFastrack` arg + per-fastrack fallback wording; four Edge Functions deployed. Superseded by the contact-attribute switch above — re-deploy needed.
 
 ## Next steps
 
-1. **Verify both U1 funded improvements on the next real EMS funded lead.** Test path:
-   - Lead 1 (pre-fastrack): submit at `/funded/counselling-skills-tees-valley/` selecting Redcar, close the thank-you page WITHOUT completing fastrack → owner-confirm → U1 should be pre-fastrack template (with "Get a head start" button), AND should contain Nick + 07842 444 808 in its own paragraph from `SW_PROVIDER_CONTACT_BLOCK`.
-   - Lead 2 (post-fastrack): submit the same form, complete fastrack on the thank-you page → owner-confirm → U1 should be post-fastrack template ("Thanks for sending the extra details across" line, no fastrack button), AND should contain Nick + 07842 444 808 paragraph.
-   - Eyeball Edge Function logs to confirm `templateEnvName` resolved as expected on each.
-2. **Non-EMS sanity check.** Submit a WYK Camden funded lead post-fastrack: post-fastrack template with no contact block, no broken paragraph or stray whitespace where the param would have landed.
-3. **Watch invited portal users walk through.** Andy, Jake, George, Nick (EMS) and Jane, Freya (Riverside) still at `status='invited'` from Session 46. Audit rows should land cleanly per the c5f62c2 fix.
-4. **First real B2C ad-driven lead, confirm full chain.** Eyeball Edge Function logs end-to-end: DB insert → upsertLearnerInBrevo → U1 funded ack → U2 to EMS provider → sheet append → portal renders.
-5. **Optional env vars** in Supabase Vault when ready: `BREVO_SENDER_EMAIL_LEADS = hello@switchleads.co.uk`, `OWNER_CC_ALL_EMAILS = hello@switchable.careers`.
-6. **Launch WYK + Courses Direct portals** when ready: flip `portal_enabled = true` and invite teams from `/admin/providers/<id>`.
-7. **Lead-assignment "in session" lock (Phase 2).** Deferred from Session 46. Re-trigger when collision risk emerges.
-8. **Tighten data-ops audit-log template** (carry forward from Session 44). Future scripts capture `before_value` via SELECT into a variable, write audit row only when UPDATE actually mutated.
-9. **WYK + CD sheet-vs-DB reconcile** (carry forward, backlog 869d994nb).
-10. **`/provider/leads` N+1 + cursor siblings** (carry forward, backlog 869d994qf).
-11. **`RealtimeRefresh lead_notes` subscription scope** (carry forward, backlog 869d994t5).
-12. **RLS `(SELECT fn())` wrap on `crm.disputes` + `leads.fastrack_submissions`** (carry forward, backlog 869d994un).
-13. **Solis carry-forward.** Schema naming decision `ads_business` vs `ads_switchable_business`. `crm.employer_signings` design before first Riverside Employer Signed event.
-14. **CLI migration registry cleanup.** `supabase migration list --linked` shows 0141 through 0145 in local but not remote. Production schema is correct (columns exist, portal working, Daniel through SLA). Run `supabase migration repair --status applied 0141 0142 0143 0144 0145` at a calm moment so the next `supabase db push` doesn't try to re-apply.
+1. **Register `SW_PROVIDER_CONTACT_BLOCK` in Brevo** as a contact attribute, text type. Brevo dashboard → Contacts → Settings → Contact Attributes → Add. Name `SW_PROVIDER_CONTACT_BLOCK`. This needs to exist before the redeploy lands writes against it (otherwise Brevo silently drops the attribute on upsert).
+2. **Redeploy four Edge Functions** (the previous session-start deploy is stale after the param→attribute switch):
+   ```
+   supabase functions deploy routing-confirm --no-verify-jwt
+   supabase functions deploy netlify-lead-router --no-verify-jwt
+   supabase functions deploy admin-test-email --no-verify-jwt
+   supabase functions deploy admin-brevo-resync --no-verify-jwt
+   ```
+3. **One-time backfill of `SW_PROVIDER_CONTACT_BLOCK`** across existing Switchable Brevo contacts. Use the existing `admin-brevo-resync` mechanism (same path as the Phase 3c `SW_REFERRAL_URL` backfill): iterate every non-archived `leads.submissions.id` that has an email, POST to `admin-brevo-resync` in batches. The re-upsert lands the new attribute on each existing contact. Throttle stays at 250ms per call inside the function. Confirm via Brevo contact spot-check on a known EMS Tees Valley email + a known WYK Camden email + a no_match DQ contact (all three should now carry the attribute, with the right paragraph for each lifecycle state).
+4. **Signal Wren** once steps 1-3 are done. Wren then pushes both template updates in Brevo: switch `{{ params.SW_PROVIDER_CONTACT_BLOCK }}` to `{{ contact.SW_PROVIDER_CONTACT_BLOCK }}` in both U1 funded templates AND cut the duplicated "they'll be in touch..." sentence from the body paragraph above the placeholder. Placeholder lands inside a Brevo HTML block so the HTML renders raw.
+5. **Follow-up: remove the dead per-send param.** Once Wren confirms both templates are live referencing `{{ contact.X }}`, delete the `SW_PROVIDER_CONTACT_BLOCK` line from the `params` object in `sendU1Transactional` (line ~860 of `_shared/route-lead.ts`) and redeploy `routing-confirm` + `netlify-lead-router`. Single-line cleanup; no behaviour change.
+6. **Verify on the next two real EMS funded leads.**
+   - Lead 1 (pre-fastrack, Tees Valley LA): submit at `/funded/counselling-skills-tees-valley/`, owner-confirm without fastracking. U1 should render the named rep + phone paragraph as styled HTML (no literal tags), AND the body paragraph above no longer duplicates the "they'll be in touch..." sentence.
+   - Lead 2 (post-fastrack, same form): submit, complete fastrack, owner-confirm. Same checks.
+7. **Verify the non-EMS path.** Submit a WYK Camden funded lead, owner-confirm. U1 should now render the unified fallback paragraph in place of the previous empty string.
+8. **Watch invited portal users walk through** (carry from Session 47). Andy, Jake, George, Nick (EMS) and Jane, Freya (Riverside) still at `status='invited'`.
+9. **First real B2C ad-driven lead, confirm full chain** (carry from Session 47).
+10. **Optional env vars** in Supabase Vault when ready (carry from Session 47): `BREVO_SENDER_EMAIL_LEADS = hello@switchleads.co.uk`, `OWNER_CC_ALL_EMAILS = hello@switchable.careers`.
+11. **Launch WYK + Courses Direct portals** when ready (carry from Session 47).
+12. **Lead-assignment "in session" lock (Phase 2)** (carry from Session 46-47).
+13. **Tighten data-ops audit-log template** (carry from Session 44).
+14. **WYK + CD sheet-vs-DB reconcile** (carry, backlog 869d994nb).
+15. **`/provider/leads` N+1 + cursor siblings** (carry, backlog 869d994qf).
+16. **`RealtimeRefresh lead_notes` subscription scope** (carry, backlog 869d994t5).
+17. **RLS `(SELECT fn())` wrap on `crm.disputes` + `leads.fastrack_submissions`** (carry, backlog 869d994un).
+18. **Solis carry-forward** (carry from Session 47). Schema naming `ads_business` vs `ads_switchable_business`. `crm.employer_signings` design before first Riverside Employer Signed event.
+19. **CLI migration registry cleanup** (carry from Session 47). `supabase migration list --linked` shows 0141 through 0145 in local but not remote.
 
 ## Decisions and open questions
 
 **Decisions:**
 
-- **Per-provider regional contact mapping lives in `crm.providers.regional_contacts` JSONB**, not a dedicated table. Reason: v1 is one provider with five LA entries; JSONB keeps shape additions free (future fields like subject prefix, calendly link, working hours) without migrations. Reassess against a dedicated table only if a second provider adopts the pattern.
-- **Pre-render the HTML block server-side and pass as a single transactional param.** Per `feedback_brevo_no_liquid_conditionals.md`, Brevo `{% if %}` rendering is unreliable across sends and splitting templates per audience would double maintenance. Empty string for non-EMS leads means one template placeholder, drop it once, works for everyone.
-- **`params.` not `contact.`** for the new block. Per-send transactional param means no Brevo attribute setup is needed and the attribute-wiring backfill rule (`platform/CLAUDE.md` pre-broadcast gate) does not apply.
-- **0145 + data-ops 038 applied via Supabase SQL Editor, not `supabase db push`.** CLI metadata showed 0141 through 0145 unrecorded on remote, but 0141 through 0144 had clearly been applied (portal working, Daniel through SLA). Per `feedback_verify_deploy_state.md`, using SQL Editor matched the established Session 46 pattern and avoided a repair-then-push divergence on production.
-- **U1 funded split via two templates rather than Liquid conditional inside one template.** Per `feedback_brevo_no_liquid_conditionals.md`. `SW_FASTRACK_COMPLETED` is already pushed as a transactional param but unreliable when used inside `{% if %}`. Two-template split is the established pattern (matches the U1_FUNDED vs U1_SELF split already in production).
-- **Post-fastrack env var falls back to pre-fastrack** rather than skipping the send when unset. Reason: deploy order should be flexible; if Charlotte rolls back the new template for any reason, fastracked leads keep receiving the original (working) template instead of silently skipping.
+- **`SW_PROVIDER_CONTACT_BLOCK` is now a Brevo contact attribute, not a per-send param.** Why: it was the only SW_* in the U1 funded templates that wasn't a contact attribute, which made it invisible in Brevo template preview (preview only resolves contact attributes) and architecturally special-cased vs the other 18 SW_* attributes. Charlotte hit the preview gap during today's QA. The Session 47 rationale ("avoids the attribute-wiring backfill rule") was real but small compared to the cost of preview-invisibility + special-casing — Wren's call to align it with the rest of the set. Backfill discipline applies: one-time backfill in step 3, then standard updates on every new upsert thereafter.
+- **`renderProviderContactBlock` lost the `isPostFastrack` parameter and the variant-specific fallback wording.** Wren's call: the regular U1 template's next paragraph already covers the eligibility beat ("...so EMS can confirm you qualify ahead of the call..."), and the post-fastrack template doesn't need that beat at all. One unified fallback serves both. Simpler function, simpler attribute, less divergence to maintain.
+- **Per-send param kept in place temporarily.** One-line redundancy; identical render to the contact attribute. Stays until both U1 funded templates are switched live in Brevo, then removed in a follow-up deploy. Stops any U1 funded send in the gap window from rendering blank against the still-live `{{ params.X }}` templates.
+- **Migration 0145 header not edited.** Per `.claude/rules/data-infrastructure.md` migrations are immutable once applied. The param→attribute switch is a Brevo wiring change, not a DB schema change. Recorded in `changelog.md` + `data-architecture.md`.
 
 **Open questions:** none this session.
 
 ## Watch items
 
-- **First real funded lead post-deploy.** Confirm both new behaviours fire together: correct template variant (pre vs post fastrack) AND `SW_PROVIDER_CONTACT_BLOCK` rendering the right rep + phone for the LA selected. Spot-check a Redcar pre-fastrack (Nick + fastrack button) and a Redcar post-fastrack (Nick + "Thanks for sending the extra details across").
-- **Non-EMS funded U1 send.** Empty-string contact block should render as nothing, no broken paragraph or stray whitespace.
-- **CLI migration registry drift.** 0141 through 0145 in local but not remote per `supabase migration list --linked`. Production correct. Repair at a calm moment per Next steps #15.
-- **Audit row lands on every new SLA acceptance** (carry from Session 46). Check `audit.actions WHERE action='accept_sla' ORDER BY id DESC` after each invited user completes their flow.
-- **`SLA: X/N accepted` badge** on `/admin/providers/<id>` reflects each new acceptance accurately (carry from Session 46).
+- **Brevo attribute registration + backfill ordering.** Charlotte must register the attribute in Brevo before redeploying — otherwise Brevo silently drops the attribute on every upsert (no error, just dropped) and the backfill writes nothing.
+- **Gap window between redeploy and Wren's template push.** Until Wren's templates switch to `{{ contact.X }}`, the per-send param keeps existing sends working. If the param is removed too early (step 5 before step 4), the gap window renders blank.
+- **First real EMS funded U1 send post-deploy + post-template-switch** confirms: styled HTML (no literal tags), no duplicated "they'll be in touch..." sentence, attribute resolves correctly per LA, post-fastrack variant renders the right paragraph.
+- **First non-EMS funded U1 send post-deploy** confirms the unified fallback paragraph renders in place of the previous empty string.
+- **CLI migration registry drift** (carry from Session 47). 0141 through 0145 in local but not remote. Production correct.
+- **Audit row lands on every new SLA acceptance** (carry from Session 46-47).
+- **`SLA: X/N accepted` badge** on `/admin/providers/<id>` (carry from Session 46-47).
 - **TEST_MODE = false** in Supabase Vault. Re-verify before any session that might trigger a real B2B submission.
-- **First real cohort_decline fastrack** (carry from Session 44, untested under migration 0139).
+- **First real cohort_decline fastrack** (carry from Session 44).
 - **First fire of `dead-letter-alert-hourly` cron** (carry from Session 44).
-- **First real B2B Riverside submission** (carry from Session 46). Full chain: `source_form='s4b-employer-lead-v1'`, U1 + U2 + sheet append, B2B_* attributes populate.
+- **First real B2B Riverside submission** (carry from Session 46-47).
 
 ## Next session
 
 - **Folder:** `platform`
-- **First task:** Run the two-lead test from Next steps #1: one Redcar pre-fastrack + one Redcar post-fastrack at `/funded/counselling-skills-tees-valley/`. Both U1 emails should render the regional contact paragraph (Nick + 07842 444 808). The pre-fastrack email keeps the "Get a head start" button; the post-fastrack email replaces it with "Thanks for sending the extra details across". Eyeball Edge Function logs on each to confirm `templateEnvName` resolved as expected.
-- **Cross-project:** switchable/email, both Session 47 pushes (regional contact block + U1 funded fastrack split) are now resolved end-to-end. Wren's handoff already reflects this. No outstanding push from platform.
+- **First task:** Confirm Charlotte completed steps 1-4 above (Brevo registration, redeploy, backfill, signal Wren) and Wren has pushed her template updates. Then run the verification: one Tees Valley EMS pre-fastrack + one post-fastrack + one WYK Camden non-EMS post-fastrack. Confirm styled HTML, no duplicated sentence, correct paragraph per LA, fallback renders for non-EMS. Once verified, ship the follow-up cleanup (remove per-send param from `sendU1Transactional`, redeploy `routing-confirm` + `netlify-lead-router`).
+- **Cross-project:** switchable/email — Wren is mid-push on both U1 funded templates. Her handoff already reflects the work order. Charlotte signals her after step 3 completes.

@@ -142,8 +142,8 @@ function SlaThresholds({ row }: { row: AgreementRow }) {
   const items: Array<{ label: string; value: string; hint: string }> = [
     {
       label: "First contact",
-      value: `Within ${row.sla_first_attempt_hours}h`,
-      hint: "Time you've got from when we route a lead to making first contact.",
+      value: "Within 1 working day",
+      hint: "Time you've got from when we route a lead to making first contact. Weekends don't count.",
     },
     {
       label: "Attempts before giving up",
