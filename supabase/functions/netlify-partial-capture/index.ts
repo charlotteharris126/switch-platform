@@ -37,6 +37,10 @@ const sql = postgres(DATABASE_URL, {
 const ALLOWED_FORMS = new Set([
   "switchable-self-funded",
   "switchable-funded",
+  "s4b-employer-lead-v1",
+  "switchable-waitlist",
+  "switchable-waitlist-enrichment",
+  "fastrack-funded-v1",
 ]);
 
 // Per-session upsert cap. A legit multi-step session makes ~8-15 upserts

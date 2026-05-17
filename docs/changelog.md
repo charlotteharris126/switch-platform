@@ -4,6 +4,18 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-17 (Session 49) — `netlify-partial-capture` ALLOWED_FORMS extended to 6 form names
+
+Added four form names to the `ALLOWED_FORMS` Set in `supabase/functions/netlify-partial-capture/index.ts`: `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, `fastrack-funded-v1`. Function redeployed (config.toml already has `verify_jwt = false` for this function).
+
+**Why:** Mable wired `partial-tracker.js` `.track()` calls into six Switchable forms after the 2026-05-16 audit found `partial-tracker.js` was loaded but never invoked on `/business/`, `/business/construction/`, `/course-finder/`, `/find-funded-courses/`, `/waitlist/`, and `/funded/thank-you/`. The site-side fix is queued in `switchable/site/deploy/` and pending push. The Edge Function's allowlist only accepted two form names (`switchable-self-funded`, `switchable-funded`), so the four new ones would have been rejected with `disallowed_form_name` on arrival even with `.track()` firing correctly. Result before this change: still zero partials for those four form names 24h after Mable's fix.
+
+**Impact:** additive change to a Set, no schema migration, no consumer impact. Once Mable's site-side push lands, partials should start appearing in `leads.partials` for the four newly-allowed form names. Watch `leads.partials` over the next 24h for the new `form_name` rows.
+
+**Signed off:** Owner (Session 49).
+
+---
+
 ## 2026-05-16 (Session 48) — SW_PROVIDER_CONTACT_BLOCK split into three plain-text attributes + U1 funded template collapse
 
 Second Wren push of the day. Two changes wrapped:
