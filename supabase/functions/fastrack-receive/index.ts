@@ -36,7 +36,7 @@
 // deferred until Andy asks for it.
 
 import postgres from "npm:postgres@3";
-import { sendBrevoEmail } from "../_shared/brevo.ts";
+import { sendBrevoEmail, sendTransactional } from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -365,6 +365,45 @@ Deno.serve(async (req: Request): Promise<Response> => {
       "fastrack: Brevo sync RPC failed (non-fatal):",
       describeError(err),
     );
+  }
+
+  // Step 8.6: u-fastrack-qualified transactional ack. Fires only when the
+  // learner CLEARS the qualifying conditions on the fastrack form:
+  //   cohort_confirmed === true   (they accept the cohort dates)
+  //   l3_reconfirmed === false    (they have not self-reported an L3 mismatch)
+  // The two DQ paths (cohort_decline / l3_mismatch_self_reported) stay silent
+  // on this send by design — those learners are auto-DQ'd in Step 8 and get
+  // their own communication via the existing flows.
+  //
+  // Idempotent via crm.email_log on (submission_id, 'u_fastrack_qualified').
+  // Legal basis: contract — goes regardless of marketing_opt_in, because it's
+  // an operational confirmation of an application step plus a named-rep
+  // callback heads-up. Template reuses existing SW_PROVIDER_CONTACT_BEFORE/
+  // PHONE/AFTER attribute composition for the named-rep + bold-phone block.
+  //
+  // Dormant until BREVO_TEMPLATE_U_FASTRACK_QUALIFIED env var is set —
+  // sendTransactional returns skipped_missing_template silently.
+  if (cohortConfirmed === true && l3Reconfirmed === false && parent.email) {
+    const templateId = Number(Deno.env.get("BREVO_TEMPLATE_U_FASTRACK_QUALIFIED") ?? "0");
+    if (templateId > 0) {
+      try {
+        await sendTransactional({
+          sql,
+          templateId,
+          recipient: { email: parent.email },
+          params: {},
+          submissionId: parent.id,
+          emailType: "u_fastrack_qualified",
+          brand: "switchable",
+          tags: ["fastrack", "qualify-ack"],
+        });
+      } catch (err) {
+        console.error(
+          "fastrack: u-fastrack-qualified send failed (non-fatal):",
+          describeError(err),
+        );
+      }
+    }
   }
 
   // Step 9: sheet update via provider-sheet-appender-v2 in

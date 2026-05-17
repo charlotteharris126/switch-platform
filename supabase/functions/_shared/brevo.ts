@@ -316,7 +316,13 @@ export type EmailLogType =
   // Switchable for Business v1 (employer apprenticeship leads, Riverside).
   // Constraint added in migration 0125.
   | "s4b_employer_u1"
-  | "s4b_employer_ud";
+  | "s4b_employer_ud"
+  // Fastrack qualifying ack — fires from fastrack-receive when the learner
+  // submits the fastrack form AND clears the qualifying conditions
+  // (cohort_confirmed === true AND l3_reconfirmed === false). Operational
+  // confirmation of a successful application step plus named-rep callback
+  // heads-up. Legal basis: contract. Constraint added in migration 0146.
+  | "u_fastrack_qualified";
 
 export interface SendTransactionalArgs {
   sql: Sql;
