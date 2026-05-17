@@ -4,6 +4,48 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-17 (Session 50) — Channel B sheet writeback + post-nonce Brevo refresh + /admin/errors UX cleanup
+
+Three connected Edge Function + admin-app changes wrapped together. Closes the two largest accumulators of data drift in the platform.
+
+**Change 1: Channel B (`pending-update-confirm`) now writes status back to provider sheets.**
+
+- After every approve / override that updates `crm.enrolments.status`, the function now POSTs the new status to the provider's sheet via the appender's `update_by_submission_id` mode.
+- Best-effort + dead-letter pattern mirroring `fastrack-receive`: failures land in `leads.dead_letter` with source `channel_b_sheet_writeback`, function still returns success to the operator.
+- Skipped silently if `SHEETS_APPEND_TOKEN` env isn't set, or if the provider has no `sheet_webhook_url` (portal-only).
+- **Why:** the manifest's known limitation since Channel B shipped — AI Note approval updated DB but not sheet — was the biggest single source of new sheet drift (5/9 sub 199 stayed `Cannot reach` on sheet vs `open` in DB for 6 days, sub 208 similar). Republish was the only cure.
+- **Impact:** new dead-letter source `channel_b_sheet_writeback`. Should stay empty in normal operation. Any entry = the new writeback path failing, investigate.
+
+**Change 2: `backfill-client-nonce` now calls `crm.sync_leads_to_brevo` after each apply run.**
+
+- Stamping a `client_nonce` changes `SW_FASTRACK_URL` from empty to a real link, but `route-lead.ts` pushes the Brevo URL attributes only once at lead-insert. Without the new RPC call, those contacts' Brevo cards keep the empty fastrack URL and stay drifted until the next manual URL backfill sweep.
+- RPC is async via `net.http_post`; doesn't block the writer.
+- **Why:** of 166 opted-in leads since 1 April, 65 had `client_nonce` set AFTER insert via this backfill — that's where most of the 30 contacts the URL-backfill panel kept finding came from. Now closed at the source.
+- **Going-forward rule:** any new Edge Function or admin path that modifies `client_nonce` / `referral_code` / `course_id` / `marketing_opt_in` on an existing `leads.submissions` row MUST follow the write with `SELECT crm.sync_leads_to_brevo(ARRAY[<id>]::bigint[])`. Locked into project memory `project_brevo_urls_dont_auto_refresh_on_post_insert.md`.
+- **Not patched** (deliberate): sites that flip `marketing_opt_in=false` (sunset cron, brevo-event-webhook, brevo-consent-reconcile-daily). Those contacts are being unsubscribed anyway; stale URL is harmless.
+
+**Change 3: `/admin/errors` UX cleanup.**
+
+- "Lead not found" cosmetic bug on drift / writeback / fastrack / reconcile dead-letter rows: `postgres@3` returns bigint as JS string; the page's `typeof === "number"` check silently dropped every row whose `raw_payload.submission_id` came from a `SELECT s.id` source. Replaced with coerce-both helper. Saved as feedback memory `feedback_postgres3_bigint_returns_string.md`.
+- "Legacy sheet Submission IDs" backfill panel removed — work complete across all providers.
+- "024: Brevo URL backfill" panel renamed to "Brevo: refresh learner referral & fastrack URLs"; description rewritten in plain English; last-applied date surfaced as a separate line.
+- New "Flagged for Claude" card above the unresolved errors list. Surfaces resolved dead-letter rows whose audit note contains "Flagged for next session" from the last 60 days. Makes the button actually do what it promises — next platform session sees the backlog at session-start.
+
+**Migrations:** none. All three changes are Edge Function source + admin-app source.
+
+**Deploys this session:**
+- `supabase functions deploy pending-update-confirm --no-verify-jwt`
+- `supabase functions deploy backfill-client-nonce --no-verify-jwt`
+- Admin app: git push to `switch-platform`, Netlify auto-rebuild.
+
+**One-shot data-ops applied this session:**
+- Republished EMS / WYK Digital / Courses Direct sheets via `/admin/errors` to clear 12 outstanding sheet-drift rows.
+- Applied Brevo URL backfill (30 contacts mutated, 0 errors) to clear current SW_REFERRAL_URL / SW_FASTRACK_URL drift.
+
+**Signed off:** Owner (Session 50).
+
+---
+
 ## 2026-05-17 (Session 49) — `netlify-partial-capture` ALLOWED_FORMS extended to 6 form names
 
 Added four form names to the `ALLOWED_FORMS` Set in `supabase/functions/netlify-partial-capture/index.ts`: `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, `fastrack-funded-v1`. Function redeployed (config.toml already has `verify_jwt = false` for this function).
