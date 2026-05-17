@@ -1,116 +1,70 @@
-# Platform Handoff, Session 48, 2026-05-16
+# Platform Handoff, Session 49, 2026-05-17
 
 ## Current state
 
-Four things shipped today. (1) U1 funded contact block bug closed end-to-end: `SW_PROVIDER_CONTACT_BLOCK` redesigned twice through the session, landed as three plain-text Brevo contact attributes (`SW_PROVIDER_CONTACT_BEFORE`, `SW_PROVIDER_PHONE`, `SW_PROVIDER_CONTACT_AFTER`) that the U1 funded template wraps with HTML. Five Edge Functions redeployed, 356 existing contacts backfilled (zero errors). (2) U1 funded template collapse: pre/post-fastrack split retired — `sendU1Transactional` always sends the single `u1-funded` template. (3) Provider portal SLA: "First contact" copy reads "Within 1 working day" everywhere and the overdue timer respects Mon-Fri working hours. (4) Admin preview sidebar status links now stay inside the preview namespace.
-
-Wren publishes the new `u1-funded` template referencing the three new attributes; Charlotte deletes the orphan `SW_PROVIDER_CONTACT_BLOCK` attribute + orphan `u1-funded-post-fastrack` template from Brevo once verified.
+Five fixes shipped to admin + provider portal. Tab-refocus slowness fixed twice (RealtimeRefresh visibility handler gated to >5min hidden, then redundant `supabase.auth.getUser()` removed from admin layout); admin overview fully rebuilt per the Session 48 directive with period picker, per-section Suspense streaming, and provider scoreboard; `/provider/leads` default landing tab is now Fresh with an orthogonal Overdue queue and `cannot_reach` dropped from the Fastrack tab; `netlify-partial-capture` allowlist extended to cover the six forms Mable wired yesterday. Referral programme diagnosed end-to-end (capture pipe intact, near-zero share volume at the top of funnel) and cross-project asks routed to Wren and Mable. All five commits live.
 
 ## What was done this session
 
-### U1 funded contact block — final design
-
-- **`renderProviderContactBlock` removed, replaced with `renderProviderContactValues`** in `_shared/route-lead.ts`. Returns `{ before, phone, after }` plain strings (no `escapeHtml` — Brevo handles escape on `{{contact.X}}` substitution).
-- **Three new attributes written from `upsertLearnerInBrevo` + `upsertLearnerInBrevoNoMatch`.** Regional match (EMS today): `before` = "George from Enterprise Made Simple will give you a call to talk it through. Spaces fill fast, so save", `phone` = "07955 265 739", `after` = "in your contacts now and pick up when it rings." Fallback (every non-EMS lead, EMS LA outside the configured set, no_match, pending): `before` carries the unified sentence, `phone`/`after` empty (template's empty `<strong></strong>` renders invisibly).
-- **Old `SW_PROVIDER_CONTACT_BLOCK` attribute no longer written.** Orphaned on existing contacts; Charlotte deletes from Brevo dashboard once the new template is verified.
-- **Old per-send `SW_PROVIDER_CONTACT_BLOCK` param removed** from `sendU1Transactional`.
-- **Three new attributes registered in Brevo as Text type** (Charlotte, dashboard step).
-- **Five Edge Functions redeployed** by Charlotte: `routing-confirm`, `netlify-lead-router`, `admin-test-email`, `admin-brevo-resync`, `backfill-sw-provider-contact-block`.
-- **356 existing contacts backfilled** via `./scripts/run-039-backfill.sh "AUDIT_KEY"`. Zero errors. Script's exit check fixed (jq's `//` operator treats `false` as null-like; switched to `tostring` so `has_more: false` no longer trips the unexpected-response branch).
-
-### U1 funded template collapse
-
-- **`sendU1Transactional` always sends `BREVO_TEMPLATE_U1_FUNDED`.** `isPostFastrack` derivation deleted; `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` env reference removed.
-- **Vault key `BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` can stay** (harmless when unread). The orphan Brevo template can be deleted from Transactional → Templates whenever.
-
-### Provider portal SLA copy + weekend-aware timer
-
-- **"First contact" copy now reads "Within 1 working day"** in all three surfaces: `provider/agreement-section.tsx` (home agreement card), `provider/welcome/welcome-deck.tsx` (welcome deck SLA slide), `provider/sla-agreement/page.tsx` (standalone SLA page). Help text adds "weekends don't count".
-- **New `lib/working-hours.ts` utility.** Exports `workingMsBetween(start, end)` (sums Mon-Fri elapsed ms via 1-hour `.getDay()` iteration) and `isOverdueWorkingHours(iso, workingHours)`.
-- **First-attempt overdue timer rewired to working hours.** Three call sites: `provider/page.tsx`, `admin/preview/[provider_id]/home/page.tsx`, `provider/leads/leads-table.tsx`. `isOverdueRow` signature changed to take `openWorkingHours` instead of `openMs`. Callback + stale-attempt timers stay clock hours (not flagged this session).
-- **`sla_first_attempt_hours` column reinterpreted as working hours** (semantic-meaning change — recorded here + in `changelog.md`).
-- **Dead constants removed** from `leads-table.tsx`.
-
-### Admin preview sidebar
-
-- **`LeadsSidebar` accepts `leadsHrefBase` prop** (default `/provider/leads`). All status StatLinks use the prop.
-- **Preview page passes `/admin/preview/<encoded_provider_id>/leads`** so sidebar clicks stay inside the preview impersonation.
+- **Admin overview rebuild** (commit `c0eaead`). New `/admin/page.tsx`: period picker (2d/7d/14d/30d/lifetime/custom with native date inputs), per-section `<Suspense>` boundaries so the page chrome paints instantly while tiles stream. Top-line tiles: Total leads, Confirmed enrolments, CPL, CPE, Confirmed income (period, post free-3 cap), Ad spend, P/L (period headline + lifetime in note). Presumed-this-period as a separate tile for auto-flip cohort tracking. Provider scoreboard with four attributable columns (Leads / Enrolled / Conversion / Income) + rollup row. Data health + Actions cards moved out of layout into the page body. New `app/admin/_components/period-picker.tsx` client component.
+- **`/admin` slowness fix round 1** (commit `c0eaead`). `RealtimeRefresh` visibility handler now only fires `router.refresh()` after the tab has been hidden >5min (websocket-suspend threshold). Dropped the `focus` listener entirely; it was double-firing with `visibilitychange` and triggering on cross-app focus.
+- **`/provider/leads` Fresh + Overdue filter pills** (commit `c0eaead`). Fresh is the new default landing tab. Overdue pill rose-coloured when count > 0, slate when zero. Sidebar surfaces both at the top of the snapshot. Lead-overdue helpers extracted to `lib/lead-overdue.ts` so server page can count overdue rows without duplicating client logic.
+- **Fresh/Overdue orthogonal fix** (commit `b39c4aa`). Charlotte caught Fresh pulling up overdue rows: Fresh = `status='open'` and Overdue = `isOverdueRow(...)` overlapped on overdue-uncontacted leads, so the global sort pinned them to the top of Fresh. Fresh now excludes overdue rows. Sidebar Fresh count mirrors the pill.
+- **Fastrack tab drops `cannot_reach`** (commit `561a6da`). Charlotte's call: once the provider has logged the lead is unreachable, the fastrack signal is spent. `FASTRACK_SETTLED` set extended from {lost, enrolled, presumed_enrolled} to add `cannot_reach`.
+- **`/admin` slowness fix round 2** (commit `b518dcc`). Diagnosed that `proxy.ts` middleware already calls `supabase.auth.getUser()` on every request, and the admin layout was calling it again. Layout now reads local `getSession()` (no network); proxy is the security boundary. Defensive null check bounces to `/login` if cookies expired between middleware and layout. Saves ~100-300ms per click. Charlotte confirmed "platform does seem a little faster" post-deploy.
+- **`netlify-partial-capture` ALLOWED_FORMS extended** (commit `2675b00`). Added `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, `fastrack-funded-v1` to the Set. Function redeployed via `supabase functions deploy netlify-partial-capture`. `config.toml` already had `verify_jwt = false` set. Mable wired `.track()` calls into the corresponding six Switchable forms yesterday; without the allowlist extension all four new ones would have been rejected with `disallowed_form_name`.
+- **Referral programme diagnosis.** Queried `leads.submissions` + `crm.email_log`: 455 submissions in last 60 days, zero `referrer_lead_id` populated. Capture pipe verified intact via source-read (`extractRefCode`, `processReferral`, `/refer/` page script emitting `https://switchable.org.uk/course-finder/?ref=<CODE>` via WhatsApp/SMS/Email/Copy buttons). Issue is upstream: only 1 friend has ever clicked a real referral URL (May 10, code `BAYH9H59`, dropped at funded form step 6). Zero `/refer/` page traffic in `leads.partials`. U1 funded: 64 sent, 12 opens, 5 clicks; none of those clicks landed on `/refer/`. The 36 `?ref=` URLs that ARE in `page_url` are the waitlist pre-fill mechanism (`?ref=<email>&phone=<num>`), a namespace collision with the referral programme.
+- **Cross-project pushes added.** `switchable/email/docs/current-handoff.md` got a Wren ask to review the U1 funded + U1 self template referral CTA prominence (promote out of PS if buried). `switchable/site/docs/current-handoff.md` got a paired Mable + Sasha ask to ship a fire-and-forget `/refer/` page-view beacon + receiver Edge Function + a surfaced metric on `/admin/referrals`.
+- **AdminShell trimmed.** HealthBar removed from topbar; nav badges removed from sidebar (moved to overview body per directive). Layout query count dropped from 5 to 0 (only auth + MFA remain, both now lighter).
+- **Sasha session-start health check ran clean.** 16 crons active including all critical; 21 submissions in last 24h (18 non-DQ); zero unrouted >48h; zero new dead-letter rows in last 24h; RLS on across `leads`/`crm`/`ads_*`.
 
 ## Next steps
 
-1. **Wait for Wren's u1-funded template publish.** She's on the hook for republishing the single `u1-funded` template referencing `{{contact.SW_PROVIDER_CONTACT_BEFORE}} <strong>{{contact.SW_PROVIDER_PHONE}}</strong> {{contact.SW_PROVIDER_CONTACT_AFTER}}`. She'll confirm when live.
-2. **Verify on the next real EMS funded lead.** Submit at `/funded/counselling-skills-tees-valley/`, owner-confirm. U1 should render the named rep + phone in bold, no literal tags, no duplicated "they'll be in touch..." sentence. Eyeball logs to confirm the three attributes pushed correctly.
-3. **Verify the non-EMS fallback.** Submit a WYK Camden funded lead, owner-confirm. U1 should render the unified fallback paragraph with `<strong></strong>` invisible.
-4. **Delete the orphans from Brevo** once verified: `SW_PROVIDER_CONTACT_BLOCK` attribute (Contacts → Settings → Contact Attributes) + `u1-funded-post-fastrack` template (Transactional → Templates). Both harmless leftovers; no rush.
-
-> **Charlotte directive, 2026-05-16 (post-fix-session) — admin overview rebuild + slowness diagnostic + provider portal fresh-leads filter.** Three pieces of platform-view work. Slowness is the biggest day-to-day pain; tackle that first if it's a cheap diagnose-and-fix, otherwise sequence as A → B → C.
->
-> **A. Slowness diagnostic (highest priority, daily friction).** Returning to the platform tab has a lag before clicks are acknowledged. Suspected culprits: (1) the 18-query fan-out on `/admin/page.tsx` re-running on every navigation or tab refocus, (2) Next.js server component revalidation hitting Supabase on focus, (3) no client-side cache between routes so every admin nav hits the DB. The `withTimeout` wrapper in `/admin/page.tsx:59` already acknowledges the fan-out is a known issue ("Architectural-grade fix is to split queries into critical vs optional bundles and partial-render; queued for a future session"). Time to do that split. Likely cheap to investigate, biggest daily-pain item. Could be fixable without touching B.
->
-> **B. Overview redesign per Charlotte's spec.** Replace what's on `/admin` with:
->
-> - **Duration picker** at top: `2d` / `7d` / `14d` / `30d` / `lifetime` / `custom` (custom date range picker). Existing `PeriodPills` is the starting point but needs the new buckets + custom.
-> - **Top-line tiles for the selected date range:**
->   - Total leads (`leads.submissions` count by date range)
->   - Confirmed enrolments (`crm.enrolments` where `status='enrolled'`, by `enrolled_at`)
->   - Cost per lead (ad spend / total leads)
->   - Cost per confirmed enrolment (ad spend / confirmed enrolments)
->   - Confirmed income (per pilot pricing — see open question)
->   - Ad spend (from `ads_*` schemas)
->   - Profit / loss, confirmed (see open question on formula)
-> - **Separate small tile:** "Presumed enrolments this period" — just a number. Charlotte expects this to trend to near-nil as auto-flip lands; kept visible for auto-flip cohort tracking.
-> - **Provider scorecard table** — per-provider breakdown of all the above metrics for the date range. Four providers today (EMS, Courses Direct, WYK Digital, Riverside).
-> - **Summary cards at the bottom:** data health notices (the `vw_admin_health` content) + actions notices (current `actionsCount` from layout). These move from layout/sidebar onto the overview body.
-> - **Drop the "ad signals" section** — Charlotte's unclear what it's for on the overview. Move it to its own page (e.g. `/admin/analytics` or `/admin/ads-signals`) or kill if nothing reads it.
->
-> **Open question on B — P/L formula:** Charlotte flagged the current profit/loss as inaccurate. Definitional pin-down before rebuild: P/L = confirmed income − ad spend only? Or also net off tooling costs (Brevo, Supabase, GoCardless fees) and provider commissions where applicable? Pricing is per `business.md`: funded enrolment £150 (first 3 free per provider), self/loan 15% of fee (min £75, max £150), apprenticeship enrolment / employer signed £400 flat. First three of each per provider are free. Confirm formula with Charlotte before building.
->
-> **C. Provider portal `/provider/leads` — new "Fresh leads" filter.** Sits next to the existing "Overdue" filter on `leads-sidebar.tsx`. Fresh leads displayed FIRST (becomes the default landing tab). Within fresh, order fastrack-completers to the top.
->
-> **Open question on C — "fresh" definition:** `created < 24h`? `no contact attempt logged yet`? Both? And confirm fastrack-first ordering = `fastracked_at DESC NULLS LAST`. Pin down with Charlotte before building.
-
-5. **Consider folding callback + stale-attempt timers into working-hours too** for consistency. Charlotte only flagged first-attempt; the other two still use clock hours. Easy follow-up if a provider complains about weekend stale-attempt badges.
-6. **Watch invited portal users walk through** (carry from Session 47). Andy, Jake, George, Nick (EMS) and Jane, Freya (Riverside) still at `status='invited'`.
-7. **First real B2C ad-driven lead, confirm full chain** (carry from Session 47).
-8. **Optional env vars** in Supabase Vault when ready (carry): `BREVO_SENDER_EMAIL_LEADS = hello@switchleads.co.uk`, `OWNER_CC_ALL_EMAILS = hello@switchable.careers`.
-9. **Launch WYK + Courses Direct portals** when ready (carry from Session 47).
-10. **Preview B2B mode for Riverside.** `LeadsSidebar` accepts `leadType` + `employerStats` props but the admin preview page doesn't pass either, so a Riverside preview shows the learner sidebar. Separate-from-today bug. Fix when Solis touches Riverside again.
-11. **Lead-assignment "in session" lock (Phase 2)** (carry).
-12. **Tighten data-ops audit-log template** (carry from Session 44).
-13. **WYK + CD sheet-vs-DB reconcile** (carry, backlog 869d994nb).
-14. **`/provider/leads` N+1 + cursor siblings** (carry, backlog 869d994qf).
-15. **`RealtimeRefresh lead_notes` subscription scope** (carry, backlog 869d994t5).
-16. **RLS `(SELECT fn())` wrap on `crm.disputes` + `leads.fastrack_submissions`** (carry).
-17. **Solis carry-forward** — schema naming `ads_business` vs `ads_switchable_business`. `crm.employer_signings` design before first Riverside Employer Signed event.
-18. **CLI migration registry cleanup** (carry from Session 47). 0141 through 0145 in local but not remote per `supabase migration list --linked`. Repair at a calm moment.
+1. Verify the rebuilt `/admin` overview against real data across all period buckets. Click 2d/7d/14d/30d/lifetime, eyeball P/L tile period vs lifetime split, confirm scoreboard math (per-provider Leads / Enrolled / Conversion / Income) rolls up correctly into the totals.
+2. Watch `leads.partials` for the four newly-allowed form names (`s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, `fastrack-funded-v1`) once Mable's site-side push lands. If 24h passes with still zero partials for one specific form, investigate that form's `.track()` wiring.
+3. Replay or write-off the 12 `sheet_drift_detected` dead-letter rows accumulated since 2026-05-14. Trigger `republish-provider-sheet` from `/admin/errors` for each affected provider.
+4. If `/admin` still lags after `b518dcc`, instrument `proxy.ts`'s `updateSession` cost as the next diagnostic layer. The proxy runs `supabase.auth.getUser()` on every request including sub-route navs; if that's the residual cost, options are caching the user via a signed cookie or skipping it on already-validated session cookies.
+5. Repair CLI migration registry drift: `0141-0145` local but not on remote per `supabase migration list --linked` (carry from Session 47). Production is correct; only the local registry is out of sync.
+6. Per-provider CPL / CPE / P/L: design a campaign->provider mapping (either `crm.providers.ad_campaigns text[]` or `ads_switchable.campaign_provider_map`) so the scoreboard can carry those columns. The bottom of the scoreboard explicitly flags this gap.
+7. Optional follow-up from B: extend callback + stale-attempt timers to working hours (currently only first-attempt uses working hours per Session 48). Cheap if a provider complains about weekend stale-attempt badges.
+8. Brevo template orphan deletion (carry from Session 48): once Wren confirms `u1-funded` template is verified live on a real EMS or WYK lead, delete the orphan `SW_PROVIDER_CONTACT_BLOCK` attribute + `u1-funded-post-fastrack` template from Brevo dashboard.
+9. Carry from Session 47/48: invited portal users at `status='invited'` (Andy / Jake / George / Nick EMS, Jane / Freya Riverside); WYK + Courses Direct portal launch when ready; lead-assignment in-session lock (Phase 2); data-ops audit-log template tighten; WYK + CD sheet-vs-DB reconcile; `/provider/leads` N+1 + cursor siblings; RealtimeRefresh `lead_notes` subscription scope; RLS `(SELECT fn())` wrap on `crm.disputes` + `leads.fastrack_submissions`.
+10. Solis carry: schema naming `ads_business` vs `ads_switchable_business`; `crm.employer_signings` design before first Riverside Employer Signed event.
 
 ## Decisions and open questions
 
 **Decisions:**
 
-- **`SW_PROVIDER_CONTACT_BLOCK` split into three plain-text attributes (`BEFORE`/`PHONE`/`AFTER`).** Why: Brevo's text-type contact attributes always escape-render; `| raw` throws a syntax error and there's no template-side workaround. Wren's call to keep variables plain text and put `<strong>` markup in static template content.
-- **U1 funded template collapsed to one.** Wren's call: the regular U1 copy gracefully covers fastracked learners, and the post-fastrack "thanks for sending the extra details" beat duplicated the site thank-you page's ack. `sendU1Transactional` no longer branches on fastrack state.
-- **First-attempt SLA reinterpreted as working hours (Mon-Fri).** `crm.providers.sla_first_attempt_hours` value of 24 now means "24 Mon-Fri clock hours". Display reads "1 working day" so the semantics are visible inline. No schema change; reinterpretation happens at the timer call site in code.
-- **Callback + stale-attempt timers stay clock-hours** for now (not flagged by Charlotte).
-- **Backfill DID run this time** (356 contacts, zero errors). Was skipped earlier in the session when the chained-worker pattern hit Supabase compute limits. Loop-based bash wrapper proved reliable — fresh compute budget per chunk.
-- **Migration 0145 header untouched** through all the redesigns (data-infrastructure rule: never edit applied migrations). All change context recorded in `changelog.md` + `data-architecture.md`.
+- **Fresh and Overdue are mutually exclusive on `/provider/leads`.** Fresh = `status='open'` AND not overdue. Overdue = past SLA regardless of attempt state. The previous shape overlapped (Overdue is a subset of Fresh when both fire on the same lead) and made the Fresh tab look like Overdue because the global sort pinned overdue rows to the top. Orthogonal split removes the ambiguity; sidebar Fresh count mirrors the pill.
+- **`cannot_reach` added to `FASTRACK_SETTLED`.** Charlotte's call: once the provider has logged unreachable, the fastrack signal is spent. Reverses the earlier "keep cannot_reach in so a learner who comes back can still be picked up" rationale.
+- **Admin layout no longer revalidates the user with `supabase.auth.getUser()`.** `proxy.ts` is the security boundary; layout trusts it. Local `getSession()` is enough for user email + AAL check. Defensive null check bounces to `/login` if cookies expired between middleware and layout (shouldn't happen in practice).
+- **`/admin` overview rebuilt with Option A on the scoreboard.** Per-provider Leads / Enrolled / Conversion / Income only; per-provider CPL / CPE / P/L deferred pending a campaign->provider mapping. Top-line tiles roll up across all providers and carry the spend-based metrics.
+- **AdminShell HealthBar and sidebar nav badges removed.** Per directive: those metrics moved to the overview body. Side effect: admin sub-pages (`/admin/leads`, `/admin/actions`, etc.) no longer show those signals. Intentional consequence of the move; easy to add back on sub-pages if it bothers in practice.
+- **Referral programme is not broken at the platform layer.** Capture pipe is intact; `/refer/` page works; share buttons emit correct URLs; `extractRefCode` + `processReferral` fire on a valid `?ref=<8-char-code>` payload. Issue is upstream (low CTA prominence in U1, no `/refer/` page-view telemetry). Routed to Wren + Mable.
+- **P/L formula** (Session 48 open question): confirmed as period revenue minus period ad spend only; tooling costs and provider commissions not netted off at this scale. Lifetime totals shown as a note beneath the period figure.
+- **"Fresh" definition** (Session 48 open question): no contact attempt logged yet (`status='open'`), with the orthogonal Overdue subtraction added this session. Fastrack-first ordering within Fresh handled by the existing global sort.
 
-**Open questions:** none this session.
+**Open questions:** None this session.
 
 ## Watch items
 
-- **Wren's u1-funded template publish.** Once live, verify on the next real EMS funded lead + a WYK non-EMS lead.
-- **First Friday-late or Saturday-routed lead post-deploy.** Confirm the overdue badge does NOT fire over the weekend.
-- **CLI migration registry drift** (carry from Session 47). 0141 through 0145 in local but not remote. Production correct.
-- **Audit row lands on every new SLA acceptance** (carry from Session 46-47).
-- **`SLA: X/N accepted` badge** on `/admin/providers/<id>` (carry from Session 46-47).
-- **TEST_MODE = false** in Supabase Vault. Re-verify before any session that might trigger a real B2B submission.
-- **First real cohort_decline fastrack** (carry from Session 44).
+- **`/admin` slowness post-deploy.** Charlotte confirmed "platform does seem a little faster" after `b518dcc`. Continue to monitor whether tab-refocus + first-click lag has fully gone. If not, `proxy.ts` middleware is the next layer.
+- **`leads.partials` for the four newly-allowed form names** post-Mable-push. Should populate within hours of her site-side fix landing. Investigate any one that stays at zero after 24h.
+- **12 `sheet_drift_detected` dead-letter rows.** Oldest 2026-05-14 06:00 UTC, none > 7 days. Accumulating from the daily reconcile cron; not urgent but needs an operator pass.
+- **Wren's `u1-funded` template publish** (carry from Session 48). Once live, verify on the next real EMS Tees Valley funded lead + WYK Camden non-EMS lead. Then delete the Brevo orphans.
+- **CLI migration registry drift** `0141-0145` local but not on remote (carry from Session 47). Production correct.
+- **First Friday-late or Saturday-routed lead post-Session-48 deploy.** Confirm the overdue badge does NOT fire over the weekend per the working-hours timer.
+- **`TEST_MODE = false`** in Supabase Vault. Re-verify before any session that might trigger a real B2B submission.
+- **First real `cohort_decline` fastrack** (carry from Session 44).
 - **First fire of `dead-letter-alert-hourly` cron** (carry from Session 44).
 - **First real B2B Riverside submission** (carry from Session 46-47).
+- **Invited portal users walking through** (Andy / Jake / George / Nick EMS, Jane / Freya Riverside; all still at `status='invited'`).
+- **Audit row lands on every new SLA acceptance** (carry from Session 46-47).
+- **`SLA: X/N accepted` badge** on `/admin/providers/<id>` (carry from Session 46-47).
+- **First real B2C ad-driven lead, confirm full chain** (carry from Session 47).
 
 ## Next session
 
 - **Folder:** `platform`
-- **First task:** Verify Wren's new u1-funded template renders correctly on the first real EMS Tees Valley funded lead + a WYK Camden non-EMS lead. Confirm the three attributes resolved correctly, the `<strong>` bold rendered the phone (no literal tags), and the fallback paragraph reads cleanly with no visible empty strong. Once verified live: delete the orphan `SW_PROVIDER_CONTACT_BLOCK` attribute + orphan `u1-funded-post-fastrack` template from Brevo. Optional follow-up: extend the working-hours timer to callback + stale-attempt for consistency.
-- **Cross-project:** switchable/email — Wren publishing the new u1-funded template. Once she confirms live, the issue closes.
+- **First task:** Verify the rebuilt `/admin` overview against real data across every period bucket. Click through 2d / 7d / 14d / 30d / lifetime and a custom range; confirm tile values, scoreboard math, and rollup row. Then check whether the layout `getUser` removal has fully resolved the tab-refocus lag; if not, instrument the `proxy.ts` `updateSession` cost as the next diagnostic.
+- **Cross-project:** Wren has the U1 referral CTA prominence ask in `switchable/email/docs/current-handoff.md`. Mable has the paired `/refer/` page-view beacon ask in `switchable/site/docs/current-handoff.md`; once Mable's spec for the beacon lands here, build the Edge Function receiver + `leads.page_views` extension + surface the metric on `/admin/referrals`.
