@@ -1,10 +1,8 @@
 # Platform Handoff, Session 50, 2026-05-17
 
-## ⚡ INBOUND FROM switchable/email (Wren) 2026-05-17 — DEADLINE TOMORROW MIDDAY UK
+## ⚡ WREN'S WORK SHIPPED SAME SESSION
 
-Wren is shipping a "last chance to apply" marketing broadcast tomorrow 18 May PM, targeting open `smm-for-ecommerce` leads who haven't fastracked. The broadcast's Brevo audience filter needs a `SW_FASTRACKED` boolean attribute by **midday Monday 18 May UK** to filter cleanly. Two distinct deliverables, full spec preserved below in Next steps #1.
-
-**Fallback if not hit:** Wren pulls audience via DB SQL for this one send; attribute work catches up after. Broadcast doesn't gate on you, but Brevo-native filter is preferred.
+Originally queued as a hard-deadline midday-Monday task with `SW_FASTRACKED` attribute creation + post-insert refresh patch + audience backfill + `u-fastrack-qualified` transactional template wiring. All four pieces landed today in this session. Wren's 18 May PM broadcast is good to fire on a Brevo-native filter. See "What was done this session" below for the full list; "Next steps" no longer carries any Wren-blocking work.
 
 ## Current state
 
@@ -24,25 +22,26 @@ Channel B (AI Notes) approvals now write status back to the provider sheet, clos
 - **Applied the existing 30 mutating Brevo contacts** via `/admin/errors` → Brevo panel. Current Brevo URL drift now zero.
 - **Saved two memory entries:** `postgres@3` bigint-as-string gotcha (feedback), Brevo URL post-insert refresh pattern (project).
 - **Inbound push from Mable** logged earlier today: `.track()` wiring is live across the four newly-allowed forms (commit `8f5e9b0`). Dependency cleared — Watch item #1 below is now active watching, not pending.
+- **Wren's `SW_FASTRACKED` ask resolved without new attribute creation.** Discovered the boolean already exists in production as `SW_FASTRACK_COMPLETED` (migration 0099, lines 721 + 974 of `_shared/route-lead.ts`). Wren updated `switchable/email/CLAUDE.md` to 22 attrs to document it. Push to her handoff explains the rename + the architectural caveat.
+- **Patched `fastrack-receive`** with the post-insert refresh path (commit `fc1171e`). Same `crm.sync_leads_to_brevo` pattern shipped earlier in the day for `backfill-client-nonce`. Closes the architectural gap that bit `SW_FASTRACK_URL` on 9 May.
+- **Full-audience Brevo backfill applied** via 5 chunked SQL calls of 50 each (the bulk 238-id call timed out at the pg_net 60s ceiling, so we chunked). Result: every routed non-DQ contact now has the current `SW_FASTRACK_COMPLETED`, `SW_FASTRACK_URL`, and every other SW_* attribute. 2 contacts still wrong due to a separate duplicate-submission overwrite bug — see Watch items.
+- **u-fastrack-qualified transactional template wired** (commit `74d9c42`). Wren handed me template ID 63 mid-session. Migration 0146 extends `email_log_email_type_check`. `BREVO_TEMPLATE_U_FASTRACK_QUALIFIED=63` env var set in Supabase Edge Function secrets. Fires when `cohort_confirmed === true AND l3_reconfirmed === false`. Idempotent via `crm.email_log`. Contract basis.
+- **Course slug semantic gap noted and corrected mid-flight.** `leads.submissions.course_id` carries the regional slug (`smm-for-ecommerce-tees-valley`). Brevo `SW_COURSE_SLUG` carries the bare matrix `courseId` (`smm-for-ecommerce`). Same-named fields, different values. Pattern memory worth flagging next session — surfaced today after a wrong "correction" I sent Wren mid-session that had to be retracted.
 
 ## Next steps
 
-1. **`SW_FASTRACKED` attribute + `u-fastrack-qualified` transactional template (Wren ask, hard deadline tomorrow midday UK).**
-   - **Attribute:** create `SW_FASTRACKED` boolean in Brevo dashboard. Wire `SW_FASTRACKED: false` at routing time in `_shared/route-lead.ts` (both `upsertLearnerInBrevo` and `upsertLearnerInBrevoNoMatch`). Wire write-on-flip in `fastrack-receive` after the child-row insert + parent `fastracked_at` stamp: call `upsertBrevoContact` with `SW_FASTRACKED: true`. The same upsert can refresh other SW_* attrs as a free side effect (useful — also re-pushes `SW_FASTRACK_URL`).
-   - **Backfill:** via `admin-brevo-resync` panel pattern (just used 2026-05-16 for 356 contacts). For every Brevo contact with a parent `leads.submissions` row, set `SW_FASTRACKED = (fastracked_at IS NOT NULL)`. Same pass refreshes `SW_FASTRACK_URL`.
-   - **Email type:** new `u-fastrack-qualified` transactional template. Trigger condition inside `fastrack-receive` after child-row insert: `cohort_confirmed === true AND l3_reconfirmed === false`. Send via `sendTransactional` in `_shared/brevo.ts`. Template ID TBD from Wren. Template reuses existing `SW_PROVIDER_CONTACT_BEFORE` / `SW_PROVIDER_PHONE` / `SW_PROVIDER_CONTACT_AFTER` composition — no new attribute wiring for content. Idempotency in `crm.email_log` on `(submission_id, 'u_fastrack_qualified')`. Add `'u_fastrack_qualified'` to whatever enum / check constraint governs `email_type` (migration if needed). Legal basis: contract — goes regardless of marketing_opt_in.
-   - **Docs:** update `switchable/email/CLAUDE.md` attribute list 21 → 22 (Wren can take this); log both attribute + email_type in `platform/docs/changelog.md` on ship.
-   - **Sequencing:** trigger is independent of the broadcast send. No hard deadline on the trigger itself, but ideally live within a few days of broadcast.
-2. **Watch tomorrow's 07:00 BST drift email.** Should report 0 new drift rows. That's the Channel B writeback validation. Any non-zero count needs investigating.
+1. **Watch tomorrow's 07:00 BST drift email.** Should report 0 new drift rows. That's the Channel B writeback validation. Any non-zero count needs investigating.
+2. **Watch `crm.email_log` for the first `u_fastrack_qualified` row.** Should land when the first qualifying fastrack flows through post-deploy. Verify `status = 'sent'` and a `brevo_message_id`.
 3. **Watch `leads.dead_letter` for source `channel_b_sheet_writeback`.** Should stay empty. Any entry there = the new writeback path is failing.
-4. **Verify the rebuilt `/admin` overview** across all period buckets (carry from S49). Click 2d / 7d / 14d / 30d / lifetime / custom; confirm scoreboard math rolls up correctly.
-5. **Watch `leads.partials`** for `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, `fastrack-funded-v1`. Mable's `.track()` is live; rows should land within hours. Any one still at zero after 24h = that form's wiring needs investigation.
-6. **Per-provider CPL / CPE / P/L scoreboard.** Design the campaign → provider mapping (`crm.providers.ad_campaigns text[]` OR `ads_switchable.campaign_provider_map`) so those columns can join the rollup (carry from S49).
-7. **CLI migration registry drift `0141-0145`** local but not on remote per `supabase migration list --linked` (carry from S47). Production correct.
-8. **Brevo orphan deletion** once Wren confirms `u1-funded` template is verified live on a real EMS or WYK lead. Delete the orphan `SW_PROVIDER_CONTACT_BLOCK` attribute + `u1-funded-post-fastrack` template (carry from S48-49).
-9. **Optional follow-up: extend working-hours timer** to callback + stale-attempt (carry from S48).
-10. **Carries from S47-49 still open.** Invited portal users at `status='invited'`; WYK + Courses Direct portal launch when ready; lead-assignment in-session lock (Phase 2); data-ops audit-log template tighten; WYK + CD sheet-vs-DB reconcile; `/provider/leads` N+1 + cursor siblings; RealtimeRefresh `lead_notes` subscription scope; RLS `(SELECT fn())` wrap on `crm.disputes` + `leads.fastrack_submissions`.
-11. **Solis carries.** Schema naming `ads_business` vs `ads_switchable_business`; `crm.employer_signings` design before first Riverside Employer Signed event.
+4. **Fix the duplicate-submission Brevo overwrite bug.** Today's chunked backfill exposed it: when one contact has multiple submissions, the LAST upsert wins, and if the latest submission's `fastracked_at` or DQ state isn't the contact's "best" state, the Brevo card ends up wrong. 2 contacts globally affected today (Amanda Robinson #474, Kirsty Crowther #232 — both on counselling, neither in Wren's SMM audience). Proper fix: `route-lead.ts` should aggregate across all submissions for the email when setting `SW_FASTRACK_COMPLETED` and other engagement-shaped attributes, not just read the current submission's row.
+5. **Verify the rebuilt `/admin` overview** across all period buckets (carry from S49). Click 2d / 7d / 14d / 30d / lifetime / custom; confirm scoreboard math rolls up correctly.
+6. **Watch `leads.partials`** for `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, `fastrack-funded-v1`. Mable's `.track()` is live; rows should land within hours. Any one still at zero after 24h = that form's wiring needs investigation.
+7. **Per-provider CPL / CPE / P/L scoreboard.** Design the campaign → provider mapping (`crm.providers.ad_campaigns text[]` OR `ads_switchable.campaign_provider_map`) so those columns can join the rollup (carry from S49).
+8. **CLI migration registry drift `0141-0145`** local but not on remote per `supabase migration list --linked` (carry from S47). Production correct.
+9. **Brevo orphan deletion** once Wren confirms `u1-funded` template is verified live on a real EMS or WYK lead. Delete the orphan `SW_PROVIDER_CONTACT_BLOCK` attribute + `u1-funded-post-fastrack` template (carry from S48-49).
+10. **Optional follow-up: extend working-hours timer** to callback + stale-attempt (carry from S48).
+11. **Carries from S47-49 still open.** Invited portal users at `status='invited'`; WYK + Courses Direct portal launch when ready; lead-assignment in-session lock (Phase 2); data-ops audit-log template tighten; WYK + CD sheet-vs-DB reconcile; `/provider/leads` N+1 + cursor siblings; RealtimeRefresh `lead_notes` subscription scope; RLS `(SELECT fn())` wrap on `crm.disputes` + `leads.fastrack_submissions`.
+12. **Solis carries.** Schema naming `ads_business` vs `ads_switchable_business`; `crm.employer_signings` design before first Riverside Employer Signed event.
 
 ## Decisions and open questions
 
@@ -62,6 +61,9 @@ Channel B (AI Notes) approvals now write status back to the provider sheet, clos
 
 - **Tomorrow's 07:00 BST drift email** — should report 0 new drift. Validates Channel B writeback.
 - **`leads.dead_letter` source `channel_b_sheet_writeback`** — should stay empty.
+- **First `u_fastrack_qualified` row in `crm.email_log`** — should land when the first real qualifying fastrack flows through post-deploy. Verify `status = 'sent'`.
+- **Wren's 18 May PM SMM Tees Valley broadcast firing** — 12 contacts in audience; Brevo-native filter `SW_COURSE_SLUG = smm-for-ecommerce AND SW_FASTRACK_COMPLETED = false AND SW_ENROL_STATUS = open AND SW_CONSENT_MARKETING = true`. Course slug is the bare matrix `courseId`, NOT the regional DB `course_id`.
+- **Amanda Robinson #474 + Kirsty Crowther #232** — Brevo cards show wrong `SW_FASTRACK_COMPLETED` due to the duplicate-submission overwrite bug. Both on counselling, neither in Wren's broadcast. Won't self-heal until the bug is fixed (Next-step #4).
 - **`leads.partials` for `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, `fastrack-funded-v1`** — Mable's wiring live; rows should populate within hours.
 - **`/admin` slowness post-`b518dcc`** — Charlotte confirmed "platform does seem a little faster". Continue monitoring tab-refocus + first-click lag.
 - **Wren's `u1-funded` template publish** (carry from S48-49). Verify on next real EMS Tees Valley funded lead + WYK Camden non-EMS lead before deleting Brevo orphans.
@@ -79,5 +81,5 @@ Channel B (AI Notes) approvals now write status back to the provider sheet, clos
 ## Next session
 
 - **Folder:** `platform`
-- **First task:** Wren's `SW_FASTRACKED` + `u-fastrack-qualified` work (Next-step #1). Hard deadline midday Monday 18 May UK on the attribute + wiring + backfill. Read tomorrow's 07:00 BST drift email first (5 min) to confirm Channel B writeback is clean, then dive into Wren's spec.
-- **Cross-project:** Wren's full ask sits in this handoff and originated from `switchable/email/docs/current-handoff.md`. Mable's `/refer/` page-view beacon ask is still in `switchable/site/docs/current-handoff.md` — not started this session. Wren's U1 referral CTA prominence ask is also still in `switchable/email/docs/current-handoff.md`.
+- **First task:** Read tomorrow's 07:00 BST drift email (5 min) — should report 0 new drift, validating Channel B writeback. Then verify the first `u_fastrack_qualified` row lands in `crm.email_log` once a real qualifying fastrack flows through. Then pick up the duplicate-submission overwrite bug fix (Next-step #4) before any future Brevo backfill re-breaks Amanda + Kirsty.
+- **Cross-project:** Mable's `/refer/` page-view beacon ask is still in `switchable/site/docs/current-handoff.md` — not started this session. Wren's U1 referral CTA prominence ask is also still in `switchable/email/docs/current-handoff.md`. Wren's `SW_FASTRACKED` + qualifying ack work landed this session (no remaining cross-project work for her broadcast).
