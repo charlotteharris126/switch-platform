@@ -139,9 +139,15 @@ const CALLING = new Set<LeadStatus>([
 ]);
 const ENROLLED = new Set<LeadStatus>(["enrolled", "presumed_enrolled"]);
 const COLD = new Set<LeadStatus>(["lost", "cannot_reach"]);
-// Statuses that mean a fastrack is no longer the next action. Excludes
-// cannot_reach so a learner who comes back can still be picked up.
-const FASTRACK_SETTLED = new Set<LeadStatus>(["lost", "enrolled", "presumed_enrolled"]);
+// Statuses that mean a fastrack is no longer the next action. Includes
+// cannot_reach: once the provider has logged they can't get through,
+// the fastrack signal is spent for this provider's purposes.
+const FASTRACK_SETTLED = new Set<LeadStatus>([
+  "lost",
+  "cannot_reach",
+  "enrolled",
+  "presumed_enrolled",
+]);
 
 type BulkResult = { ok: boolean; applied: number; skipped: number; error?: string };
 
