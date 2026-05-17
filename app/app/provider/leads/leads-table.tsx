@@ -5,7 +5,7 @@ import Link from "next/link";
 import { DurationTimer } from "../duration-timer";
 import { STATUS_LABEL, type LeadStatus, type LostReason, VALID_LOST_REASONS } from "@/lib/lead-status";
 import { labelCourse, labelFunding } from "@/lib/lead-values";
-import { isOverdueWorkingHours } from "@/lib/working-hours";
+import { isOverdueRow as _isOverdueRow, isStaleAttempt as _isStaleAttempt } from "@/lib/lead-overdue";
 
 const STATUS_TONE: Record<LeadStatus, string> = {
   open: "bg-slate-100 text-slate-700 border-slate-200",
@@ -65,6 +65,12 @@ export type Filter =
   | "action"
   | "callback"
   | "fastrack"
+  // "fresh" is the same set as "open" (status='open', no contact attempt
+  // logged yet); the rename is a UI tweak that promotes it to the default
+  // landing tab. Kept as a distinct filter value so URL aliases and the
+  // sidebar Fresh tab survive future status-set changes.
+  | "fresh"
+  | "overdue"
   | "open"
   | "calling"
   | "meeting"
@@ -87,17 +93,18 @@ export type Filter =
 // "Action needed" is rendered separately above as its own prominent pill
 // (rose when items waiting, emerald when zero). The standard filter row
 // below covers everything else, branched by lead-type.
-const LEARNER_FILTER_DEFS: Array<{ value: Filter; label: string }> = [
-  { value: "all", label: "All" },
+const LEARNER_FILTER_DEFS: Array<{ value: Filter; label: string; tone?: "rose" | "amber" }> = [
+  { value: "fresh", label: "Fresh" },
+  { value: "overdue", label: "Overdue", tone: "rose" },
   { value: "callback", label: "Needs callback" },
   { value: "fastrack", label: "Fastrack" },
-  { value: "open", label: "Open" },
   { value: "calling", label: "Calling" },
   { value: "meeting", label: "Meeting booked" },
   { value: "enrolled", label: "Enrolled" },
   { value: "cold", label: "Cold" },
+  { value: "all", label: "All" },
 ];
-const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string }> = [
+const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string; tone?: "rose" | "amber" }> = [
   { value: "all", label: "All" },
   { value: "open", label: "Open" },
   { value: "engaged", label: "Engaged" },
@@ -115,9 +122,6 @@ const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string }> = [
 // the status off open, they've actioned the fastrack signal. If the new
 // status goes stale, it returns to actions via the stale-attempt timer.
 // Fastrack stays visible as a row badge + own filter pill regardless.
-// Threshold-aware helpers. Each takes the per-provider SLA durations in
-// milliseconds so the same component renders correctly for any provider
-// SLA (PPA v1 default 24h first-attempt / 36h stale; PPA v2 24h / 120h).
 function isActionRow(r: LeadRow, staleAttemptMs: number): boolean {
   if (r.callback_pending) return true;
   if (r.status === "open") return true;
@@ -125,34 +129,8 @@ function isActionRow(r: LeadRow, staleAttemptMs: number): boolean {
   return false;
 }
 
-function isStaleAttempt(r: LeadRow, staleAttemptMs: number): boolean {
-  if (
-    r.status !== "attempt_1_no_answer"
-    && r.status !== "attempt_2_no_answer"
-    && r.status !== "attempt_3_no_answer"
-  ) {
-    return false;
-  }
-  if (!r.status_updated_at) return false;
-  return Date.now() - new Date(r.status_updated_at).getTime() > staleAttemptMs;
-}
-
-// Per-row overdue: any of (a) open + routed older than the first-attempt
-// SLA (working hours, Mon-Fri only — weekends excluded per the SLA
-// agreement), (b) callback flag pending + status hasn't moved in stale-
-// attempt SLA hours (clock hours), (c) attempt status stale (clock hours).
-// Both thresholds passed in so the function reads consistent with the
-// provider's configured pace.
-function isOverdueRow(r: LeadRow, openWorkingHours: number, staleAttemptMs: number): boolean {
-  if (r.status === "open" && r.routed_at) {
-    if (isOverdueWorkingHours(r.routed_at, openWorkingHours)) return true;
-  }
-  if (r.callback_pending && r.status_updated_at) {
-    if (Date.now() - new Date(r.status_updated_at).getTime() > staleAttemptMs) return true;
-  }
-  if (isStaleAttempt(r, staleAttemptMs)) return true;
-  return false;
-}
+const isStaleAttempt = _isStaleAttempt;
+const isOverdueRow = _isOverdueRow;
 
 const CALLING = new Set<LeadStatus>([
   "attempt_1_no_answer",
@@ -290,6 +268,7 @@ export function LeadsTable({
   const counts = useMemo(() => {
     let action = 0;
     let open = 0;
+    let overdue = 0;
     let calling = 0;
     let meeting = 0;
     let enrolled = 0;
@@ -305,9 +284,10 @@ export function LeadsTable({
     const FIFTY_DAYS_MS = 50 * 24 * 60 * 60 * 1000;
     for (const r of rows) {
       if (isActionRow(r, staleAttemptMs)) action += 1;
+      if (isOverdueRow(r, openWorkingHours, staleAttemptMs)) overdue += 1;
       if (r.callback_pending) callback += 1;
       // Fastrack count excludes already-settled leads (lost, enrolled,
-      // presumed_enrolled) — once a lead is closed out the fastrack is
+      // presumed_enrolled). Once a lead is closed out the fastrack is
       // no longer the next action. Matches the home-page badge logic.
       if (r.has_fastrack && !FASTRACK_SETTLED.has(r.status)) fastrack += 1;
       if (r.status === "open") open += 1;
@@ -331,10 +311,11 @@ export function LeadsTable({
     }
     return {
       all: rows.length,
-      action, callback, fastrack, open, calling, meeting, enrolled, cold, stale_attempts,
+      action, callback, fastrack, fresh: open, overdue, open,
+      calling, meeting, enrolled, cold, stale_attempts,
       engaged, in_progress, signed, not_signed, near_60_day,
     };
-  }, [rows]);
+  }, [rows, openWorkingHours, staleAttemptMs]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -349,8 +330,10 @@ export function LeadsTable({
         if (!r.callback_pending) return false;
       } else if (filter === "fastrack") {
         if (!r.has_fastrack || FASTRACK_SETTLED.has(r.status)) return false;
-      } else if (filter === "open") {
+      } else if (filter === "fresh" || filter === "open") {
         if (r.status !== "open") return false;
+      } else if (filter === "overdue") {
+        if (!isOverdueRow(r, openWorkingHours, staleAttemptMs)) return false;
       } else if (filter === "calling") {
         if (!CALLING.has(r.status)) return false;
       } else if (filter === "meeting") {
@@ -410,7 +393,7 @@ export function LeadsTable({
       const bRouted = b.routed_at ? new Date(b.routed_at).getTime() : 0;
       return bRouted - aRouted;
     });
-  }, [rows, filter, query, courseFilter, cohortFilter]);
+  }, [rows, filter, query, courseFilter, cohortFilter, openWorkingHours, staleAttemptMs]);
 
   return (
     <div>
@@ -431,15 +414,25 @@ export function LeadsTable({
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex flex-wrap gap-1">
-          {(isEmployerView ? EMPLOYER_FILTER_DEFS : LEARNER_FILTER_DEFS).map((f) => (
-            <FilterPill
-              key={f.value}
-              label={f.label}
-              count={(counts as Record<string, number>)[f.value] ?? 0}
-              active={filter === f.value}
-              onClick={() => setFilter(f.value)}
-            />
-          ))}
+          {(isEmployerView ? EMPLOYER_FILTER_DEFS : LEARNER_FILTER_DEFS).map((f) => {
+            const count = (counts as Record<string, number>)[f.value] ?? 0;
+            // Tone only fires when there's something to draw attention to.
+            // "Overdue: 0" stays slate so the row doesn't shout for no reason.
+            // FilterPill only accepts "rose" today; amber stays slate visually
+            // until the pill palette grows.
+            const pillTone: "rose" | undefined =
+              f.tone === "rose" && count > 0 ? "rose" : undefined;
+            return (
+              <FilterPill
+                key={f.value}
+                label={f.label}
+                count={count}
+                active={filter === f.value}
+                onClick={() => setFilter(f.value)}
+                tone={pillTone}
+              />
+            );
+          })}
         </div>
         <div className="flex items-center gap-2">
           <input

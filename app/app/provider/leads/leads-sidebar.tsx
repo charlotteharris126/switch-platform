@@ -17,6 +17,9 @@ interface WeekStats {
 
 interface Props {
   open: number;
+  // Overdue rows: SLA-breached. Sits above Fresh in the snapshot when > 0.
+  // Optional so admin preview pages that don't compute it still render.
+  overdue?: number;
   calling: number;
   meetingBooked: number;
   enrolledThisMonth: number;
@@ -41,6 +44,7 @@ interface Props {
 
 export function LeadsSidebar({
   open,
+  overdue = 0,
   calling,
   meetingBooked,
   enrolledThisMonth,
@@ -97,26 +101,33 @@ export function LeadsSidebar({
   }
   return (
     <aside className="space-y-4">
-      {/* Snapshot — every row clicks through to the matching filter */}
+      {/* Snapshot. Every row clicks through to the matching filter. */}
       <Card>
         <CardTitle>At a glance</CardTitle>
         <div className="mt-3 space-y-0.5">
+          <StatLink
+            href={`${leadsHrefBase}?status=fresh`}
+            label="Fresh"
+            value={open}
+            tone="rose"
+            emphasis
+          />
+          {overdue > 0 && (
+            <StatLink
+              href={`${leadsHrefBase}?status=overdue`}
+              label="Overdue"
+              value={overdue}
+              tone="rose"
+            />
+          )}
           {callbackPending > 0 && (
             <StatLink
               href={`${leadsHrefBase}?status=callback`}
               label="Needs callback"
               value={callbackPending}
               tone="rose"
-              emphasis
             />
           )}
-          <StatLink
-            href={`${leadsHrefBase}?status=open`}
-            label="Open"
-            value={open}
-            tone={callbackPending > 0 ? "slate" : "rose"}
-            emphasis={callbackPending === 0}
-          />
           <StatLink
             href={`${leadsHrefBase}?status=calling`}
             label="Calling"

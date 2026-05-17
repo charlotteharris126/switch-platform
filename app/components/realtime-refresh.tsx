@@ -22,10 +22,12 @@ import { createClient } from "@/lib/supabase/client";
 //      hour) we forward it to realtime via setAuth(). Without this, the channel
 //      keeps an open socket but quietly stops delivering RLS-gated events once
 //      the original token expires.
-//   2. Tab-visibility safety net — when the tab becomes visible, force a
-//      router.refresh(). Browsers (Chrome especially) suspend background tab
-//      websockets; on return the data is stale even if the channel "looks" open.
-//      This covers any silent failure mode we haven't enumerated.
+//   2. Tab-visibility safety net. When the tab returns to visible after being
+//      hidden for more than HIDDEN_REFRESH_THRESHOLD_MS, force a router.refresh().
+//      Browsers (Chrome especially) suspend background tab websockets on long
+//      backgrounding; on return the data is stale even if the channel "looks"
+//      open. Brief refocuses (alt-tab for a few seconds) are skipped to avoid
+//      thrashing the server tree on every tab switch.
 //   3. Reconnect on channel error — if subscribe() reports CHANNEL_ERROR or
 //      TIMED_OUT, we tear down and re-subscribe.
 
@@ -120,22 +122,31 @@ export function RealtimeRefresh({ tables, channel }: Props) {
       }
     });
 
-    // Safety net: when the tab becomes visible, refresh server data. Covers
-    // backgrounded-tab websocket suspension and any silent failure.
+    // Safety net: refresh server data when the tab returns from a long-enough
+    // background that the websocket may have been suspended. Brief refocuses
+    // are skipped; they'd otherwise re-run the whole server tree (layout
+    // queries + page fan-out) on every alt-tab, lagging the next click.
+    const HIDDEN_REFRESH_THRESHOLD_MS = 5 * 60_000;
+    let hiddenSinceMs: number | null =
+      document.visibilityState === "hidden" ? Date.now() : null;
     const onVisibility = () => {
-      if (document.visibilityState === "visible") {
+      if (document.visibilityState === "hidden") {
+        hiddenSinceMs = Date.now();
+        return;
+      }
+      const wasHiddenAt = hiddenSinceMs;
+      hiddenSinceMs = null;
+      if (wasHiddenAt !== null && Date.now() - wasHiddenAt > HIDDEN_REFRESH_THRESHOLD_MS) {
         queueRefresh();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", onVisibility);
 
     return () => {
       cancelled = true;
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", onVisibility);
       authSub.subscription.unsubscribe();
       if (currentChannel) supabase.removeChannel(currentChannel);
     };

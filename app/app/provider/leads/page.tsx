@@ -19,6 +19,7 @@ import { LeadsTable, type LeadRow, type Filter } from "./leads-table";
 import { LeadsSidebar } from "./leads-sidebar";
 import type { LeadStatus } from "@/lib/lead-status";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
+import { isOverdueRow } from "@/lib/lead-overdue";
 import { bulkMarkOutcomeAction } from "./[id]/actions";
 
 const CONTACTED_STATUSES = new Set<LeadStatus>([
@@ -182,6 +183,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   ]);
 
   let openCount = 0;
+  let overdueCount = 0;
   let callingCount = 0;
   let meetingBookedCount = 0;
   let enrolledThisMonth = 0;
@@ -195,8 +197,24 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   let employerInProgress = 0;
   let employerSigned = 0;
   let employerSignedThisMonth = 0;
+  const openWorkingHours = slaFirstAttemptHours;
+  const staleAttemptMs = slaStaleAttemptHours * 60 * 60 * 1000;
   for (const r of rows) {
     if (r.status === "open") openCount += 1;
+    if (
+      isOverdueRow(
+        {
+          status: r.status,
+          status_updated_at: r.status_updated_at,
+          routed_at: r.routed_at,
+          callback_pending: r.callback_pending,
+        },
+        openWorkingHours,
+        staleAttemptMs,
+      )
+    ) {
+      overdueCount += 1;
+    }
     if (CALLING_STATUSES.has(r.status)) callingCount += 1;
     if (r.status === "enrolment_meeting_booked") meetingBookedCount += 1;
     if (r.callback_pending) callbackPendingCount += 1;
@@ -268,6 +286,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
             <div className="lg:col-span-1 lg:sticky lg:top-6">
               <LeadsSidebar
                 open={openCount}
+                overdue={overdueCount}
                 calling={callingCount}
                 meetingBooked={meetingBookedCount}
                 enrolledThisMonth={enrolledThisMonth}
@@ -295,7 +314,10 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
 }
 
 function parseFilter(param: string | undefined): Filter {
-  if (!param) return "all";
+  // Default landing tab is Fresh (no contact attempt logged yet). Sort
+  // already pins overdue and fastrack-unsettled rows above untouched ones,
+  // so the provider lands on the actionable subset by default.
+  if (!param) return "fresh";
   const normalised = param.toLowerCase();
   // Map old aliases that may still be on home-page tile links into the
   // new shape. NOTE: "in_progress" was a legacy alias for the learner
@@ -304,12 +326,16 @@ function parseFilter(param: string | undefined): Filter {
   // detects lead_type from the loaded rows and switches filter sets.
   if (normalised === "settled") return "enrolled";
   if (normalised === "enrolment_meeting_booked") return "meeting";
+  // 'open' is the historical alias for Fresh; landing-page tiles + email
+  // links still emit ?status=open so keep that path working.
+  if (normalised === "open") return "fresh";
   if (
     normalised === "all" ||
     normalised === "action" ||
     normalised === "callback" ||
     normalised === "fastrack" ||
-    normalised === "open" ||
+    normalised === "fresh" ||
+    normalised === "overdue" ||
     normalised === "calling" ||
     normalised === "meeting" ||
     normalised === "enrolled" ||
@@ -323,7 +349,7 @@ function parseFilter(param: string | undefined): Filter {
   ) {
     return normalised;
   }
-  return "all";
+  return "fresh";
 }
 
 function fullName(s: SubmissionRow): string {
