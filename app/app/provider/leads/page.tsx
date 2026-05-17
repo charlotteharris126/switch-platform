@@ -182,7 +182,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     "attempt_3_no_answer",
   ]);
 
-  let openCount = 0;
+  let freshCount = 0;
   let overdueCount = 0;
   let callingCount = 0;
   let meetingBookedCount = 0;
@@ -200,21 +200,20 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   const openWorkingHours = slaFirstAttemptHours;
   const staleAttemptMs = slaStaleAttemptHours * 60 * 60 * 1000;
   for (const r of rows) {
-    if (r.status === "open") openCount += 1;
-    if (
-      isOverdueRow(
-        {
-          status: r.status,
-          status_updated_at: r.status_updated_at,
-          routed_at: r.routed_at,
-          callback_pending: r.callback_pending,
-        },
-        openWorkingHours,
-        staleAttemptMs,
-      )
-    ) {
-      overdueCount += 1;
-    }
+    const rowOverdue = isOverdueRow(
+      {
+        status: r.status,
+        status_updated_at: r.status_updated_at,
+        routed_at: r.routed_at,
+        callback_pending: r.callback_pending,
+      },
+      openWorkingHours,
+      staleAttemptMs,
+    );
+    if (rowOverdue) overdueCount += 1;
+    // Fresh = uncontacted AND within SLA. Mirrors the leads-table pill
+    // so the sidebar number always matches the tab.
+    if (r.status === "open" && !rowOverdue) freshCount += 1;
     if (CALLING_STATUSES.has(r.status)) callingCount += 1;
     if (r.status === "enrolment_meeting_booked") meetingBookedCount += 1;
     if (r.callback_pending) callbackPendingCount += 1;
@@ -285,7 +284,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
             </div>
             <div className="lg:col-span-1 lg:sticky lg:top-6">
               <LeadsSidebar
-                open={openCount}
+                open={freshCount}
                 overdue={overdueCount}
                 calling={callingCount}
                 meetingBooked={meetingBookedCount}

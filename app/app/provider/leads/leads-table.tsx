@@ -268,6 +268,7 @@ export function LeadsTable({
   const counts = useMemo(() => {
     let action = 0;
     let open = 0;
+    let fresh = 0;
     let overdue = 0;
     let calling = 0;
     let meeting = 0;
@@ -284,13 +285,19 @@ export function LeadsTable({
     const FIFTY_DAYS_MS = 50 * 24 * 60 * 60 * 1000;
     for (const r of rows) {
       if (isActionRow(r, staleAttemptMs)) action += 1;
-      if (isOverdueRow(r, openWorkingHours, staleAttemptMs)) overdue += 1;
+      const rowOverdue = isOverdueRow(r, openWorkingHours, staleAttemptMs);
+      if (rowOverdue) overdue += 1;
       if (r.callback_pending) callback += 1;
       // Fastrack count excludes already-settled leads (lost, enrolled,
       // presumed_enrolled). Once a lead is closed out the fastrack is
       // no longer the next action. Matches the home-page badge logic.
       if (r.has_fastrack && !FASTRACK_SETTLED.has(r.status)) fastrack += 1;
-      if (r.status === "open") open += 1;
+      if (r.status === "open") {
+        open += 1;
+        // Fresh = uncontacted AND still within SLA. Overdue is a parallel
+        // queue, not a subset of Fresh, so the two pills stay orthogonal.
+        if (!rowOverdue) fresh += 1;
+      }
       if (CALLING.has(r.status)) calling += 1;
       if (r.status === "enrolment_meeting_booked") meeting += 1;
       if (ENROLLED.has(r.status)) enrolled += 1;
@@ -311,7 +318,7 @@ export function LeadsTable({
     }
     return {
       all: rows.length,
-      action, callback, fastrack, fresh: open, overdue, open,
+      action, callback, fastrack, fresh, overdue, open,
       calling, meeting, enrolled, cold, stale_attempts,
       engaged, in_progress, signed, not_signed, near_60_day,
     };
@@ -330,7 +337,13 @@ export function LeadsTable({
         if (!r.callback_pending) return false;
       } else if (filter === "fastrack") {
         if (!r.has_fastrack || FASTRACK_SETTLED.has(r.status)) return false;
-      } else if (filter === "fresh" || filter === "open") {
+      } else if (filter === "fresh") {
+        if (r.status !== "open") return false;
+        // Fresh excludes overdue rows by design. Overdue is a parallel
+        // queue (see Overdue pill); keeping them disjoint means the two
+        // tabs reflect mutually exclusive workloads.
+        if (isOverdueRow(r, openWorkingHours, staleAttemptMs)) return false;
+      } else if (filter === "open") {
         if (r.status !== "open") return false;
       } else if (filter === "overdue") {
         if (!isOverdueRow(r, openWorkingHours, staleAttemptMs)) return false;
