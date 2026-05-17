@@ -42,6 +42,33 @@ Wren publishes the new `u1-funded` template referencing the three new attributes
 2. **Verify on the next real EMS funded lead.** Submit at `/funded/counselling-skills-tees-valley/`, owner-confirm. U1 should render the named rep + phone in bold, no literal tags, no duplicated "they'll be in touch..." sentence. Eyeball logs to confirm the three attributes pushed correctly.
 3. **Verify the non-EMS fallback.** Submit a WYK Camden funded lead, owner-confirm. U1 should render the unified fallback paragraph with `<strong></strong>` invisible.
 4. **Delete the orphans from Brevo** once verified: `SW_PROVIDER_CONTACT_BLOCK` attribute (Contacts → Settings → Contact Attributes) + `u1-funded-post-fastrack` template (Transactional → Templates). Both harmless leftovers; no rush.
+
+> **Charlotte directive, 2026-05-16 (post-fix-session) — admin overview rebuild + slowness diagnostic + provider portal fresh-leads filter.** Three pieces of platform-view work. Slowness is the biggest day-to-day pain; tackle that first if it's a cheap diagnose-and-fix, otherwise sequence as A → B → C.
+>
+> **A. Slowness diagnostic (highest priority, daily friction).** Returning to the platform tab has a lag before clicks are acknowledged. Suspected culprits: (1) the 18-query fan-out on `/admin/page.tsx` re-running on every navigation or tab refocus, (2) Next.js server component revalidation hitting Supabase on focus, (3) no client-side cache between routes so every admin nav hits the DB. The `withTimeout` wrapper in `/admin/page.tsx:59` already acknowledges the fan-out is a known issue ("Architectural-grade fix is to split queries into critical vs optional bundles and partial-render; queued for a future session"). Time to do that split. Likely cheap to investigate, biggest daily-pain item. Could be fixable without touching B.
+>
+> **B. Overview redesign per Charlotte's spec.** Replace what's on `/admin` with:
+>
+> - **Duration picker** at top: `2d` / `7d` / `14d` / `30d` / `lifetime` / `custom` (custom date range picker). Existing `PeriodPills` is the starting point but needs the new buckets + custom.
+> - **Top-line tiles for the selected date range:**
+>   - Total leads (`leads.submissions` count by date range)
+>   - Confirmed enrolments (`crm.enrolments` where `status='enrolled'`, by `enrolled_at`)
+>   - Cost per lead (ad spend / total leads)
+>   - Cost per confirmed enrolment (ad spend / confirmed enrolments)
+>   - Confirmed income (per pilot pricing — see open question)
+>   - Ad spend (from `ads_*` schemas)
+>   - Profit / loss, confirmed (see open question on formula)
+> - **Separate small tile:** "Presumed enrolments this period" — just a number. Charlotte expects this to trend to near-nil as auto-flip lands; kept visible for auto-flip cohort tracking.
+> - **Provider scorecard table** — per-provider breakdown of all the above metrics for the date range. Four providers today (EMS, Courses Direct, WYK Digital, Riverside).
+> - **Summary cards at the bottom:** data health notices (the `vw_admin_health` content) + actions notices (current `actionsCount` from layout). These move from layout/sidebar onto the overview body.
+> - **Drop the "ad signals" section** — Charlotte's unclear what it's for on the overview. Move it to its own page (e.g. `/admin/analytics` or `/admin/ads-signals`) or kill if nothing reads it.
+>
+> **Open question on B — P/L formula:** Charlotte flagged the current profit/loss as inaccurate. Definitional pin-down before rebuild: P/L = confirmed income − ad spend only? Or also net off tooling costs (Brevo, Supabase, GoCardless fees) and provider commissions where applicable? Pricing is per `business.md`: funded enrolment £150 (first 3 free per provider), self/loan 15% of fee (min £75, max £150), apprenticeship enrolment / employer signed £400 flat. First three of each per provider are free. Confirm formula with Charlotte before building.
+>
+> **C. Provider portal `/provider/leads` — new "Fresh leads" filter.** Sits next to the existing "Overdue" filter on `leads-sidebar.tsx`. Fresh leads displayed FIRST (becomes the default landing tab). Within fresh, order fastrack-completers to the top.
+>
+> **Open question on C — "fresh" definition:** `created < 24h`? `no contact attempt logged yet`? Both? And confirm fastrack-first ordering = `fastracked_at DESC NULLS LAST`. Pin down with Charlotte before building.
+
 5. **Consider folding callback + stale-attempt timers into working-hours too** for consistency. Charlotte only flagged first-attempt; the other two still use clock hours. Easy follow-up if a provider complains about weekend stale-attempt badges.
 6. **Watch invited portal users walk through** (carry from Session 47). Andy, Jake, George, Nick (EMS) and Jane, Freya (Riverside) still at `status='invited'`.
 7. **First real B2C ad-driven lead, confirm full chain** (carry from Session 47).
