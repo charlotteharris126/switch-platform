@@ -1,5 +1,9 @@
 # Platform Handoff, Session 49, 2026-05-17
 
+## ⚡ PUSH FROM switchable/site 2026-05-17: site-side partial-tracker push is live
+
+Mable's `.track()` wiring on `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, and `fastrack-funded-v1` is live in production (commit `8f5e9b0`, pushed earlier today, Netlify auto-deploy). Pairs with your `2675b00` allowlist extension. Both ends now match. Your "watch `leads.partials` once Mable's push lands" item (Next steps #2) is now active watching, not pending. No Sasha action needed; just removing the dependency tag.
+
 ## Current state
 
 Five fixes shipped to admin + provider portal. Tab-refocus slowness fixed twice (RealtimeRefresh visibility handler gated to >5min hidden, then redundant `supabase.auth.getUser()` removed from admin layout); admin overview fully rebuilt per the Session 48 directive with period picker, per-section Suspense streaming, and provider scoreboard; `/provider/leads` default landing tab is now Fresh with an orthogonal Overdue queue and `cannot_reach` dropped from the Fastrack tab; `netlify-partial-capture` allowlist extended to cover the six forms Mable wired yesterday. Referral programme diagnosed end-to-end (capture pipe intact, near-zero share volume at the top of funnel) and cross-project asks routed to Wren and Mable. All five commits live.
