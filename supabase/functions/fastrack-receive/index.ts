@@ -349,6 +349,24 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
+  // Step 8.5: refresh Brevo card. The parent's fastracked_at was just
+  // stamped in Step 6, and crm.enrolments.status may have just flipped to
+  // 'lost' in Step 8. route-lead.ts pushes Brevo attributes only at lead-
+  // insert time, so without this call the contact's SW_FASTRACK_COMPLETED
+  // (and SW_ENROL_STATUS for the DQ paths) stay at their pre-fastrack
+  // values forever. RPC is async via net.http_post, doesn't block.
+  // See project memory: project_brevo_urls_dont_auto_refresh_on_post_insert.md
+  try {
+    await sql`
+      SELECT crm.sync_leads_to_brevo(ARRAY[${parent.id}::bigint])
+    `;
+  } catch (err) {
+    console.error(
+      "fastrack: Brevo sync RPC failed (non-fatal):",
+      describeError(err),
+    );
+  }
+
   // Step 9: sheet update via provider-sheet-appender-v2 in
   // update_by_submission_id mode. Best-effort; failures land in dead_letter.
   if (parent.primary_routed_to && SHEETS_APPEND_TOKEN) {
