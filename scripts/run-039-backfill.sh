@@ -29,8 +29,10 @@ TOTAL_ERR=0
 while true; do
   RESP=$(curl -s -X POST -H "x-audit-key: $AUDIT_KEY" "$URL?offset=$OFFSET")
 
-  HAS_MORE=$(echo "$RESP" | jq -r '.has_more // empty')
-  if [[ -z "$HAS_MORE" ]]; then
+  # jq's `//` operator treats false as null-like, so use `tostring` to
+  # preserve the literal "false" / "true" string for the loop condition.
+  HAS_MORE=$(echo "$RESP" | jq -r '.has_more | tostring')
+  if [[ "$HAS_MORE" != "true" && "$HAS_MORE" != "false" ]]; then
     echo "Unexpected response:"
     echo "$RESP"
     exit 1

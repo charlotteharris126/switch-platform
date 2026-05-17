@@ -674,6 +674,8 @@ export async function upsertLearnerInBrevo(
     // Continue with empty strings; one missing attribute shouldn't sink the upsert.
   }
 
+  const contactValues = renderProviderContactValues(provider, submission);
+
   // Attribute namespacing: FIRSTNAME / LASTNAME stay as unprefixed Brevo
   // defaults (built-in fields). Everything Switchable-specific carries an
   // SW_ prefix so it doesn't collide with future SwitchLeads SL_-prefixed
@@ -722,11 +724,12 @@ export async function upsertLearnerInBrevo(
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
     SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
-    // U1 funded "what's next" block. Regional-match leads (EMS today) get
-    // the named-rep + phone paragraph; everyone else gets a unified fallback.
-    // Carried as a contact attribute (not a per-send param) so Brevo template
-    // preview renders it and the wiring matches the rest of the SW_* set.
-    SW_PROVIDER_CONTACT_BLOCK: renderProviderContactBlock(provider, submission),
+    // U1 funded "what's next" block, split into three plain-text parts so
+    // the template can wrap <strong> around the phone. See
+    // renderProviderContactValues for the regional-vs-fallback logic.
+    SW_PROVIDER_CONTACT_BEFORE: contactValues.before,
+    SW_PROVIDER_PHONE: contactValues.phone,
+    SW_PROVIDER_CONTACT_AFTER: contactValues.after,
   };
 
   // One upsert call adds the contact to both lists atomically. Previously
@@ -755,43 +758,55 @@ export async function upsertLearnerInBrevo(
   return { ok: true };
 }
 
-// Render the "what's next" block for the U1 funded ack. Carries the
-// post-confirmation contact step the U1 paragraph used to state inline.
+// Build the three plain-text values for the "what's next" block on the
+// U1 funded ack. The U1 funded template wraps them as:
+//   <p>{{contact.SW_PROVIDER_CONTACT_BEFORE}} <strong>{{contact.SW_PROVIDER_PHONE}}</strong> {{contact.SW_PROVIDER_CONTACT_AFTER}}</p>
+// HTML wrapper lives in the template because Brevo's text-type
+// contact attributes are always escape-rendered (the `| raw` filter
+// throws a syntax error; the only template-side workaround is to
+// keep variables plain-text and put the markup in static template
+// content). Brevo handles HTML-escape on `{{contact.X}}` substitution
+// so we push raw text without pre-escaping.
 //
 // Two shapes:
 //   1. Regional match: provider.regional_contacts.by_la has an entry for
-//      submission.la. Renders the named-rep + phone paragraph.
+//      submission.la. before/phone/after split out so the template can
+//      bold the phone number.
 //   2. No match (every non-EMS provider, an EMS lead with an LA outside
 //      the mapping, or a pre-routing / unmatched lead with no provider):
-//      renders a unified fallback paragraph. Eligibility beat is omitted
-//      because the regular U1 template's next paragraph already covers it
-//      ("...so EMS can confirm you qualify ahead of the call...") and the
-//      post-fastrack template doesn't need it at all.
+//      `before` carries the unified fallback sentence; `phone` + `after`
+//      are empty so the template's <strong></strong> renders invisibly.
 //
-// Pushed as the Brevo contact attribute SW_PROVIDER_CONTACT_BLOCK on every
-// learner upsert (matched + no_match + pending), so U1 funded templates
-// reference `{{ contact.SW_PROVIDER_CONTACT_BLOCK }}` and the value survives
-// for re-sends / preview. Provider is nullable for the no_match / pending
-// paths where no provider exists yet — only the fallback branch fires.
-function renderProviderContactBlock(
+// Provider is nullable for the no_match / pending paths where no provider
+// exists yet — only the fallback branch fires.
+function renderProviderContactValues(
   provider: ProviderRow | null,
   submission: SubmissionRow,
-): string {
+): { before: string; phone: string; after: string } {
   const la = submission.la;
   const contact = la && provider ? provider.regional_contacts?.by_la?.[la] : undefined;
   if (contact && provider) {
-    return `<p>${escapeHtml(contact.first_name)} from ${escapeHtml(provider.company_name)} will give you a call to talk it through. Spaces fill fast, so save <strong>${escapeHtml(contact.phone)}</strong> in your contacts now and pick up when it rings.</p>`;
+    return {
+      before: `${contact.first_name} from ${provider.company_name} will give you a call to talk it through. Spaces fill fast, so save`,
+      phone: contact.phone,
+      after: "in your contacts now and pick up when it rings.",
+    };
   }
-  return `<p>They'll be in touch within the next few days by email or phone to talk you through your start date and answer anything you want to ask.</p>`;
+  return {
+    before: "They'll be in touch within the next few days by email or phone to talk you through your start date and answer anything you want to ask.",
+    phone: "",
+    after: "",
+  };
 }
 
 // Phase 2a U1 send. Composes the per-send template params from the same matrix
 // + submission shape that upsertLearnerInBrevo uses (so contact attributes and
 // transactional params stay consistent), routes to U1_FUNDED vs U1_SELF based
 // on funding_category, and delegates idempotency / retry / dead_letter to
-// sendTransactional. Funded leads further split by fastrack state: leads with
-// fastracked_at set go to U1_FUNDED_POST_FASTRACK (no "Get a head start"
-// push, since they've already done it), all others go to U1_FUNDED.
+// sendTransactional. Single funded template — the prior pre-fastrack /
+// post-fastrack split was retired 2026-05-16 (Wren) because the regular U1
+// copy already accommodates fastracked learners and the post-fastrack "thanks
+// for sending the extra details" beat duplicates the site thank-you ack.
 // Best-effort: missing template env, missing email, or null funding_category
 // all skip silently. Re-applications skip too — the parent submission already
 // received U1, the new submission_id would otherwise pass the per-submission
@@ -810,24 +825,10 @@ async function sendU1Transactional(
   }
 
   const isFunded = submission.funding_category === "gov" || submission.funding_category === "loan";
-  const isPostFastrack = isFunded && submission.fastracked_at != null;
-  const templateEnvName = isPostFastrack
-    ? "BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK"
-    : isFunded
-    ? "BREVO_TEMPLATE_U1_FUNDED"
-    : "BREVO_TEMPLATE_U1_SELF";
+  const templateEnvName = isFunded ? "BREVO_TEMPLATE_U1_FUNDED" : "BREVO_TEMPLATE_U1_SELF";
   const emailType: "u1_funded" | "u1_self" = isFunded ? "u1_funded" : "u1_self";
 
-  let templateId = parseEnvInt(templateEnvName);
-  // Safe rollback path: if the post-fastrack template env var isn't set
-  // (rollout in progress, or temporary rollback after a template issue),
-  // fall back to the pre-fastrack funded template. Until Charlotte sets
-  // BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK in Supabase Vault, fastracked
-  // funded leads keep receiving the original U1_FUNDED template, same
-  // behaviour as before the split.
-  if (templateId == null && isPostFastrack) {
-    templateId = parseEnvInt("BREVO_TEMPLATE_U1_FUNDED");
-  }
+  const templateId = parseEnvInt(templateEnvName);
   if (templateId == null) {
     // Silently skip if the U1 template env var isn't set — no dead_letter
     // spam during shadow setup or template-rebuild windows. Live in
@@ -863,12 +864,6 @@ async function sendU1Transactional(
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
     SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
-    // Temporary duplicate of the contact attribute set in upsertLearnerInBrevo.
-    // Brevo U1 funded templates are mid-switch from `{{ params.SW_PROVIDER_CONTACT_BLOCK }}`
-    // to `{{ contact.SW_PROVIDER_CONTACT_BLOCK }}` (Wren, 2026-05-16). Param
-    // stays in place until both templates are switched live, then this line
-    // gets removed as dead code. Identical render to the contact attribute.
-    SW_PROVIDER_CONTACT_BLOCK: renderProviderContactBlock(provider, submission),
   };
 
   const recipientName = [submission.first_name, submission.last_name]
@@ -982,11 +977,12 @@ export async function upsertLearnerInBrevoNoMatch(
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
     SW_CURRENT_QUALIFICATION: submission.current_qualification ?? "",
-    // No provider on no_match / pending paths, so the renderer always returns
-    // the unified fallback paragraph. Populated for consistency so the
-    // attribute is present on every Switchable contact (no blank reads if a
-    // future template ever references it for these lifecycle states).
-    SW_PROVIDER_CONTACT_BLOCK: renderProviderContactBlock(null, submission),
+    // No provider on no_match / pending paths, so before carries the unified
+    // fallback sentence and phone/after stay empty. Populated for consistency
+    // so the three attributes are present on every Switchable contact.
+    SW_PROVIDER_CONTACT_BEFORE: renderProviderContactValues(null, submission).before,
+    SW_PROVIDER_PHONE: "",
+    SW_PROVIDER_CONTACT_AFTER: "",
   };
 
   const listIds: number[] = [];

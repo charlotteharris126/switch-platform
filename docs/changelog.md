@@ -4,6 +4,35 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-16 (Session 48) — SW_PROVIDER_CONTACT_BLOCK split into three plain-text attributes + U1 funded template collapse
+
+Second Wren push of the day. Two changes wrapped:
+
+**Change 1: split `SW_PROVIDER_CONTACT_BLOCK` into three plain-text attributes.** Brevo's text-type contact attributes always escape-render — `{{contact.X | raw}}` throws a syntax error and there's no template-side workaround. Wren's call: keep the variables plain text on the contact, put the `<p>` + `<strong>` wrapper in static template content. The template renders `<p>{{contact.SW_PROVIDER_CONTACT_BEFORE}} <strong>{{contact.SW_PROVIDER_PHONE}}</strong> {{contact.SW_PROVIDER_CONTACT_AFTER}}</p>`, with empty `<strong></strong>` rendering invisibly in the fallback case.
+
+- **`renderProviderContactBlock` renamed to `renderProviderContactValues`** in `_shared/route-lead.ts`. Returns `{ before, phone, after }` plain strings instead of a single HTML string. No `escapeHtml` calls — Brevo handles escape on `{{contact.X}}` substitution.
+- **Three new attributes written from both upsert helpers** (`upsertLearnerInBrevo` + `upsertLearnerInBrevoNoMatch`): `SW_PROVIDER_CONTACT_BEFORE`, `SW_PROVIDER_PHONE`, `SW_PROVIDER_CONTACT_AFTER`. Regional match (EMS): full split, e.g. `before="George from Enterprise Made Simple will give you a call..."`, `phone="07955 265 739"`, `after="in your contacts now and pick up when it rings."`. Fallback: `before` carries the unified sentence, `phone`/`after` empty.
+- **Old `SW_PROVIDER_CONTACT_BLOCK` attribute no longer written.** Now orphaned on existing Brevo contacts; Charlotte deletes from Brevo dashboard once the new template is verified live.
+- **Old per-send `SW_PROVIDER_CONTACT_BLOCK` param removed** from `sendU1Transactional` (was the bridge during the morning's redesign).
+
+**Change 2: U1 funded template collapse — fastrack-state branching dropped.**
+
+- **`sendU1Transactional` always sends `BREVO_TEMPLATE_U1_FUNDED`.** Wren's call: the regular U1 copy ("if you haven't already") gracefully covers fastracked learners, and the post-fastrack "thanks for sending the extra details" beat duplicated the site thank-you page's own ack.
+- **`BREVO_TEMPLATE_U1_FUNDED_POST_FASTRACK` env var reference removed.** Vault key can stay (harmless when unread); the orphaned Brevo template is Charlotte's to delete from the Transactional → Templates list whenever.
+- **`isPostFastrack` derivation deleted** from `sendU1Transactional`. Funded vs self split is the only template branch now.
+
+**Sequence:**
+
+1. Charlotte registers `SW_PROVIDER_CONTACT_BEFORE`, `SW_PROVIDER_PHONE`, `SW_PROVIDER_CONTACT_AFTER` in Brevo (all text type).
+2. Charlotte redeploys `routing-confirm`, `netlify-lead-router`, `admin-test-email`, `admin-brevo-resync`, `backfill-sw-provider-contact-block`.
+3. Charlotte runs `./scripts/run-039-backfill.sh "AUDIT_KEY"` to populate the three new attributes on existing contacts (same chunked-loop pattern as the previous attempt — now reliable, ~90 seconds).
+4. Charlotte signals Wren — Wren publishes the new u1-funded template with the three-attribute composition.
+5. Once verified live: Charlotte deletes the orphan `SW_PROVIDER_CONTACT_BLOCK` attribute + the orphan `u1-funded-post-fastrack` template from Brevo.
+
+**No DB migration. No payload change.** Three attribute names registered in Brevo (one-time setup); existing contacts get the three values via the resync backfill.
+
+Signed off: Charlotte (session 2026-05-16).
+
 ## 2026-05-16 (Session 48) — SW_PROVIDER_CONTACT_BLOCK: per-send param → Brevo contact attribute
 
 Wren push during today's QA: Brevo template preview was rendering blank where Nick's paragraph should land, because `SW_PROVIDER_CONTACT_BLOCK` was the only SW_* in the U1 funded templates that wasn't a contact attribute. Preview only resolves contact attributes, not transactional params, so this one was invisible during QA and architecturally special-cased vs the other 18 SW_* attributes already on the contact. The Session 47 rationale ("per-send param avoids the attribute-wiring backfill rule") was real but small compared to the cost of preview-invisibility + special-casing — Wren's call to align it with the rest of the set.
