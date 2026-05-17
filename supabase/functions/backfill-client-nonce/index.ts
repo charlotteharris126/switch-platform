@@ -151,6 +151,27 @@ async function run(apply: boolean): Promise<RunSummary> {
   }
 
   const updated = await applyBackfill();
+
+  // Brevo sync. Stamping a client_nonce changes SW_FASTRACK_URL from empty
+  // to a real link — but Brevo only learns about it if something tells the
+  // Brevo contact card. Without this call, those contacts' Brevo records
+  // keep the empty fastrack URL and stay drifted until the next URL-backfill
+  // sweep runs. Async via net.http_post inside the RPC, so it doesn't slow
+  // this function down or block the caller.
+  if (updated.length > 0) {
+    try {
+      const ids = updated.map((r) => r.id);
+      await sql`
+        SELECT crm.sync_leads_to_brevo(${ids}::bigint[])
+      `;
+    } catch (err) {
+      console.error(
+        "backfill-client-nonce: Brevo sync RPC failed (non-fatal):",
+        String(err),
+      );
+    }
+  }
+
   const spot: SpotCheck[] = updated.slice(0, 3).map((r) => ({
     id: r.id,
     email: r.email,

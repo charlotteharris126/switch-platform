@@ -25,14 +25,19 @@
 
 import postgres from "npm:postgres@3";
 import { verifyPendingUpdateToken } from "../_shared/pending-update-token.ts";
+import { statusToSheetLabel } from "../_shared/sheet-status.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 const PENDING_UPDATE_SECRET = Deno.env.get("PENDING_UPDATE_SECRET");
+const SHEETS_APPEND_TOKEN = Deno.env.get("SHEETS_APPEND_TOKEN");
 
 if (!DATABASE_URL) throw new Error("SUPABASE_DB_URL is not set.");
 // PENDING_UPDATE_SECRET is checked at request time below — function deploys
 // cleanly during Phase 1 even when Channel B (which needs the secret) is
 // not yet activated. Without the secret, every request returns a soft 503.
+// SHEETS_APPEND_TOKEN absence is non-fatal: sheet writeback (the
+// post-approve mirror that closes the drift loop) silently skips. The DB
+// state is still authoritative; drift cron picks it up next morning.
 
 const sql = postgres(DATABASE_URL, {
   max: 1,
@@ -218,6 +223,13 @@ async function applyStatusChange(
   } catch (err) {
     console.error("brevo sync after AI-suggestion approval failed:", String(err));
   }
+
+  // Sheet writeback — closes the drift loop. Without this, the sheet's
+  // Status cell keeps the pre-Channel-B value until the next manual
+  // republish; provider sees stale state. Mirrors the fastrack-receive
+  // pattern: best-effort, failures land in leads.dead_letter so the daily
+  // drift cron + /admin/errors surface them.
+  await pushStatusToSheet(pending.enrolment_id, newStatus);
   await sql`
     UPDATE crm.pending_updates
     SET status = ${pendingResolution},
@@ -267,6 +279,123 @@ async function logResolution(
       ${`Resolved by owner via email link`}
     )
   `;
+}
+
+// ---- Sheet writeback ----
+
+async function pushStatusToSheet(
+  enrolmentId: number,
+  newStatus: string,
+): Promise<void> {
+  if (!SHEETS_APPEND_TOKEN) return; // env not set — silently skip
+
+  // Look up provider + submission_id for this enrolment. One query so we
+  // can also short-circuit on missing provider, missing sheet_webhook_url,
+  // or DQ leads (which never landed on a sheet in the first place).
+  let row: { provider_id: string; submission_id: number; sheet_webhook_url: string | null; company_name: string } | undefined;
+  try {
+    const rows = await sql<Array<{
+      provider_id: string;
+      submission_id: number;
+      sheet_webhook_url: string | null;
+      company_name: string;
+    }>>`
+      SELECT e.provider_id,
+             e.submission_id,
+             p.sheet_webhook_url,
+             p.company_name
+        FROM crm.enrolments e
+        JOIN crm.providers p ON p.provider_id = e.provider_id
+       WHERE e.id = ${enrolmentId}
+       LIMIT 1
+    `;
+    row = rows[0];
+  } catch (err) {
+    console.error("pushStatusToSheet: lookup failed:", String(err));
+    return;
+  }
+  if (!row) return;
+  if (!row.sheet_webhook_url) return; // provider doesn't have a sheet (portal-only)
+
+  const sheetLabel = statusToSheetLabel(newStatus);
+
+  try {
+    const res = await fetch(row.sheet_webhook_url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token: SHEETS_APPEND_TOKEN,
+        mode: "update_by_submission_id",
+        submission_id: row.submission_id,
+        status: sheetLabel,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "<unreadable>");
+      await persistChannelBSheetWriteFailure(
+        row.submission_id,
+        row.provider_id,
+        `pending-update-confirm: appender HTTP ${res.status} for submission_id=${row.submission_id} status=${sheetLabel}: ${text.slice(0, 300)}`,
+      );
+      return;
+    }
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      updates?: number;
+    };
+    if (body.ok === false) {
+      await persistChannelBSheetWriteFailure(
+        row.submission_id,
+        row.provider_id,
+        `pending-update-confirm: appender ok=false for submission_id=${row.submission_id}: ${body.error ?? "unknown"}`,
+      );
+      return;
+    }
+    if (typeof body.updates === "number" && body.updates === 0) {
+      // ok=true but no cells updated — sheet probably missing the
+      // Submission ID column for update mode. Surface so owner can fix.
+      await persistChannelBSheetWriteFailure(
+        row.submission_id,
+        row.provider_id,
+        `pending-update-confirm: appender wrote 0 cells for submission_id=${row.submission_id} (sheet missing Submission ID column?)`,
+      );
+    }
+  } catch (err) {
+    await persistChannelBSheetWriteFailure(
+      row.submission_id,
+      row.provider_id,
+      `pending-update-confirm: appender fetch failed for submission_id=${row.submission_id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+async function persistChannelBSheetWriteFailure(
+  submissionId: number,
+  providerId: string,
+  errorContext: string,
+): Promise<void> {
+  try {
+    await sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      await trx`
+        INSERT INTO leads.dead_letter (source, raw_payload, error_context, replay_submission_id)
+        VALUES (
+          'channel_b_sheet_writeback',
+          ${sql.json({ submission_id: submissionId, provider_id: providerId })},
+          ${errorContext},
+          ${submissionId}
+        )
+      `;
+    });
+  } catch (err) {
+    console.error(
+      "pending-update-confirm: dead_letter write failed:",
+      String(err),
+      "original:",
+      errorContext,
+    );
+  }
 }
 
 // ---- HTML pages ----

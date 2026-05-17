@@ -21,7 +21,6 @@ import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
 // redirects here.
 import { Run024Panel } from "../data-ops/run-024-panel";
 import { RunClientNoncePanel } from "../data-ops/run-client-nonce-panel";
-import { RunSheetIdBackfillPanel } from "../data-ops/run-sheet-id-backfill-panel";
 import { GdprEraseLearnerPanel } from "./gdpr-erase-learner-panel";
 
 interface DeadLetterRow {
@@ -316,13 +315,29 @@ export default async function ErrorsPage({
   const reconcileCutoffDate = earliestMetaDate ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
   const reconcileCutoffISO = new Date(reconcileCutoffDate + "T00:00:00Z").toISOString();
 
-  const [deadLetterRes, routingLogRes, liveRoutedRes, archivedRes, childCount, metaLeadsRes, dbLeadsRes] = await Promise.all([
+  // "Flagged for Claude" backlog: resolved dead-letter rows whose audit
+  // note carries the Flag-for-Claude prefix. These don't show in the
+  // unresolved errors list (they have replayed_at set) but they're code-
+  // side TODOs a future platform session should address. 60-day window
+  // keeps the list focused; ageing out is intentional.
+  const flaggedSinceISO = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
+
+  const [deadLetterRes, flaggedForClaudeRes, routingLogRes, liveRoutedRes, archivedRes, childCount, metaLeadsRes, dbLeadsRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("dead_letter")
       .select("id,source,received_at,error_context,replayed_at,replay_submission_id,raw_payload")
       .order("received_at", { ascending: false })
       .limit(200),
+    supabase
+      .schema("leads")
+      .from("dead_letter")
+      .select("id,source,received_at,error_context,replayed_at,replay_submission_id,raw_payload")
+      .not("replayed_at", "is", null)
+      .ilike("error_context", "%Flagged for next session%")
+      .gte("received_at", flaggedSinceISO)
+      .order("received_at", { ascending: false })
+      .limit(50),
     supabase.schema("leads").from("routing_log").select("submission_id"),
     // All live (non-archived) routed submissions. We fetch emails so we can
     // count distinct people, and parent_submission_id so we can split
@@ -399,14 +414,29 @@ export default async function ErrorsPage({
   };
 
   const rows = (deadLetterRes.data ?? []) as DeadLetterRow[];
+  const flaggedForClaude = (flaggedForClaudeRes.data ?? []) as DeadLetterRow[];
 
   // Pull every submission_id we can find: from replay_submission_id OR
-  // raw_payload.submission_id (reconcile_backfill puts the lead reference there).
+  // raw_payload.submission_id (reconcile_backfill, sheet_drift_detected,
+  // channel_b_sheet_writeback all put the lead reference there).
+  //
+  // raw_payload.submission_id arrives as a STRING for sheet_drift rows —
+  // the cron's source query reads `s.id` from a BIGINT column, and the
+  // postgres@3 client preserves bigint as string. So accept both number
+  // and string and coerce.
+  //
+  // Flagged-for-Claude rows are folded in so the section can render the
+  // same lead-link affordance as the unresolved list.
   const submissionIds = new Set<number>();
-  for (const r of rows) {
+  for (const r of [...rows, ...flaggedForClaude]) {
     if (r.replay_submission_id) submissionIds.add(r.replay_submission_id);
-    const sid = (r.raw_payload as { submission_id?: number } | null)?.submission_id;
-    if (typeof sid === "number") submissionIds.add(sid);
+    const raw = (r.raw_payload as { submission_id?: number | string } | null)?.submission_id;
+    if (typeof raw === "number") {
+      submissionIds.add(raw);
+    } else if (typeof raw === "string" && raw.trim() !== "") {
+      const n = Number(raw);
+      if (Number.isFinite(n)) submissionIds.add(n);
+    }
   }
 
   const subsRes = submissionIds.size
@@ -510,23 +540,6 @@ export default async function ErrorsPage({
             themselves when nothing&apos;s left to do.
           </p>
 
-          {sheetProviders.length > 0 && (
-            <section className="border-t border-[#dde3e6] pt-4">
-              <h3 className="text-sm font-semibold text-[#11242e]">Legacy sheet Submission IDs</h3>
-              <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
-                One-time fix for provider sheets that pre-date 2026-05-07 (when the
-                <code className="text-[11px] bg-[#f4f1ed] mx-1 px-1 py-0.5 rounded">Submission ID</code>
-                column was added). Matches each blank-ID sheet row to a DB lead by
-                email + course + submitted_at proximity. Safety: only writes
-                Submission ID cells, only to currently-blank cells.
-              </p>
-              <RunSheetIdBackfillPanel
-                providers={sheetProviders}
-                initialProviderId={initialRepublishProvider || sheetProviders[0].provider_id}
-              />
-            </section>
-          )}
-
           {noncePending !== 0 && (
             <section className="border-t border-[#dde3e6] pt-4">
               <h3 className="text-sm font-semibold text-[#11242e]">025: client_nonce backfill</h3>
@@ -540,16 +553,26 @@ export default async function ErrorsPage({
           )}
 
           <section className="border-t border-[#dde3e6] pt-4">
-            <h3 className="text-sm font-semibold text-[#11242e]">024: Brevo URL backfill</h3>
+            <h3 className="text-sm font-semibold text-[#11242e]">Brevo: refresh learner referral &amp; fastrack URLs</h3>
             <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
-              Re-pushes <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">SW_REFERRAL_URL</code>
-              {" "}+ <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">SW_FASTRACK_URL</code>
-              {" "}to every opted-in Brevo contact. Run after any change to
-              {" "}<code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildReferralUrl</code>
-              {" "}or <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildFastrackUrl</code>
-              {" "}in <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">_shared/route-lead.ts</code>.
-              Doesn&apos;t auto-hide (Brevo-side state not cheaply checkable from DB).
-              Last applied 2026-05-11 (174 audience / 160 mutated / 0 errors).
+              Pushes each learner&apos;s personal referral link and fastrack link
+              to their Brevo contact record so email broadcasts render the right
+              URL per learner. Brevo&apos;s side can&apos;t be cheaply checked from
+              the platform, so this panel always shows — run dry-run any time
+              the URL builder changes (anything in
+              {" "}<code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">_shared/route-lead.ts</code>
+              {" "}touching <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildReferralUrl</code>
+              {" "}or <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildFastrackUrl</code>),
+              or if a broadcast was sent and you&apos;re unsure whether contacts
+              had the latest URLs.
+            </p>
+            <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
+              The dry-run number you see in &ldquo;Would mutate&rdquo; is the count
+              of contacts whose Brevo record disagrees with the current builder
+              output — that&apos;s the drift. Apply to push the fresh URLs.
+            </p>
+            <p className="text-[11px] text-[#5a6a72] italic mb-3">
+              Last applied: 2026-05-11 (174 audience / 160 mutated / 0 errors).
             </p>
             <Run024Panel />
           </section>
@@ -578,6 +601,10 @@ export default async function ErrorsPage({
         windowStartDate={reconcileCutoffDate}
       />
 
+      {flaggedForClaude.length > 0 && (
+        <FlaggedForClaudePanel rows={flaggedForClaude} subsById={subsById} />
+      )}
+
       <ErrorsSectionHeader unresolvedCount={unresolved.length} over7dCount={over7d} />
 
       {unresolved.length === 0 ? (
@@ -599,7 +626,7 @@ export default async function ErrorsPage({
                 <li><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#dad4cb] text-[#11242e] font-bold mr-2">INFORMATIONAL</span> Audit rows, not real errors. Bulk-clean any time.</li>
               </ul>
               <p className="text-[#5a6a72]">
-                <strong>About the buttons:</strong> none of them retry the failed sync — they just clear the row from this list. <em>Flag for Claude</em> records that you&rsquo;ve seen the row and prepends &ldquo;Flagged for next session&rdquo; to the audit note so Claude can find it; <em>Mark resolved</em> on clean/info rows is straight dismissal because no follow-up is needed.
+                <strong>About the buttons:</strong> none of them retry the failed sync — they just clear the row from this list. <em>Flag for Claude</em> clears the row AND adds it to the <strong>Flagged for Claude</strong> panel (visible below until 60 days have passed), so the next platform session sees it at session-start; <em>Mark resolved</em> on clean/info rows is straight dismissal because no follow-up is needed.
               </p>
             </CardContent>
           </Card>
@@ -661,10 +688,13 @@ export default async function ErrorsPage({
                       {sourceRows.map((r) => {
                         const ageMs = now - new Date(r.received_at).getTime();
                         const isStale = ageMs > 7 * 24 * 3600 * 1000;
-                        const sid =
-                          r.replay_submission_id ??
-                          (r.raw_payload as { submission_id?: number } | null)?.submission_id ??
-                          null;
+                        const rawSid = (r.raw_payload as { submission_id?: number | string } | null)?.submission_id;
+                        const sidFromPayload = typeof rawSid === "number"
+                          ? rawSid
+                          : typeof rawSid === "string" && rawSid.trim() !== "" && Number.isFinite(Number(rawSid))
+                          ? Number(rawSid)
+                          : null;
+                        const sid = r.replay_submission_id ?? sidFromPayload;
                         const lead = sid != null ? subsById.get(sid) : undefined;
                         const formName =
                           (r.raw_payload as { form_name?: string } | null)?.form_name ?? "—";
@@ -901,6 +931,90 @@ function Metric({ label, value, highlight }: { label: string; value: number; hig
       <div className={`text-2xl font-bold ${highlight ? "text-[#cd8b76]" : "text-[#143643]"}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-[#5a6a72] font-bold mt-1">{label}</div>
     </div>
+  );
+}
+
+// Pulls the human note out of an error_context whose first line is the
+// original error message and whose later annotation is the "Flagged for
+// next session: ..." string written by markErrorResolved.
+function extractFlagNote(errorContext: string | null): string {
+  if (!errorContext) return "";
+  const idx = errorContext.indexOf("Flagged for next session");
+  if (idx < 0) return "";
+  // Strip the leading "[manually resolved <iso>]: " bracket if present.
+  let tail = errorContext.slice(idx);
+  // If a colon directly follows the prefix the operator added context,
+  // otherwise the bare phrase means "flagged, no context".
+  if (tail.startsWith("Flagged for next session:")) {
+    tail = tail.slice("Flagged for next session:".length).trim();
+    return tail || "(no context)";
+  }
+  return "(no context)";
+}
+
+function FlaggedForClaudePanel({
+  rows,
+  subsById,
+}: {
+  rows: DeadLetterRow[];
+  subsById: Map<number, SubmissionLite>;
+}) {
+  return (
+    <Card className="border-amber-300 bg-amber-50/40">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm text-amber-900">
+          Flagged for Claude — {rows.length}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-xs text-amber-900/80 leading-relaxed">
+          Rows you flagged for next platform session. The platform agent reads
+          this list at session-start. Last 60 days, most recent first.
+        </p>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Lead</TableHead>
+              <TableHead>Source</TableHead>
+              <TableHead>Your note</TableHead>
+              <TableHead>Flagged</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => {
+              const rawSid = (r.raw_payload as { submission_id?: number | string } | null)?.submission_id;
+              const sidFromPayload = typeof rawSid === "number"
+                ? rawSid
+                : typeof rawSid === "string" && rawSid.trim() !== "" && Number.isFinite(Number(rawSid))
+                ? Number(rawSid)
+                : null;
+              const sid = r.replay_submission_id ?? sidFromPayload;
+              const lead = sid != null ? subsById.get(sid) : undefined;
+              const note = extractFlagNote(r.error_context);
+              const flaggedAt = r.replayed_at ?? r.received_at;
+              return (
+                <TableRow key={r.id}>
+                  <TableCell className="text-xs">
+                    {sid != null ? (
+                      <Link href={`/leads/${sid}`} className="text-[#143643] hover:text-[#cd8b76] font-semibold">
+                        {formatLeadName(lead)}
+                      </Link>
+                    ) : (
+                      <span className="text-[#5a6a72]">No lead linked</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs font-mono">{r.source}</TableCell>
+                  <TableCell className="text-xs">{note}</TableCell>
+                  <TableCell className="text-xs text-[#5a6a72]">
+                    {new Date(flaggedAt).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 

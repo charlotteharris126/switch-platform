@@ -4,6 +4,46 @@
 
 Mable's `.track()` wiring on `s4b-employer-lead-v1`, `switchable-waitlist`, `switchable-waitlist-enrichment`, and `fastrack-funded-v1` is live in production (commit `8f5e9b0`, pushed earlier today, Netlify auto-deploy). Pairs with your `2675b00` allowlist extension. Both ends now match. Your "watch `leads.partials` once Mable's push lands" item (Next steps #2) is now active watching, not pending. No Sasha action needed; just removing the dependency tag.
 
+## ⚡ PUSH FROM switchable/email (Wren) 2026-05-17: SW_FASTRACKED attribute + fastrack-qualified transactional trigger
+
+**Context.** Wren is shipping a one-off "last chance to apply" marketing broadcast tomorrow 18 May PM, targeting open `smm-for-ecommerce` leads who haven't fastracked, marketing-consented. EMS Tees Valley SMM cohort starts 21 May. The broadcast's audience filter needs a Brevo-visible flag for "has the learner submitted the fastrack form yet" — `leads.submissions.fastracked_at` exists but Brevo can't see DB columns. Same flag also unblocks future fastrack-chase automations.
+
+**Two distinct deliverables, both gated on you.**
+
+### 1. `SW_FASTRACKED` boolean Brevo contact attribute
+
+- **Create attribute in Brevo dashboard.** Contacts → Settings → Contact Attributes → add `SW_FASTRACKED` as type Boolean.
+- **Wire writes at routing time** in `_shared/route-lead.ts`. Add `SW_FASTRACKED: false` to the attribute payload in both `upsertLearnerInBrevo` and `upsertLearnerInBrevoNoMatch` (same call-sites that already carry the other SW_* attrs). Every new contact lands with `false` from the off.
+- **Wire write-on-flip in `fastrack-receive`.** After the `leads.fastrack_submissions` child-row insert succeeds (and the `leads.submissions.fastracked_at` stamp), call `upsertBrevoContact` with `SW_FASTRACKED: true`. Same upsert can refresh the other SW_* attrs as a free side effect — useful because it also re-pushes `SW_FASTRACK_URL` (memory: shipped broken 9 May), so the same code path handles the pre-broadcast gate requirement for that attribute on these contacts.
+- **Backfill across existing contacts** via the `admin-brevo-resync` panel pattern (just used 2026-05-16 for the three-attribute backfill, 356 contacts). For every Brevo contact with a parent `leads.submissions` row, set `SW_FASTRACKED = (fastracked_at IS NOT NULL)`. Same pass can refresh `SW_FASTRACK_URL` to clear any stale 9-May breakage.
+- **Update `switchable/email/CLAUDE.md` attribute list** from 21 → 22 attrs, document the attribute, the false-at-routing/true-at-fastrack semantics, and the backfill mechanic. Wren can take this if cleaner.
+
+### 2. New transactional template trigger: `u-fastrack-qualified` (fires from `fastrack-receive`)
+
+- **Trigger condition** (inside `fastrack-receive`, after the child-row insert): `cohort_confirmed === true AND l3_reconfirmed === false`. That's the qualify path — learner committed to the cohort AND didn't self-report a Level 3 (so no L3 mismatch). The two existing DQ paths (`cohort_confirmed === false` → cohort_decline, `l3_reconfirmed === true` → l3_mismatch_self_reported) stay silent on this email.
+- **Send via `sendTransactional`** in `_shared/brevo.ts`. Template ID = TBD from Wren once she's published the template in Brevo dashboard. Template will reuse the existing `SW_PROVIDER_CONTACT_BEFORE` / `SW_PROVIDER_PHONE` / `SW_PROVIDER_CONTACT_AFTER` three-attribute composition for the named-rep + bold-phone block, so no new attribute wiring needed for content rendering. Same `SW_PROVIDER_NAME` / `SW_COURSE_NAME` / `SW_COURSE_INTAKE_DATE` already populated.
+- **Idempotency** in `crm.email_log` on `(submission_id, 'u_fastrack_qualified')` per the existing utility-send pattern. Will need a new `email_type` value — add `'u_fastrack_qualified'` to whatever enum / check constraint governs the column (migration if needed).
+- **Legal basis:** contract. Goes regardless of `marketing_opt_in` — this is an operational confirmation of a successful application step plus a heads-up that a named human is about to call them. Standard utility track.
+- **Sequencing.** This trigger is independent of the broadcast send. Wren publishes the template + provides the template ID; you wire the hook + ship. No hard deadline (the broadcast going out doesn't gate on this), but ideally live within a few days of broadcast send so any fastrack qualifies that broadcast drives land on the new ack.
+
+### Timing reality
+
+- **Hard target: SW_FASTRACKED attribute + wiring + backfill landed by tomorrow 18 May midday UK.** That lets Wren's broadcast filter use the Brevo attribute cleanly: `SW_COURSE_SLUG = smm-for-ecommerce AND SW_ENROL_STATUS = open AND SW_FASTRACKED = false AND SW_CONSENT_MARKETING = true`.
+- **Fallback if not in time:** Wren pulls the audience via DB SQL (open SMM, `fastracked_at IS NULL`, `marketing_opt_in = true`), one-off Brevo list segment for this single send. Attribute work then catches up after. Broadcast doesn't gate on you, but cleaner Brevo-native filter is the preferred path.
+
+### Schema / governance notes
+
+- Brevo attribute set is a data contract between routing and email. Additive boolean attribute, old consumers (templates not referencing it) safely ignore. No payload `schema_version` bump.
+- Per data-infrastructure rule §8: no DB schema change needed for the attribute itself; the `email_type` enum addition (if applicable) ships as its own forward migration with the standard impact-assessment header.
+- Log both pieces in `platform/docs/changelog.md` on ship.
+
+### Cross-references
+
+- Existing fastrack architecture: migration `0087_fastrack_submissions.sql`, `fastrack-receive` Edge Function (live), parent stamp on `leads.submissions.fastracked_at`.
+- Existing three-attribute provider-contact composition: `_shared/route-lead.ts` `renderProviderContactValues`, `switchable/email/CLAUDE.md` lines 54-60.
+- Backfill pattern reference: `admin-brevo-resync` panel, used 2026-05-16 for `SW_PROVIDER_CONTACT_*` backfill (356 contacts).
+- Pre-broadcast gate hard rule: `switchable/email/CLAUDE.md` lines 123-136.
+
 ## Current state
 
 Five fixes shipped to admin + provider portal. Tab-refocus slowness fixed twice (RealtimeRefresh visibility handler gated to >5min hidden, then redundant `supabase.auth.getUser()` removed from admin layout); admin overview fully rebuilt per the Session 48 directive with period picker, per-section Suspense streaming, and provider scoreboard; `/provider/leads` default landing tab is now Fresh with an orthogonal Overdue queue and `cannot_reach` dropped from the Fastrack tab; `netlify-partial-capture` allowlist extended to cover the six forms Mable wired yesterday. Referral programme diagnosed end-to-end (capture pipe intact, near-zero share volume at the top of funnel) and cross-project asks routed to Wren and Mable. All five commits live.
