@@ -58,6 +58,12 @@ export interface LeadRow {
   // Surfaced on the leads table so the working user can spot routing /
   // travel implications at a glance. NULL on employer rows.
   region: string | null;
+  // Local authority code (kebab-case, e.g. "stockton-on-tees"). For providers
+  // whose internal workload split is sub-region (EMS Tees Valley → George /
+  // Jake / Nick by LA), this drives the optional multi-select Area filter.
+  // The Area column displays this when set, falling back to `region` for
+  // higher-level grouping when LA is null.
+  la: string | null;
 }
 
 export type Filter =
@@ -225,6 +231,9 @@ export function LeadsTable({
   const [query, setQuery] = useState("");
   const [courseFilter, setCourseFilter] = useState<string>("all");
   const [cohortFilter, setCohortFilter] = useState<string>("all");
+  // Multi-select. Empty set = "all areas". When non-empty, only rows whose
+  // `la` is in the set pass. Mirrors EMS regional workload split.
+  const [areaFilter, setAreaFilter] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkPending, startBulkTransition] = useTransition();
   const [showLostPicker, setShowLostPicker] = useState(false);
@@ -241,6 +250,18 @@ export function LeadsTable({
     const set = new Set<string>();
     for (const r of rows) {
       if (r.course_id) set.add(r.course_id);
+    }
+    return [...set].sort();
+  }, [rows]);
+
+  // Distinct LA values across loaded rows. Drives the Area multi-select.
+  // Only surfaces the filter UI when at least 2 LAs exist on the provider's
+  // rows — providers with a single area (or none, like self-funded leads via
+  // /find-your-course/ where la is null) don't need the filter.
+  const areaOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) {
+      if (r.la) set.add(r.la);
     }
     return [...set].sort();
   }, [rows]);
@@ -384,6 +405,9 @@ export function LeadsTable({
           && r.acceptable_intake_ids.includes(cohortFilter);
         if (!matchesPreferred && !matchesAcceptable) return false;
       }
+      if (areaFilter.size > 0) {
+        if (!r.la || !areaFilter.has(r.la)) return false;
+      }
       if (q.length > 0) {
         // Search matches across: lead ID (numeric), name, email, course slug.
         // Stripping a leading '#' so "#371" works as well as "371".
@@ -412,7 +436,7 @@ export function LeadsTable({
       const bRouted = b.routed_at ? new Date(b.routed_at).getTime() : 0;
       return bRouted - aRouted;
     });
-  }, [rows, filter, query, courseFilter, cohortFilter, openWorkingHours, staleAttemptMs]);
+  }, [rows, filter, query, courseFilter, cohortFilter, areaFilter, openWorkingHours, staleAttemptMs]);
 
   return (
     <div>
@@ -464,7 +488,7 @@ export function LeadsTable({
         </div>
       </div>
 
-      {(courseOptions.length > 1 || cohortOptions.length > 0) && (
+      {(courseOptions.length > 1 || cohortOptions.length > 0 || areaOptions.length > 1) && (
         <RefineFilters
           courseOptions={courseOptions}
           courseFilter={courseFilter}
@@ -472,6 +496,9 @@ export function LeadsTable({
           cohortOptions={cohortOptions}
           cohortFilter={cohortFilter}
           setCohortFilter={setCohortFilter}
+          areaOptions={areaOptions}
+          areaFilter={areaFilter}
+          setAreaFilter={setAreaFilter}
         />
       )}
 
@@ -678,7 +705,9 @@ export function LeadsTable({
                     </td>
                     {!isEmployerView && (
                       <td className="px-4 py-3 text-slate-700 text-xs">
-                        {r.region ?? <span className="text-slate-400">-</span>}
+                        {r.la
+                          ? formatAreaLabel(r.la)
+                          : (r.region ?? <span className="text-slate-400">-</span>)}
                       </td>
                     )}
                     <td className="px-4 py-3 text-slate-700 tabular-nums">
@@ -835,6 +864,21 @@ function BulkBar({
 
 // Pull the YYYY-MM-DD date out of an intake id of the form
 // "<region>-<YYYY-MM-DD>". Returns null if the suffix isn't a date.
+// Pretty-print a kebab-case LA code. "stockton-on-tees" → "Stockton-on-Tees",
+// "redcar-and-cleveland" → "Redcar-and-Cleveland". Lowercase joiners stay
+// lowercase to match standard English usage of "on" / "and" / "of" / "the".
+function formatAreaLabel(la: string): string {
+  const lowerJoiners = new Set(["on", "and", "of", "the", "in"]);
+  return la
+    .split("-")
+    .map((part, i) =>
+      i > 0 && lowerJoiners.has(part)
+        ? part
+        : part.charAt(0).toUpperCase() + part.slice(1)
+    )
+    .join("-");
+}
+
 function parseIntakeDate(intakeId: string | null | undefined): string | null {
   if (!intakeId) return null;
   const m = intakeId.match(/(\d{4}-\d{2}-\d{2})$/);
@@ -899,6 +943,9 @@ function RefineFilters({
   cohortOptions,
   cohortFilter,
   setCohortFilter,
+  areaOptions,
+  areaFilter,
+  setAreaFilter,
 }: {
   courseOptions: string[];
   courseFilter: string;
@@ -906,10 +953,14 @@ function RefineFilters({
   cohortOptions: string[];
   cohortFilter: string;
   setCohortFilter: (v: string) => void;
+  areaOptions: string[];
+  areaFilter: Set<string>;
+  setAreaFilter: (v: Set<string>) => void;
 }) {
   const hasCourses = courseOptions.length > 1;
   const hasCohorts = cohortOptions.length > 0;
-  const anyActive = (courseFilter !== "all") || (cohortFilter !== "all");
+  const hasAreas = areaOptions.length > 1;
+  const anyActive = (courseFilter !== "all") || (cohortFilter !== "all") || (areaFilter.size > 0);
   const [open, setOpen] = useState<boolean>(anyActive);
 
   const courseActiveLabel = courseFilter === "all"
@@ -922,6 +973,14 @@ function RefineFilters({
   function clearAll() {
     setCourseFilter("all");
     setCohortFilter("all");
+    setAreaFilter(new Set());
+  }
+
+  function toggleArea(la: string) {
+    const next = new Set(areaFilter);
+    if (next.has(la)) next.delete(la);
+    else next.add(la);
+    setAreaFilter(next);
   }
 
   return (
@@ -933,7 +992,7 @@ function RefineFilters({
           className="text-xs font-semibold text-slate-700 hover:text-slate-900 cursor-pointer flex items-center gap-1"
         >
           <span>{open ? "−" : "+"}</span>
-          <span>Refine by course / cohort</span>
+          <span>Refine by course / cohort{hasAreas ? " / area" : ""}</span>
         </button>
         {courseActiveLabel && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-full">
@@ -958,6 +1017,24 @@ function RefineFilters({
               onClick={() => setCohortFilter("all")}
               className="ml-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
               aria-label="Clear cohort filter"
+            >
+              ×
+            </button>
+          </span>
+        )}
+        {areaFilter.size > 0 && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-full">
+            <span className="text-slate-500">Areas:</span>
+            <span className="text-slate-900 font-medium">
+              {areaFilter.size === 1
+                ? formatAreaLabel([...areaFilter][0])
+                : `${areaFilter.size} selected`}
+            </span>
+            <button
+              type="button"
+              onClick={() => setAreaFilter(new Set())}
+              className="ml-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
+              aria-label="Clear area filter"
             >
               ×
             </button>
@@ -1012,6 +1089,26 @@ function RefineFilters({
                   label={cohortDisplayName(c)}
                   active={cohortFilter === c}
                   onClick={() => setCohortFilter(c)}
+                />
+              ))}
+            </div>
+          )}
+          {hasAreas && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[11px] uppercase tracking-wide font-semibold text-slate-500 mr-2 w-14">
+                Area
+              </span>
+              <SecondaryPill
+                label="All"
+                active={areaFilter.size === 0}
+                onClick={() => setAreaFilter(new Set())}
+              />
+              {areaOptions.map((la) => (
+                <SecondaryPill
+                  key={la}
+                  label={formatAreaLabel(la)}
+                  active={areaFilter.has(la)}
+                  onClick={() => toggleArea(la)}
                 />
               ))}
             </div>

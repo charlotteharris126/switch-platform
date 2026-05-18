@@ -51,6 +51,12 @@ interface SubmissionRow {
   role_title: string | null;
   sector: string | null;
   region: string | null;
+  // Local authority code (e.g. "stockton-on-tees"). EMS divides Tees Valley
+  // workload across reps by LA via crm.providers.regional_contacts.by_la;
+  // surfacing this on the leads list + filter lets the working staff member
+  // see / filter to "their" LAs at a glance. NULL on submissions outside
+  // funded-form scope (self-funded course-finder, B2B Riverside form, etc.).
+  la: string | null;
 }
 
 interface EnrolmentRow {
@@ -88,7 +94,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     supabase
       .schema("leads")
       .from("submissions")
-      .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region")
+      .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region,la")
       .not("routed_at", "is", null)
       .is("archived_at", null)
       .is("parent_submission_id", null)
@@ -166,6 +172,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       role_title: s.role_title,
       sector: s.sector,
       region: s.region,
+      la: s.la,
     };
   });
 
