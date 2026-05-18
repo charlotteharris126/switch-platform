@@ -4,6 +4,43 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-18 (Session 51) — S4B employer chaser path
+
+Sibling to the learner chaser. Closes a wiring drift that silently misfired against Riverside earlier today.
+
+**Background.** Riverside (S4B v1 pilot) had 4 real leads in the portal; 2 (`#450` Haris, `#468` Lee Anthony) transitioned to `attempt_1_no_answer` by Freya Kelly. The provider portal's `markOutcomeAction` auto-fire branch ran. Downstream:
+- `crm.fire_provider_chaser` → `admin-brevo-chase` → branches on `funding_category`, which is NULL on `employer_apprenticeship` submissions → silent `transactional = "skipped"`. **No email sent.**
+- A misleading `crm.lead_notes` row ("Learner chaser email auto-sent...") landed on both leads, visible to Riverside staff. We told Freya we'd chased the employers; we hadn't.
+
+**Migration 0148:**
+- Extended `crm.email_log.email_type` CHECK to allow `s4b_employer_chaser`.
+- New `crm.fire_employer_chaser(BIGINT[])` SECURITY DEFINER. Filters to `lead_type='employer_apprenticeship'`. No legacy Brevo list-add (employer side is transactional-only). Calls new Edge Function `admin-brevo-chase-employer` via pg_net.
+
+**New Edge Function `admin-brevo-chase-employer`:** reads submission + provider name from `crm.providers`, sends Brevo transactional via `sendTransactional` with `emailType='s4b_employer_chaser'`, `forceResend=true`, params: `FIRSTNAME / LASTNAME / COMPANY / STANDARD / PROVIDER_NAME / SUBMISSION_ID`. Dead-letters with source `edge_function_brevo_chase_employer` on failure. `verify_jwt=false`, same `x-audit-key / AUDIT_SHARED_SECRET` pattern as the learner sibling.
+
+**`_shared/brevo.ts`:** `EmailLogType` union extended with `s4b_employer_chaser`.
+
+**`app/app/provider/leads/[id]/actions.ts`:** auto-fire branch in `markOutcomeAction` now selects `chaserConfig` by `leadType`. Learner → `fire_provider_chaser` + `chaser_funded/chaser_self` rate-limit gate + learner system-note wording. Employer → `fire_employer_chaser` + `s4b_employer_chaser` rate-limit gate + "Chaser email auto-sent to employer..." system-note wording. 10-min rate-limit and `routedProviderId` gate unchanged.
+
+**New env var:** `BREVO_TEMPLATE_S4B_EMPLOYER_CHASER` (template ID for the Brevo transactional template, employer-voiced). Wren-editable copy lives in Brevo.
+
+**Two misfired system notes left in place** on submissions #450 and #468 per Charlotte's call ("status on the portal is fine"). Future transitions on employer leads write the corrected wording.
+
+**Deploys this session:**
+- `supabase db push --linked` (migration 0148)
+- `supabase functions deploy admin-brevo-chase-employer --no-verify-jwt`
+- App deploy via Netlify auto-rebuild on push.
+
+**Manual fire for in-flight lead:**
+- `#450 Haris` skipped — original U1 ack soft-bounced (typo'd domain `windowhaus.uk` has no MX). Chaser would bounce too.
+- `#468 Lee Anthony` fired manually after wiring lived via `SELECT * FROM crm.fire_employer_chaser(ARRAY[468]::bigint[]);`.
+
+**Carry for Wren:** Brevo template copy is currently a placeholder Charlotte dropped in. Polish in next email session.
+
+**Carry to flag for Mira:** decision-record review of the chaser-to-employer commercial shape (timing, tone, opt-out) after Riverside has cycled 5+ employer leads through real contact cadence. Currently fires on attempt_1/2/3 + cannot_reach with the same 10-min rate-limit as learner side — may want a longer cadence or attempt_1-only cap once we have data.
+
+---
+
 ## 2026-05-17 (Session 50) — Channel B sheet writeback + post-nonce Brevo refresh + /admin/errors UX cleanup
 
 Three connected Edge Function + admin-app changes wrapped together. Closes the two largest accumulators of data drift in the platform.

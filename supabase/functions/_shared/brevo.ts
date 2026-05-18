@@ -314,9 +314,10 @@ export type EmailLogType =
   | "provider_presumed_flipped"
   | "re_engagement"
   // Switchable for Business v1 (employer apprenticeship leads, Riverside).
-  // Constraint added in migration 0125.
+  // Constraint added in migration 0125. Chaser added in migration 0148.
   | "s4b_employer_u1"
   | "s4b_employer_ud"
+  | "s4b_employer_chaser"
   // Fastrack qualifying ack — fires from fastrack-receive when the learner
   // submits the fastrack form AND clears the qualifying conditions
   // (cohort_confirmed === true AND l3_reconfirmed === false). Operational

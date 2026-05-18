@@ -201,25 +201,28 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     );
   }
 
-  // Auto-fire learner chaser email on every "tried but didn't reach" status.
-  // Charlotte 2026-05-18: every status (1/2/3 + cannot_reach) fires the
+  // Auto-fire chaser email on every "tried but didn't reach" status.
+  // Charlotte 2026-05-18: every status (1/2/3 + cannot_reach) fires a
   // chaser. Rate-limited to one chaser per submission per 10 min window —
   // if a provider clicks through 1st no answer → 2nd no answer → 3rd no
-  // answer within minutes, the learner gets a single chaser, not four.
+  // answer within minutes, the recipient gets a single chaser, not four.
   // After 10 min the gate opens again so a deliberate "give them another
   // nudge a few hours later" still works.
   //
-  // crm.fire_provider_chaser audits the fire-intent + async-invokes
-  // admin-brevo-chase via pg_net (same DB function the admin bulk-fire
-  // uses). The Edge Function does the actual send + writes crm.email_log
-  // (the canonical record the /admin/leads "Last chaser" column reads).
-  // Fire-and-forget: failure logs to console, we already saved the status
-  // change, the chaser miss doesn't roll the user's action back.
+  // Split per leadType:
+  //   - learner → crm.fire_provider_chaser → admin-brevo-chase (legacy
+  //     SF2 list-add + funded/self transactional template)
+  //   - employer_apprenticeship → crm.fire_employer_chaser →
+  //     admin-brevo-chase-employer (transactional only, employer-shaped
+  //     template). Wired in migration 0148 on 2026-05-18 after the
+  //     learner path silently misfired on the first 2 Riverside
+  //     attempt_1_no_answer transitions.
   //
-  // A system note in crm.lead_notes records the chaser fire so portal
+  // Fire-and-forget: failure logs to console, we already saved the
+  // status change, the chaser miss doesn't roll the user's action back.
+  // System note in crm.lead_notes records the chaser fire so portal
   // users see the action in the lead's note log without needing to dig
-  // into email_log. author_role='system' marks it as automation, not
-  // staff-authored.
+  // into email_log. author_role='system' marks it as automation.
   const CHASER_TRIGGER_STATUSES = new Set<LeadStatus>([
     "attempt_1_no_answer",
     "attempt_2_no_answer",
@@ -227,6 +230,22 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     "cannot_reach",
   ]);
   const CHASER_RATE_LIMIT_MS = 10 * 60 * 1000;
+
+  const chaserConfig =
+    leadType === "employer_apprenticeship"
+      ? {
+          rpc: "fire_employer_chaser" as const,
+          emailTypes: ["s4b_employer_chaser"] as const,
+          noteBody: (statusLabel: string) =>
+            `Chaser email auto-sent to employer (triggered by status: ${statusLabel}).`,
+        }
+      : {
+          rpc: "fire_provider_chaser" as const,
+          emailTypes: ["chaser_funded", "chaser_self"] as const,
+          noteBody: (statusLabel: string) =>
+            `Learner chaser email auto-sent (triggered by status: ${statusLabel}).`,
+        };
+
   if (CHASER_TRIGGER_STATUSES.has(targetStatus) && routedProviderId) {
     const tenMinAgoIso = new Date(Date.now() - CHASER_RATE_LIMIT_MS).toISOString();
     const { data: recentChaser } = await supabase
@@ -234,7 +253,7 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
       .from("email_log")
       .select("id")
       .eq("submission_id", args.submissionId)
-      .in("email_type", ["chaser_funded", "chaser_self"])
+      .in("email_type", [...chaserConfig.emailTypes])
       .gte("triggered_at", tenMinAgoIso)
       .limit(1);
 
@@ -243,11 +262,11 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     if (!rateLimited) {
       void supabase
         .schema("crm")
-        .rpc("fire_provider_chaser", { p_submission_ids: [args.submissionId] })
+        .rpc(chaserConfig.rpc, { p_submission_ids: [args.submissionId] })
         .then(({ error }) => {
           if (error) {
             console.warn(
-              `auto-chaser fire failed for submission ${args.submissionId} on ${targetStatus}: ${error.message}`,
+              `auto-chaser fire failed for submission ${args.submissionId} (${leadType}) on ${targetStatus}: ${error.message}`,
             );
           }
         });
@@ -264,7 +283,7 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
           author_role: "system",
           author_user_id: null,
           author_display_name: "Switchable",
-          body: `Learner chaser email auto-sent (triggered by status: ${statusLabel}).`,
+          body: chaserConfig.noteBody(statusLabel),
         })
         .then(({ error }) => {
           if (error) {
