@@ -141,7 +141,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           s.standards_interested,
           s.lead_type,
           s.primary_routed_to,
-          p.name AS provider_name
+          p.company_name AS provider_name
         FROM leads.submissions s
         LEFT JOIN crm.providers p ON p.provider_id = s.primary_routed_to
         WHERE s.id = ${submissionId}

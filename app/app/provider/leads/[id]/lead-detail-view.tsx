@@ -238,7 +238,9 @@ export function LeadDetailView({
               )}
               {lastChaserAt && (
                 <p className="text-xs text-slate-500 mt-2">
-                  Last chaser sent to learner:{" "}
+                  {submission.lead_type === "employer_apprenticeship"
+                    ? "Last chaser sent to employer: "
+                    : "Last chaser sent to learner: "}
                   <span className="text-slate-700 font-medium">
                     {new Date(lastChaserAt).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}
                   </span>

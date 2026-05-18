@@ -104,13 +104,16 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     // Latest chaser email sent for this lead. Read from crm.email_log
     // (canonical record, same source the admin /admin/leads "Last chaser"
     // column uses). Both manual admin bulk-fire and the portal auto-fire
-    // write here, so this single field reflects every chaser path.
+    // write here, so this single field reflects every chaser path. The
+    // filter covers learner (chaser_funded/chaser_self) AND employer
+    // (s4b_employer_chaser) types — the label in the view branches by
+    // submission.lead_type.
     supabase
       .schema("crm")
       .from("email_log")
       .select("triggered_at,status")
       .eq("submission_id", submissionId)
-      .in("email_type", ["chaser_funded", "chaser_self"])
+      .in("email_type", ["chaser_funded", "chaser_self", "s4b_employer_chaser"])
       .order("triggered_at", { ascending: false })
       .limit(1)
       .maybeSingle<{ triggered_at: string; status: string }>(),
