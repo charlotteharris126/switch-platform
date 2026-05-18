@@ -201,6 +201,64 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     );
   }
 
+  // Auto-fire learner chaser email on every "tried but didn't reach" status.
+  // Charlotte 2026-05-18: every status (1/2/3 + cannot_reach) fires the
+  // chaser. Trade-off accepted: a learner who gets bounced through all four
+  // statuses in a week receives up to 4 chasers. Provider still has the
+  // existing admin manual-fire path for sheet-only providers via
+  // /admin/leads bulk actions.
+  //
+  // crm.fire_provider_chaser audits the fire-intent + async-invokes
+  // admin-brevo-chase via pg_net (same DB function the admin bulk-fire
+  // uses). The Edge Function does the actual send + writes crm.email_log.
+  // Fire-and-forget here: failure logs to console; we already saved the
+  // status change, the chaser miss doesn't roll the user's action back.
+  //
+  // A system note in crm.lead_notes records the chaser fire so portal
+  // users see the action in the lead's note log without needing to dig
+  // into email_log. author_role='system' marks it as automation, not
+  // staff-authored.
+  const CHASER_TRIGGER_STATUSES = new Set<LeadStatus>([
+    "attempt_1_no_answer",
+    "attempt_2_no_answer",
+    "attempt_3_no_answer",
+    "cannot_reach",
+  ]);
+  if (CHASER_TRIGGER_STATUSES.has(targetStatus) && routedProviderId) {
+    void supabase
+      .schema("crm")
+      .rpc("fire_provider_chaser", { p_submission_ids: [args.submissionId] })
+      .then(({ error }) => {
+        if (error) {
+          console.warn(
+            `auto-chaser fire failed for submission ${args.submissionId} on ${targetStatus}: ${error.message}`,
+          );
+        }
+      });
+
+    const admin = createAdminClient();
+    const statusLabel = STATUS_LABEL[targetStatus] ?? targetStatus;
+    admin
+      .schema("crm")
+      .from("lead_notes")
+      .insert({
+        submission_id: args.submissionId,
+        provider_id: routedProviderId,
+        provider_user_id: null,
+        author_role: "system",
+        author_user_id: null,
+        author_display_name: "Switchable",
+        body: `Learner chaser email auto-sent (triggered by status: ${statusLabel}).`,
+      })
+      .then(({ error }) => {
+        if (error) {
+          console.warn(
+            `auto-chaser system note insert failed for submission ${args.submissionId}: ${error.message}`,
+          );
+        }
+      });
+  }
+
   // Only revalidate the detail page the provider is sitting on. The leads
   // list and home will refresh on next nav OR via the realtime channel
   // catching the same UPDATE (debounced 600ms). Cutting the two extra
