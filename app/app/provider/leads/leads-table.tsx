@@ -81,6 +81,13 @@ export type Filter =
   | "calling"
   | "meeting"
   | "enrolled"
+  // "lost" + "cannot_reach" are pill-level filters in their own right
+  // (Option A reshape, 2026-05-18). Replaced the opaque "Cold" grouping
+  // which lumped both together. "cold" stays a valid Filter for URL
+  // backward-compat (deep-links from the previous shape) but is no
+  // longer surfaced as a visible pill.
+  | "lost"
+  | "cannot_reach"
   | "cold"
   // Subset of "action": only attempts that have gone stale (status hasn't
   // moved in 36h+). Linked from the home page "call attempts need
@@ -97,17 +104,24 @@ export type Filter =
   | "near_60_day";
 
 // "Action needed" is rendered separately above as its own prominent pill
-// (rose when items waiting, emerald when zero). The standard filter row
-// below covers everything else, branched by lead-type.
-const LEARNER_FILTER_DEFS: Array<{ value: Filter; label: string; tone?: "rose" | "amber" }> = [
-  { value: "fresh", label: "Fresh" },
+// (rose when items waiting, emerald when zero). The learner pill row is
+// split into PRIMARY (the workflow the provider works through every day)
+// and SECONDARY (state look-up). 2026-05-18 reshape from a single 9-pill
+// row to two grouped rows. Primary pills are all guaranteed to exclude
+// enrolled / lost / cannot_reach by the underlying filter logic, so the
+// "do this now" row stays free of settled-state noise.
+const LEARNER_PRIMARY_FILTERS: Array<{ value: Filter; label: string; tone?: "rose" | "amber" }> = [
+  { value: "fresh", label: "New" },
   { value: "overdue", label: "Overdue", tone: "rose" },
   { value: "callback", label: "Needs callback" },
   { value: "fastrack", label: "Fastrack" },
+];
+const LEARNER_SECONDARY_FILTERS: Array<{ value: Filter; label: string; tone?: "rose" | "amber" }> = [
   { value: "calling", label: "Calling" },
   { value: "meeting", label: "Meeting booked" },
   { value: "enrolled", label: "Enrolled" },
-  { value: "cold", label: "Cold" },
+  { value: "lost", label: "Lost" },
+  { value: "cannot_reach", label: "Cannot reach" },
   { value: "all", label: "All" },
 ];
 const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string; tone?: "rose" | "amber" }> = [
@@ -301,6 +315,8 @@ export function LeadsTable({
     let meeting = 0;
     let enrolled = 0;
     let cold = 0;
+    let lost = 0;
+    let cannot_reach = 0;
     let callback = 0;
     let fastrack = 0;
     let stale_attempts = 0;
@@ -329,6 +345,8 @@ export function LeadsTable({
       if (r.status === "enrolment_meeting_booked") meeting += 1;
       if (ENROLLED.has(r.status)) enrolled += 1;
       if (COLD.has(r.status)) cold += 1;
+      if (r.status === "lost") lost += 1;
+      if (r.status === "cannot_reach") cannot_reach += 1;
       if (isStaleAttempt(r, staleAttemptMs)) stale_attempts += 1;
       // Employer counts
       if (r.status === "engaged") engaged += 1;
@@ -346,7 +364,7 @@ export function LeadsTable({
     return {
       all: rows.length,
       action, callback, fastrack, fresh, overdue, open,
-      calling, meeting, enrolled, cold, stale_attempts,
+      calling, meeting, enrolled, cold, lost, cannot_reach, stale_attempts,
       engaged, in_progress, signed, not_signed, near_60_day,
     };
   }, [rows, openWorkingHours, staleAttemptMs]);
@@ -382,6 +400,10 @@ export function LeadsTable({
         if (!ENROLLED.has(r.status)) return false;
       } else if (filter === "cold") {
         if (!COLD.has(r.status)) return false;
+      } else if (filter === "lost") {
+        if (r.status !== "lost") return false;
+      } else if (filter === "cannot_reach") {
+        if (r.status !== "cannot_reach") return false;
       } else if (filter === "engaged") {
         if (r.status !== "engaged") return false;
       } else if (filter === "in_progress") {
@@ -456,27 +478,66 @@ export function LeadsTable({
         </div>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-        <div className="flex flex-wrap gap-1">
-          {(isEmployerView ? EMPLOYER_FILTER_DEFS : LEARNER_FILTER_DEFS).map((f) => {
-            const count = (counts as Record<string, number>)[f.value] ?? 0;
-            // Tone only fires when there's something to draw attention to.
-            // "Overdue: 0" stays slate so the row doesn't shout for no reason.
-            // FilterPill only accepts "rose" today; amber stays slate visually
-            // until the pill palette grows.
-            const pillTone: "rose" | undefined =
-              f.tone === "rose" && count > 0 ? "rose" : undefined;
-            return (
-              <FilterPill
-                key={f.value}
-                label={f.label}
-                count={count}
-                active={filter === f.value}
-                onClick={() => setFilter(f.value)}
-                tone={pillTone}
-              />
-            );
-          })}
-        </div>
+        {isEmployerView ? (
+          <div className="flex flex-wrap gap-1">
+            {EMPLOYER_FILTER_DEFS.map((f) => {
+              const count = (counts as Record<string, number>)[f.value] ?? 0;
+              const pillTone: "rose" | undefined =
+                f.tone === "rose" && count > 0 ? "rose" : undefined;
+              return (
+                <FilterPill
+                  key={f.value}
+                  label={f.label}
+                  count={count}
+                  active={filter === f.value}
+                  onClick={() => setFilter(f.value)}
+                  tone={pillTone}
+                />
+              );
+            })}
+          </div>
+        ) : (
+          // Learner pills: two rows. Primary = workflow you act on (New /
+          // Overdue / Callback / Fastrack — all exclude settled state by
+          // design). Secondary = state look-up (Calling / Meeting /
+          // Enrolled / Lost / Cannot reach / All). Visually separated so
+          // the eye lands on the working queue first. 2026-05-18 reshape.
+          <div className="flex flex-col gap-1.5">
+            <div className="flex flex-wrap gap-1">
+              {LEARNER_PRIMARY_FILTERS.map((f) => {
+                const count = (counts as Record<string, number>)[f.value] ?? 0;
+                // Tone only fires when there's something to draw attention to.
+                // "Overdue: 0" stays slate so the row doesn't shout for no reason.
+                const pillTone: "rose" | undefined =
+                  f.tone === "rose" && count > 0 ? "rose" : undefined;
+                return (
+                  <FilterPill
+                    key={f.value}
+                    label={f.label}
+                    count={count}
+                    active={filter === f.value}
+                    onClick={() => setFilter(f.value)}
+                    tone={pillTone}
+                  />
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap gap-1 opacity-80">
+              {LEARNER_SECONDARY_FILTERS.map((f) => {
+                const count = (counts as Record<string, number>)[f.value] ?? 0;
+                return (
+                  <FilterPill
+                    key={f.value}
+                    label={f.label}
+                    count={count}
+                    active={filter === f.value}
+                    onClick={() => setFilter(f.value)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <input
             type="search"

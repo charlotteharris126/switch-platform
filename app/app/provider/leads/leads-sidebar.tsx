@@ -107,7 +107,7 @@ export function LeadsSidebar({
         <div className="mt-3 space-y-0.5">
           <StatLink
             href={`${leadsHrefBase}?status=fresh`}
-            label="Fresh"
+            label="New"
             value={open}
             tone="rose"
             emphasis
