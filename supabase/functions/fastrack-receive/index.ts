@@ -107,8 +107,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
     prior_level_3_or_higher: boolean | null;
     primary_routed_to: string | null;
     email: string | null;
+    first_name: string | null;
+    last_name: string | null;
+    funding_category: string | null;
   }>>`
-    SELECT id, prior_level_3_or_higher, primary_routed_to, email
+    SELECT id, prior_level_3_or_higher, primary_routed_to, email,
+           first_name, last_name, funding_category
       FROM leads.submissions
      WHERE client_nonce = ${parentRef}
      LIMIT 1
@@ -386,12 +390,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (cohortConfirmed === true && l3Reconfirmed === false && parent.email) {
     const templateId = Number(Deno.env.get("BREVO_TEMPLATE_U_FASTRACK_QUALIFIED") ?? "0");
     if (templateId > 0) {
+      const recipientName = [parent.first_name, parent.last_name]
+        .filter(Boolean).join(" ") || undefined;
       try {
         await sendTransactional({
           sql,
           templateId,
-          recipient: { email: parent.email },
-          params: {},
+          recipient: { email: parent.email, name: recipientName },
+          // Brevo's transactional API rejects an empty params object with
+          // 400 "params is blank". Pass FIRSTNAME/LASTNAME/SW_FUNDING_CATEGORY
+          // even though the template renders from contact attributes — same
+          // shape as email-u4-cron / email-stalled-cron so the call satisfies
+          // Brevo's non-empty-params requirement.
+          params: {
+            FIRSTNAME: parent.first_name ?? "",
+            LASTNAME: parent.last_name ?? "",
+            SW_FUNDING_CATEGORY: parent.funding_category ?? "",
+          },
           submissionId: parent.id,
           emailType: "u_fastrack_qualified",
           brand: "switchable",
