@@ -243,7 +243,12 @@ async function checkProvider(
   const sheetById = new Map<string, SheetRow>();
   for (const r of sheetRows) sheetById.set(r.submission_id, r);
 
-  // 3. Load DB-routed leads (matches republish-provider-sheet's scope)
+  // 3. Load DB-routed leads (matches republish-provider-sheet's scope).
+  // Excludes re-submission children: route-lead.ts doesn't write a fresh
+  // sheet row for children — the lead already exists on the sheet under
+  // the parent's submission_id — so a child's id never has a sheet match
+  // and would show as `missing_from_sheet` or status-drift forever. False
+  // positives. Parents still get checked normally.
   let dbLeads: DbLead[];
   try {
     dbLeads = await sql<DbLead[]>`
@@ -255,6 +260,7 @@ async function checkProvider(
    LEFT JOIN crm.enrolments e ON e.submission_id = s.id
        WHERE s.primary_routed_to = ${provider.provider_id}
          AND s.is_dq IS NOT TRUE
+         AND s.parent_submission_id IS NULL
     `;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

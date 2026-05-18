@@ -125,6 +125,13 @@ async function run(
   // 2. Load routed leads for this provider. If submissionFilter is set,
   //    scope to just those IDs (e.g. when the reconcile panel knows which
   //    rows are drifting and only wants those re-written, not all 142+).
+  //
+  //    Re-submission children (parent_submission_id IS NOT NULL) are
+  //    excluded: route-lead.ts doesn't write a fresh sheet row for them,
+  //    so the appender's update_by_submission_id mode has no row to
+  //    target. Including them would either error or no-op per child and
+  //    pollute the drift cron's subsequent comparison. Parent submissions
+  //    are written as normal.
   const leads = submissionFilter
     ? await sql<RoutedLead[]>`
         SELECT s.id AS submission_id,
@@ -135,6 +142,7 @@ async function run(
      LEFT JOIN crm.enrolments e ON e.submission_id = s.id
          WHERE s.primary_routed_to = ${providerId}
            AND s.is_dq IS NOT TRUE
+           AND s.parent_submission_id IS NULL
            AND s.id = ANY(${submissionFilter}::BIGINT[])
       `
     : await sql<RoutedLead[]>`
@@ -146,6 +154,7 @@ async function run(
      LEFT JOIN crm.enrolments e ON e.submission_id = s.id
          WHERE s.primary_routed_to = ${providerId}
            AND s.is_dq IS NOT TRUE
+           AND s.parent_submission_id IS NULL
       `;
 
   const spotChecks: SpotCheck[] = leads.slice(0, 3).map((l) => ({
