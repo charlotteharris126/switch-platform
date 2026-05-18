@@ -523,6 +523,82 @@ function mapEnrolStatusForBrevo(dbStatus: string): string {
   return ENROL_STATUS_DB_TO_BREVO[dbStatus] ?? dbStatus;
 }
 
+// Per-email aggregated state for the Brevo upsert. Solves the duplicate-
+// submission overwrite problem: one email = one Brevo contact, but the same
+// email can have multiple submissions (re-applications, DQ duplicates). The
+// upsert path used to read state from THE submission being processed, so
+// whichever submission upserted last won — usually the most recent which was
+// often a DQ duplicate. Result: Brevo cards drifted away from the canonical
+// state per email.
+//
+// This aggregate pulls the canonical inputs across all submissions for an
+// email, so any submission's upsert lands the same SW_FASTRACK_COMPLETED /
+// SW_FASTRACK_URL / SW_REFERRAL_URL / SW_REFERRAL_CODE values. The
+// admin-brevo-resync backfill uses identical logic (latest-opt-in for URLs,
+// earliest-with-referral_code for referral, bool_or across all for fastrack
+// flag), so the two paths stay in agreement and the backfill panel goes
+// from "always shows drift" to "actually finds drift only when broken".
+//
+// Course/region/provider/enrol attributes deliberately STAY per-submission —
+// those reflect the immediate routing event, and the current submission IS
+// the right source for them.
+interface EmailAggregateState {
+  clientNonce: string | null;
+  courseId: string | null;
+  marketingOptIn: boolean | null;
+  referralCode: string | null;
+  anyFastracked: boolean;
+}
+
+async function loadEmailAggregateState(
+  sql: Sql,
+  email: string,
+): Promise<EmailAggregateState> {
+  const [optIn, anyLatest, earliestRef, fastrackResult] = await Promise.all([
+    sql<Array<{ client_nonce: string | null; course_id: string | null; marketing_opt_in: boolean | null }>>`
+      SELECT client_nonce, course_id, marketing_opt_in
+        FROM leads.submissions
+       WHERE lower(email) = lower(${email})
+         AND archived_at IS NULL
+         AND marketing_opt_in = true
+       ORDER BY submitted_at DESC, id DESC
+       LIMIT 1
+    `,
+    sql<Array<{ client_nonce: string | null; course_id: string | null; marketing_opt_in: boolean | null }>>`
+      SELECT client_nonce, course_id, marketing_opt_in
+        FROM leads.submissions
+       WHERE lower(email) = lower(${email})
+         AND archived_at IS NULL
+       ORDER BY submitted_at DESC, id DESC
+       LIMIT 1
+    `,
+    sql<Array<{ referral_code: string | null }>>`
+      SELECT referral_code
+        FROM leads.submissions
+       WHERE lower(email) = lower(${email})
+         AND archived_at IS NULL
+         AND referral_code IS NOT NULL
+       ORDER BY submitted_at ASC, id ASC
+       LIMIT 1
+    `,
+    sql<Array<{ any_fastracked: boolean }>>`
+      SELECT COALESCE(bool_or(fastracked_at IS NOT NULL), false) AS any_fastracked
+        FROM leads.submissions
+       WHERE lower(email) = lower(${email})
+         AND archived_at IS NULL
+    `,
+  ]);
+
+  const canonical = optIn[0] ?? anyLatest[0];
+  return {
+    clientNonce: canonical?.client_nonce ?? null,
+    courseId: canonical?.course_id ?? null,
+    marketingOptIn: canonical?.marketing_opt_in ?? null,
+    referralCode: earliestRef[0]?.referral_code ?? null,
+    anyFastracked: fastrackResult[0]?.any_fastracked ?? false,
+  };
+}
+
 // Builds the referral page URL for the referrer. The /refer/ page shows the
 // referrer their personal sharing link. The ?ref= param tells the page which
 // referrer this is. Funding category is irrelevant here — the refer page is
@@ -648,6 +724,7 @@ export async function upsertLearnerInBrevo(
 
   const ctx = await composeBrevoCourseContext(submission);
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
+  const agg = await loadEmailAggregateState(sql, submission.email);
 
   // SW_ENROL_STATUS reads crm.enrolments.status for this (submission, provider)
   // pair. LEFT JOIN-equivalent: if no row (race condition on resync paths
@@ -707,19 +784,24 @@ export async function upsertLearnerInBrevo(
     // without needing a separate event API. See _shared/brevo.ts comment.
     SW_MATCH_STATUS: "matched",
     SW_ENROL_STATUS: mapEnrolStatusForBrevo(enrolStatus),
-    SW_REFERRAL_CODE: submission.referral_code ?? "",
-    SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
+    // Email-aggregated: stays stable across this email's submissions so the
+    // duplicate-submission overwrite never empties them. See
+    // loadEmailAggregateState above.
+    SW_REFERRAL_CODE: agg.referralCode ?? "",
+    SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, agg.referralCode),
     // Migration 0099 attributes. SW_PHONE for outreach/SMS targeting.
     // SW_LOST_REASON mirrors crm.enrolments.lost_reason so marketing can
     // segment lost reasons (cohort_decline / l3_mismatch / etc.).
-    // SW_FASTRACK_COMPLETED true once the fastrack form has landed.
+    // SW_FASTRACK_COMPLETED + SW_FASTRACK_URL are email-aggregated (see
+    // loadEmailAggregateState): COMPLETED is true if ANY submission for
+    // this email fastracked, URL uses the canonical opt-in submission.
     // The 4 enrichment fields come from waitlist-enrichment after a
     // cohort_decline or generic /waitlist/ submit — populated on the
     // parent row via the ingest UPDATE step.
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: lostReason,
-    SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
-    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce, submission.course_id, submission.marketing_opt_in === true),
+    SW_FASTRACK_COMPLETED: agg.anyFastracked,
+    SW_FASTRACK_URL: buildFastrackUrl(agg.clientNonce, agg.courseId, agg.marketingOptIn === true),
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
@@ -939,6 +1021,7 @@ export async function upsertLearnerInBrevoNoMatch(
 
   const ctx = await composeBrevoCourseContext(submission);
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
+  const agg = await loadEmailAggregateState(sql, submission.email);
 
   const attributes: BrevoAttributes = {
     FIRSTNAME: submission.first_name ?? "",
@@ -963,16 +1046,18 @@ export async function upsertLearnerInBrevoNoMatch(
     // in the enrolment lifecycle yet. Will be populated once the lead routes
     // and the matched upsert helper takes over.
     SW_ENROL_STATUS: "",
-    SW_REFERRAL_CODE: submission.referral_code ?? "",
-    SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, submission.referral_code),
+    // Email-aggregated (see loadEmailAggregateState). Keeps the URL +
+    // fastracked-flag attributes stable across this email's submissions.
+    SW_REFERRAL_CODE: agg.referralCode ?? "",
+    SW_REFERRAL_URL: buildReferralUrl(submission.funding_category ?? null, agg.referralCode),
     // Migration 0099 attributes (kept consistent across no_match / pending /
     // matched lifecycle states so the contact record doesn't reshape on
     // transition). SW_LOST_REASON is empty here because no enrolment row
     // exists yet for these contacts.
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: "",
-    SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
-    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce, submission.course_id, submission.marketing_opt_in === true),
+    SW_FASTRACK_COMPLETED: agg.anyFastracked,
+    SW_FASTRACK_URL: buildFastrackUrl(agg.clientNonce, agg.courseId, agg.marketingOptIn === true),
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
