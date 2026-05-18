@@ -98,6 +98,7 @@ export async function setProviderPasswordAction(args: {
 
   // Finalise the provider_users row: clear the invite token, mark active,
   // link auth_user_id if not already.
+  const priorStatus = row.status;
   const { error: puUpdErr } = await admin
     .schema("crm")
     .from("provider_users")
@@ -112,6 +113,39 @@ export async function setProviderPasswordAction(args: {
     .eq("id", row.id);
   if (puUpdErr) {
     return { ok: false, error: puUpdErr.message };
+  }
+
+  // Audit the invite acceptance. No authenticated session yet (the user
+  // is about to log in for the first time), so the audit.log_provider_action
+  // path (which gates on auth.uid()) doesn't fit. Direct insert via the
+  // admin client into audit.actions with surface='system' instead, mirroring
+  // the schema audit.log_system_action would have written. Bit Riverside
+  // 2026-05-18: Freya's invite-acceptance left no audit trail at all, which
+  // made it unclear when/whether she'd actually onboarded. Best-effort:
+  // failure here doesn't roll back the activation — the user shouldn't be
+  // locked out because an audit insert failed.
+  try {
+    await admin
+      .schema("audit")
+      .from("actions")
+      .insert({
+        actor_user_id: null,
+        actor_email: row.contact_email,
+        surface: "system",
+        action: "accept_invite",
+        target_table: "crm.provider_users",
+        target_id: String(row.id),
+        before_value: { status: priorStatus },
+        after_value: { status: "active", auth_user_id: authUserId },
+        context: {
+          provider_user_id: row.id,
+          provider_id: row.provider_id,
+          contact_email: row.contact_email,
+          via: "provider_set_password",
+        },
+      });
+  } catch (auditErr) {
+    console.error("provider-set-password: audit write failed (non-fatal):", String(auditErr));
   }
 
   return { ok: true };

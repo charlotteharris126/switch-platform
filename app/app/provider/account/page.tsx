@@ -9,9 +9,8 @@
 // passkey query no longer rendered here.
 
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { requireProviderUser } from "@/lib/auth/require-provider";
 import { ProviderShell } from "../provider-shell";
 import { DisplayNameForm } from "./display-name-form";
 import { TeamPanel, type TeamUserRow } from "./team-panel";
@@ -51,24 +50,29 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 export default async function ProviderAccountPage() {
-  const supabase = await createClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const user = sessionData.session?.user;
-  if (!user) redirect("/provider-login");
+  // requireProviderUser fires the welcome + SLA gates; without it /account
+  // was a bypass route for users who hadn't completed onboarding. Bit
+  // Riverside's Freya 2026-05-18 (Charlotte): she logged in, didn't finish
+  // /provider/welcome, and could still reach /account because this page
+  // ran its own bespoke session check that skipped the gates.
+  const ctx = await requireProviderUser();
 
   const admin = createAdminClient();
 
+  // Re-fetch the provider_user with the extra fields the page renders
+  // (enrolled_at, invited_at) on top of the canonical fields the gate
+  // already returned.
   const { data: pu } = await admin
     .schema("crm")
     .from("provider_users")
     .select("id, provider_id, contact_email, display_name, role, enrolled_at, status, invited_at")
-    .eq("auth_user_id", user.id)
-    .eq("status", "active")
+    .eq("id", ctx.providerUserId)
     .maybeSingle<ProviderUserRow>();
 
   if (!pu) {
-    await supabase.auth.signOut();
-    redirect("/provider-login?error=no_active_account");
+    // Defence-in-depth: shouldn't be reachable since requireProviderUser
+    // already verified the row exists with status='active'.
+    throw new Error("provider_user row missing after gate");
   }
 
   // provider + team users in parallel.

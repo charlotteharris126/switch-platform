@@ -5,29 +5,21 @@
 // email to show "we'll reply to <email>" so the provider knows where
 // the response goes.
 
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { requireProviderUser } from "@/lib/auth/require-provider";
 import { ProviderShell } from "../provider-shell";
 import { SupportForm } from "./support-form";
 import { submitSupportRequestAction } from "./actions";
 
 export default async function ProviderSupportPage() {
-  const supabase = await createClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const user = sessionData.session?.user;
-  if (!user) redirect("/provider-login");
-
+  // requireProviderUser fires the welcome + SLA gates. Without it /support
+  // was a bypass route for users mid-onboarding. Same fix as /account
+  // landed 2026-05-18.
+  const ctx = await requireProviderUser();
   const admin = createAdminClient();
-  const { data: pu } = await admin
-    .schema("crm")
-    .from("provider_users")
-    .select("contact_email, provider_id")
-    .eq("auth_user_id", user.id)
-    .eq("status", "active")
-    .maybeSingle<{ contact_email: string; provider_id: string }>();
+  const pu = { contact_email: ctx.contactEmail, provider_id: ctx.providerId };
 
-  const replyEmail = pu?.contact_email ?? user.email ?? "your registered email";
+  const replyEmail = pu.contact_email ?? "your registered email";
 
   // Determine the provider's shape so the Common questions section can
   // filter out guides that don't apply. Employer-providers (Riverside)
