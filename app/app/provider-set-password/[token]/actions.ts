@@ -115,37 +115,34 @@ export async function setProviderPasswordAction(args: {
     return { ok: false, error: puUpdErr.message };
   }
 
-  // Audit the invite acceptance. No authenticated session yet (the user
-  // is about to log in for the first time), so the audit.log_provider_action
-  // path (which gates on auth.uid()) doesn't fit. Direct insert via the
-  // admin client into audit.actions with surface='system' instead, mirroring
-  // the schema audit.log_system_action would have written. Bit Riverside
-  // 2026-05-18: Freya's invite-acceptance left no audit trail at all, which
-  // made it unclear when/whether she'd actually onboarded. Best-effort:
-  // failure here doesn't roll back the activation — the user shouldn't be
-  // locked out because an audit insert failed.
+  // Audit the invite acceptance via the public.log_system_action_v1 RPC
+  // (migration 0147). audit.actions has no INSERT grant for anyone — only
+  // SELECT to readonly_analytics — so the previous direct admin-client
+  // insert was silently rejected by RLS. The public wrapper delegates to
+  // audit.log_system_action which is SECURITY DEFINER and inserts with
+  // audit-owner privileges. Bit Riverside (Freya) AND EMS (George) on
+  // 2026-05-18; the second occurrence prompted this fix. Best-effort:
+  // failure here doesn't roll back the activation.
   try {
-    await admin
-      .schema("audit")
-      .from("actions")
-      .insert({
-        actor_user_id: null,
-        actor_email: row.contact_email,
-        surface: "system",
-        action: "accept_invite",
-        target_table: "crm.provider_users",
-        target_id: String(row.id),
-        before_value: { status: priorStatus },
-        after_value: { status: "active", auth_user_id: authUserId },
-        context: {
-          provider_user_id: row.id,
-          provider_id: row.provider_id,
-          contact_email: row.contact_email,
-          via: "provider_set_password",
-        },
-      });
+    const { error: auditErr } = await admin.rpc("log_system_action_v1", {
+      p_actor: "provider_set_password",
+      p_action: "accept_invite",
+      p_target_table: "crm.provider_users",
+      p_target_id: String(row.id),
+      p_before: { status: priorStatus },
+      p_after: { status: "active", auth_user_id: authUserId },
+      p_context: {
+        provider_user_id: row.id,
+        provider_id: row.provider_id,
+        contact_email: row.contact_email,
+        via: "provider_set_password",
+      },
+    });
+    if (auditErr) {
+      console.error("provider-set-password: audit RPC failed (non-fatal):", auditErr.message);
+    }
   } catch (auditErr) {
-    console.error("provider-set-password: audit write failed (non-fatal):", String(auditErr));
+    console.error("provider-set-password: audit RPC threw (non-fatal):", String(auditErr));
   }
 
   return { ok: true };
