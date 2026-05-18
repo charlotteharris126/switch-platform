@@ -100,6 +100,12 @@ export interface LeadDetailViewProps {
   hasFastrack: boolean;
   hasUnreadAdminNote: boolean;
   status: LeadStatus;
+  // ISO timestamp of the most recent chaser email sent to this learner.
+  // Pulled from crm.email_log (same record the admin /admin/leads
+  // "Last chaser" column reads). NULL when no chaser has ever been sent.
+  // Surfaces in the "At current status" tile so providers can see at a
+  // glance whether the learner has had a Switchable nudge recently.
+  lastChaserAt: string | null;
   // Sibling navigation. Caller pre-computes prev/next ids per its ordering.
   prevId: number | null;
   nextId: number | null;
@@ -129,6 +135,7 @@ export function LeadDetailView({
   hasFastrack,
   hasUnreadAdminNote,
   status,
+  lastChaserAt,
   prevId,
   nextId,
   positionLabel,
@@ -227,6 +234,14 @@ export function LeadDetailView({
               {enrol?.outcome_note && (status === "lost" || status === "cannot_reach") && (
                 <p className="text-xs text-slate-700 mt-2 italic border-l-2 border-slate-300 pl-2">
                   &quot;{enrol.outcome_note}&quot;
+                </p>
+              )}
+              {lastChaserAt && (
+                <p className="text-xs text-slate-500 mt-2">
+                  Last chaser sent to learner:{" "}
+                  <span className="text-slate-700 font-medium">
+                    {new Date(lastChaserAt).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}
+                  </span>
                 </p>
               )}
             </div>

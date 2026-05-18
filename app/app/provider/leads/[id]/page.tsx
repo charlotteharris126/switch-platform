@@ -62,6 +62,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     notesResult,
     siblingsResult,
     fastrackResult,
+    lastChaserResult,
   ] = await Promise.all([
     supabase
       .schema("leads")
@@ -100,6 +101,19 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
       .schema("leads")
       .from("fastrack_submissions")
       .select("parent_submission_id"),
+    // Latest chaser email sent for this lead. Read from crm.email_log
+    // (canonical record, same source the admin /admin/leads "Last chaser"
+    // column uses). Both manual admin bulk-fire and the portal auto-fire
+    // write here, so this single field reflects every chaser path.
+    supabase
+      .schema("crm")
+      .from("email_log")
+      .select("triggered_at,status")
+      .eq("submission_id", submissionId)
+      .in("email_type", ["chaser_funded", "chaser_self"])
+      .order("triggered_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<{ triggered_at: string; status: string }>(),
   ]);
 
   const submission = submissionResult.data;
@@ -169,6 +183,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
         hasFastrack={hasFastrack}
         hasUnreadAdminNote={hasUnreadAdminNote}
         status={status}
+        lastChaserAt={lastChaserResult.data?.triggered_at ?? null}
         prevId={prevId}
         nextId={nextId}
         positionLabel={positionLabel}

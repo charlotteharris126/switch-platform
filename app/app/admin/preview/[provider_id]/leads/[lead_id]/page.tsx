@@ -184,6 +184,7 @@ export default async function PreviewLeadDetailPage({ params }: Props) {
           hasFastrack={hasFastrack}
           hasUnreadAdminNote={hasUnreadAdminNote}
           status={status}
+          lastChaserAt={null}
           prevId={prevId}
           nextId={nextId}
           positionLabel={positionLabel}
