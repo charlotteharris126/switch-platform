@@ -203,16 +203,18 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
 
   // Auto-fire learner chaser email on every "tried but didn't reach" status.
   // Charlotte 2026-05-18: every status (1/2/3 + cannot_reach) fires the
-  // chaser. Trade-off accepted: a learner who gets bounced through all four
-  // statuses in a week receives up to 4 chasers. Provider still has the
-  // existing admin manual-fire path for sheet-only providers via
-  // /admin/leads bulk actions.
+  // chaser. Rate-limited to one chaser per submission per 10 min window —
+  // if a provider clicks through 1st no answer → 2nd no answer → 3rd no
+  // answer within minutes, the learner gets a single chaser, not four.
+  // After 10 min the gate opens again so a deliberate "give them another
+  // nudge a few hours later" still works.
   //
   // crm.fire_provider_chaser audits the fire-intent + async-invokes
   // admin-brevo-chase via pg_net (same DB function the admin bulk-fire
-  // uses). The Edge Function does the actual send + writes crm.email_log.
-  // Fire-and-forget here: failure logs to console; we already saved the
-  // status change, the chaser miss doesn't roll the user's action back.
+  // uses). The Edge Function does the actual send + writes crm.email_log
+  // (the canonical record the /admin/leads "Last chaser" column reads).
+  // Fire-and-forget: failure logs to console, we already saved the status
+  // change, the chaser miss doesn't roll the user's action back.
   //
   // A system note in crm.lead_notes records the chaser fire so portal
   // users see the action in the lead's note log without needing to dig
@@ -224,39 +226,54 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     "attempt_3_no_answer",
     "cannot_reach",
   ]);
+  const CHASER_RATE_LIMIT_MS = 10 * 60 * 1000;
   if (CHASER_TRIGGER_STATUSES.has(targetStatus) && routedProviderId) {
-    void supabase
+    const tenMinAgoIso = new Date(Date.now() - CHASER_RATE_LIMIT_MS).toISOString();
+    const { data: recentChaser } = await supabase
       .schema("crm")
-      .rpc("fire_provider_chaser", { p_submission_ids: [args.submissionId] })
-      .then(({ error }) => {
-        if (error) {
-          console.warn(
-            `auto-chaser fire failed for submission ${args.submissionId} on ${targetStatus}: ${error.message}`,
-          );
-        }
-      });
+      .from("email_log")
+      .select("id")
+      .eq("submission_id", args.submissionId)
+      .in("email_type", ["chaser_funded", "chaser_self"])
+      .gte("triggered_at", tenMinAgoIso)
+      .limit(1);
 
-    const admin = createAdminClient();
-    const statusLabel = STATUS_LABEL[targetStatus] ?? targetStatus;
-    admin
-      .schema("crm")
-      .from("lead_notes")
-      .insert({
-        submission_id: args.submissionId,
-        provider_id: routedProviderId,
-        provider_user_id: null,
-        author_role: "system",
-        author_user_id: null,
-        author_display_name: "Switchable",
-        body: `Learner chaser email auto-sent (triggered by status: ${statusLabel}).`,
-      })
-      .then(({ error }) => {
-        if (error) {
-          console.warn(
-            `auto-chaser system note insert failed for submission ${args.submissionId}: ${error.message}`,
-          );
-        }
-      });
+    const rateLimited = !!(recentChaser && recentChaser.length > 0);
+
+    if (!rateLimited) {
+      void supabase
+        .schema("crm")
+        .rpc("fire_provider_chaser", { p_submission_ids: [args.submissionId] })
+        .then(({ error }) => {
+          if (error) {
+            console.warn(
+              `auto-chaser fire failed for submission ${args.submissionId} on ${targetStatus}: ${error.message}`,
+            );
+          }
+        });
+
+      const admin = createAdminClient();
+      const statusLabel = STATUS_LABEL[targetStatus] ?? targetStatus;
+      admin
+        .schema("crm")
+        .from("lead_notes")
+        .insert({
+          submission_id: args.submissionId,
+          provider_id: routedProviderId,
+          provider_user_id: null,
+          author_role: "system",
+          author_user_id: null,
+          author_display_name: "Switchable",
+          body: `Learner chaser email auto-sent (triggered by status: ${statusLabel}).`,
+        })
+        .then(({ error }) => {
+          if (error) {
+            console.warn(
+              `auto-chaser system note insert failed for submission ${args.submissionId}: ${error.message}`,
+            );
+          }
+        });
+    }
   }
 
   // Only revalidate the detail page the provider is sitting on. The leads
