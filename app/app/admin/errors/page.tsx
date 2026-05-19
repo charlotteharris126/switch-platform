@@ -520,6 +520,8 @@ export default async function ErrorsPage({
           </Card>
         )}
 
+        <NetlifyVsDbPlaceholderCard />
+
         <Card>
           <CardHeader>
             <CardTitle className="text-sm">DB ↔ Brevo</CardTitle>
@@ -556,13 +558,14 @@ export default async function ErrorsPage({
           </CardContent>
         </Card>
 
-        <ReconciliationCard
-          data={reconciliation}
+        <MetaVsDbCard
           metaReported={metaReported30d}
           dbDistinct={dbDistinct30d}
           windowStartDate={reconcileCutoffDate}
         />
       </div>
+
+      <InternalSanityCard data={reconciliation} />
 
       <Card>
         <CardHeader>
@@ -760,21 +763,15 @@ interface ReconciliationData {
   rapid_fire_dupes: number;
 }
 
-function ReconciliationCard({
-  data,
+function MetaVsDbCard({
   metaReported,
   dbDistinct,
   windowStartDate,
 }: {
-  data: ReconciliationData;
   metaReported: number;
   dbDistinct: number;
   windowStartDate: string;
 }) {
-  const gap = data.routing_log_rows - data.unique_people_routed;
-  const accountedFor = data.archived_routed_rows + data.linked_reapplications + data.rapid_fire_dupes;
-  const dbReconciles = gap === accountedFor;
-
   const windowLabel = new Date(windowStartDate + "T00:00:00Z").toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
@@ -810,97 +807,130 @@ function ReconciliationCard({
     }
   }
 
-  const everythingReconciles = dbReconciles && (leadStatus === "ok" || leadStatus === "no_data");
-  const anyDrift = !dbReconciles || leadStatus === "db_low";
-
+  const anyDrift = leadStatus === "db_low";
   const cardCls = anyDrift
     ? "border-[#b3412e]/40 bg-[#b3412e]/5"
-    : everythingReconciles
+    : leadStatus === "ok"
       ? "border-emerald-200"
       : "border-[#cd8b76]/40 bg-[#fef9f5]";
 
-  const overallBadge = anyDrift
-    ? { cls: "bg-[#b3412e] text-white hover:bg-[#b3412e]", label: "Drift, investigate" }
-    : everythingReconciles
-      ? { cls: "bg-emerald-600 text-white hover:bg-emerald-600", label: "All reconciled ✓" }
-      : { cls: "bg-[#cd8b76] text-white hover:bg-[#cd8b76]", label: leadLabel };
-
-  const leadBadge =
-    leadStatus === "db_low"
-      ? "bg-[#b3412e] text-white hover:bg-[#b3412e]"
-      : leadStatus === "meta_low"
-        ? "bg-[#cd8b76] text-white hover:bg-[#cd8b76]"
-        : leadStatus === "ok"
-          ? "bg-emerald-600 text-white hover:bg-emerald-600"
-          : "bg-[#dad4cb] text-[#11242e] hover:bg-[#dad4cb]";
+  const badgeCls = anyDrift
+    ? "bg-[#b3412e] text-white hover:bg-[#b3412e]"
+    : leadStatus === "meta_low"
+      ? "bg-[#cd8b76] text-white hover:bg-[#cd8b76]"
+      : leadStatus === "ok"
+        ? "bg-emerald-600 text-white hover:bg-emerald-600"
+        : "bg-[#dad4cb] text-[#11242e] hover:bg-[#dad4cb]";
 
   return (
     <Card className={cardCls}>
       <CardHeader>
         <CardTitle className="text-sm flex items-center gap-2">
           Meta ↔ DB
-          <Badge className={`text-[10px] ${overallBadge.cls}`}>{overallBadge.label}</Badge>
+          <Badge className={`text-[10px] ${badgeCls}`}>{leadLabel}</Badge>
         </CardTitle>
         <p className="text-xs text-[#5a6a72] mt-1">
-          Informational only — Meta&apos;s API can&apos;t accept retroactive writes,
-          so this is a read-only check on whether our DB and Meta&apos;s counts
-          line up. Two sub-checks: do our internal counts add up, and do they
-          match what Meta reports.
+          Informational only — Meta&apos;s API can&apos;t accept retroactive
+          writes, so this is a read-only check. Every lead in our DB
+          (ground truth) should also be visible to Meta&apos;s tracking.
+          Meta normally under-counts 10-25% (cookie blocking, iOS). The
+          reverse — DB lower than Meta — means our form pipeline is
+          dropping leads.
         </p>
       </CardHeader>
-      <CardContent className="space-y-5">
-        <section>
-          <div className="flex items-center gap-2 mb-2">
-            <h3 className="text-[10px] font-bold uppercase tracking-[2px] text-[#11242e]">Database</h3>
-            {dbReconciles ? (
-              <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">Match</Badge>
-            ) : (
-              <Badge className="text-[10px] bg-[#b3412e] text-white hover:bg-[#b3412e]">Drift</Badge>
-            )}
-          </div>
-          <p className="text-xs text-[#5a6a72] mb-3">
-            Every send to a provider is logged. The same person can appear more than once (re-applied for a different course; double-submitted by accident). Unique-people count must equal raw sends minus known duplicates.
-          </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs">
-            <Metric label="Sends logged" value={data.routing_log_rows} />
-            <Metric label="Unique people" value={data.unique_people_routed} highlight />
-            <Metric label="Difference" value={gap} />
-          </div>
-          <ul className="text-xs text-[#11242e] mt-3 space-y-1">
-            {data.archived_routed_rows > 0 && (
-              <li>
-                <strong>{data.archived_routed_rows}</strong> archived test rows (sent at the time, soft-deleted from the live set).
-              </li>
-            )}
-            <li>
-              <strong>{data.linked_reapplications}</strong> re-applications (same person, different course).
-            </li>
-            <li>
-              <strong>{data.rapid_fire_dupes}</strong> rapid-fire duplicates (same person, multiple submits before the dedupe caught up).
-            </li>
-          </ul>
-          {!dbReconciles && (
-            <p className="text-xs text-[#b3412e] mt-2">
-              <strong>{gap - accountedFor}</strong> row(s) unexplained — needs investigation.
-            </p>
-          )}
-        </section>
+      <CardContent>
+        <p className="text-[11px] text-[#5a6a72] font-bold uppercase tracking-wide mb-3">Window since {windowLabel}</p>
+        <div className="grid grid-cols-3 gap-4 text-xs mb-3">
+          <Metric label="DB leads (truth)" value={dbDistinct} highlight />
+          <Metric label="Meta-reported" value={metaReported} />
+          <Metric label="Difference" value={dbDistinct - metaReported} />
+        </div>
+        <p className="text-xs text-[#11242e]">{leadDetail}</p>
+      </CardContent>
+    </Card>
+  );
+}
 
-        <section className="border-t border-[#dad4cb] pt-5">
-          <div className="flex items-center gap-2 mb-2">
-            <h3 className="text-[10px] font-bold uppercase tracking-[2px] text-[#11242e]">Meta vs DB (since {windowLabel})</h3>
-            <Badge className={`text-[10px] ${leadBadge}`}>{leadLabel}</Badge>
-          </div>
-          <p className="text-xs text-[#5a6a72] mb-3">
-            Every lead in our DB (ground truth) should also be visible to Meta&rsquo;s tracking. Meta normally under-counts 10-25% (cookie blocking, iOS). The reverse — DB lower than Meta — means our form pipeline is dropping leads.
+function NetlifyVsDbPlaceholderCard() {
+  return (
+    <Card className="border-[#dad4cb] bg-[#f4f1ed]/40">
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          Netlify ↔ DB
+          <Badge className="text-[10px] bg-[#dad4cb] text-[#11242e] hover:bg-[#dad4cb]">Not built yet</Badge>
+        </CardTitle>
+        <p className="text-xs text-[#5a6a72] mt-1">
+          Will compare Netlify Forms&apos; received-submission count to the
+          row count in <code className="text-[11px] bg-white/60 px-1 py-0.5 rounded">leads.submissions</code>{" "}
+          over the same window. Any gap = silent lead loss between the
+          form post and our ingest path.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <p className="text-xs text-[#5a6a72] leading-relaxed">
+          Today the closest signal is the <code className="text-[11px] bg-white/60 px-1 py-0.5 rounded">netlify_audit</code>{" "}
+          hourly cron, which checks webhook <em>config</em> (form pointed
+          at the right URL) but not per-submission counts. A real reconciler
+          here needs Netlify Forms API integration — queued for next
+          platform session.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function InternalSanityCard({ data }: { data: ReconciliationData }) {
+  const gap = data.routing_log_rows - data.unique_people_routed;
+  const accountedFor = data.archived_routed_rows + data.linked_reapplications + data.rapid_fire_dupes;
+  const dbReconciles = gap === accountedFor;
+
+  const cardCls = dbReconciles
+    ? "border-emerald-200"
+    : "border-[#b3412e]/40 bg-[#b3412e]/5";
+
+  return (
+    <Card className={cardCls}>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          Internal DB sanity
+          {dbReconciles ? (
+            <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">Match ✓</Badge>
+          ) : (
+            <Badge className="text-[10px] bg-[#b3412e] text-white hover:bg-[#b3412e]">Drift, investigate</Badge>
+          )}
+        </CardTitle>
+        <p className="text-xs text-[#5a6a72] mt-1">
+          Self-consistency check on routing maths, not a cross-system
+          reconcile. Every send to a provider is logged. The same person
+          can appear more than once (re-applied for a different course;
+          double-submitted by accident). Unique-people count must equal
+          raw sends minus known duplicates.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs">
+          <Metric label="Sends logged" value={data.routing_log_rows} />
+          <Metric label="Unique people" value={data.unique_people_routed} highlight />
+          <Metric label="Difference" value={gap} />
+        </div>
+        <ul className="text-xs text-[#11242e] mt-3 space-y-1">
+          {data.archived_routed_rows > 0 && (
+            <li>
+              <strong>{data.archived_routed_rows}</strong> archived test rows (sent at the time, soft-deleted from the live set).
+            </li>
+          )}
+          <li>
+            <strong>{data.linked_reapplications}</strong> re-applications (same person, different course).
+          </li>
+          <li>
+            <strong>{data.rapid_fire_dupes}</strong> rapid-fire duplicates (same person, multiple submits before the dedupe caught up).
+          </li>
+        </ul>
+        {!dbReconciles && (
+          <p className="text-xs text-[#b3412e] mt-2">
+            <strong>{gap - accountedFor}</strong> row(s) unexplained — needs investigation.
           </p>
-          <div className="grid grid-cols-3 gap-4 text-xs mb-2">
-            <Metric label="DB leads (truth)" value={dbDistinct} highlight />
-            <Metric label="Meta-reported" value={metaReported} />
-            <Metric label="Difference" value={dbDistinct - metaReported} />
-          </div>
-          <p className="text-xs text-[#11242e]">{leadDetail}</p>
-        </section>
+        )}
       </CardContent>
     </Card>
   );
