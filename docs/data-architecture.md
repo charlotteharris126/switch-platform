@@ -645,36 +645,59 @@ CREATE TABLE crm.enrolments (
   provider_id           TEXT NOT NULL REFERENCES crm.providers(provider_id),
 
   status                TEXT NOT NULL DEFAULT 'open',
-  -- Status values (CHECK constraint enforced; updated migration 0091):
-  -- Initial state on routing:
-  --   'open'                     - sent to provider, no provider action yet
+  -- Status values (CHECK constraint enforced; updated migration 0151).
+  -- Two state machines share this column, disambiguated by
+  -- leads.submissions.lead_type ('learner' vs 'employer_apprenticeship').
+  --
+  -- Initial state on routing (both lead types):
+  --   'open'                       - sent to provider, no provider action yet
+  --
+  -- Learner-lead progression:
   -- Provider-driven (each fires a chaser email to the learner via the
   -- BREVO_TEMPLATE_CHASER_FUNDED / _SELF templates on click):
-  --   'attempt_1_no_answer'      - provider tried, no answer
-  --   'attempt_2_no_answer'      - provider tried again, no answer
-  --   'attempt_3_no_answer'      - provider tried 3rd time, no answer
+  --   'attempt_1_no_answer'        - provider tried, no answer
+  --   'attempt_2_no_answer'        - provider tried again, no answer
+  --   'attempt_3_no_answer'        - provider tried 3rd time, no answer
   -- Provider-driven, intermediate-but-engaged:
-  --   'enrolment_meeting_booked' - learner has an enrolment meeting scheduled
+  --   'enrolment_meeting_booked'   - learner has an enrolment meeting scheduled
   -- Terminal (provider-set):
-  --   'enrolled'                 - provider confirms enrolment
-  --   'lost'                     - lead won't convert (provider's "closed lost")
-  --   'cannot_reach'             - provider tried, written off after attempts
+  --   'enrolled'                   - provider confirms enrolment
+  --   'lost'                       - lead won't convert (provider's "closed lost")
+  --   'cannot_reach'               - provider tried, written off after attempts
   -- Terminal (system-set ONLY):
-  --   'presumed_enrolled'        - auto-set by 14-day flip cron, but ONLY for
-  --                                  rows where status='open' (ghosted leads).
-  --                                  Engaged statuses (attempt_*, meeting_booked)
-  --                                  are left alone — the flip is a ghost-detector,
-  --                                  not the default billing path.
-  --                                  7-day dispute window via dispute_deadline_at.
+  --   'presumed_enrolled'          - auto-set by 14-day flip cron, but ONLY for
+  --                                    rows where status='open' (ghosted leads).
+  --                                    Engaged statuses (attempt_*, meeting_booked)
+  --                                    are left alone — the flip is a ghost-detector,
+  --                                    not the default billing path.
+  --                                    7-day dispute window via dispute_deadline_at.
+  --
+  -- Employer-lead progression (Switchable for Business v1):
+  -- Provider-driven (each fires the s4b_employer_chaser via
+  -- BREVO_TEMPLATE_S4B_EMPLOYER_CHASER on the attempt_*-equivalent path,
+  -- handled in fire_employer_chaser):
+  --   'engaged'                    - provider has talked to the employer
+  --   'in_progress'                - employer-side process moving (proposal, paperwork)
+  -- Terminal (provider-set):
+  --   'signed'                     - employer executed the hosting agreement
+  --   'not_signed'                 - lead won't convert (employer-side "closed lost")
+  -- Terminal (system-set ONLY):
+  --   'presumed_employer_signed'   - auto-set by the 60-day flip cron for
+  --                                    ghosted employer leads (status='open').
+  --                                    7-day dispute window via dispute_deadline_at.
   --
   -- Single source of truth: the CHECK constraint on this table. TypeScript
   -- types in the portal app derive from this constraint, never define their
   -- own list. If a value isn't in the CHECK, it doesn't exist.
   --
-  -- Migration 0028 dropped the legacy 'not_enrolled' / 'disputed' / 'billed'
-  -- / 'paid' values; disputes are now a flag (disputed_at) on presumed-
-  -- enrolled rows. Migration 0091 dropped the unused 'contacted' value and
-  -- added the attempt_* + enrolment_meeting_booked granularity.
+  -- Migration history:
+  --   0028 dropped the legacy 'not_enrolled' / 'disputed' / 'billed' /
+  --        'paid' values; disputes are now a flag (disputed_at) on
+  --        presumed-enrolled rows.
+  --   0091 dropped 'contacted'; added attempt_* + enrolment_meeting_booked.
+  --   0151 added employer values (engaged / in_progress / signed /
+  --        not_signed / presumed_employer_signed) in lockstep with the
+  --        admin RPC whitelist that 0126 had extended ahead of the table.
 
   sent_to_provider_at   TIMESTAMPTZ NOT NULL,
   status_updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -4,6 +4,26 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-19 (Session 52) — enrolments_status_check widened to employer taxonomy
+
+Closes a constraint-vs-RPC drift that blocked the provider portal on Riverside leads.
+
+**Background.** Freya Kelly (Riverside) reported on 2026-05-19 that clicking "Engaged" on the lead-forward stepper in the provider portal threw `new row for relation "enrolments" violates check constraint "enrolments_status_check"`. The same path works for learner-lead statuses because migration 0091 listed those values when it rebuilt the CHECK during the provider-portal MVP. Employer-lead statuses (`engaged / in_progress / signed / not_signed / presumed_employer_signed`) were never added to the CHECK — migration 0126 extended the admin RPC `crm.upsert_enrolment_outcome` to accept them but never widened the underlying table constraint. The provider portal's `markOutcomeAction` (`app/app/provider/leads/[id]/actions.ts`) writes via a direct `supabase.update()`, not through the admin RPC, so the table-level CHECK is the gate Freya's click hit.
+
+**Migration 0151:**
+- `DROP CONSTRAINT IF EXISTS enrolments_status_check` then re-`ADD` with the full learner + employer taxonomy (same set as the 0126 admin-RPC whitelist).
+- Comment updated on the constraint with the dual-state-machine note disambiguated by `leads.submissions.lead_type`.
+
+**Doc lockstep:** `platform/docs/data-architecture.md` `crm.enrolments.status` block rewritten with the full taxonomy + migration history (0028 → 0091 → 0151). The line "TypeScript types derive from the CHECK, never define their own list" stays — but for the period between 0126 and 0151 the TS types were ahead of the DB. 0151 brings the DB back in lockstep.
+
+**Apply on Charlotte's side:** `supabase db push --linked`. No app deploy needed; pure DB change. After apply, Freya's "Engaged" click should succeed.
+
+**Carry — cosmetic bug on /admin/leads U1 badge.** Same session Charlotte flagged that the "U1 sent" column shows `missing` (red badge) for Riverside leads even though Brevo confirms a send. Root cause: the badge heuristic in `app/app/admin/leads/page.tsx` lines 485-498 only checks `email_type IN ('u1_funded','u1_self')` — both learner-only — and has no employer-lead exclusion. Every routed `employer_apprenticeship` lead with `submitted_at >= 2026-05-05` falls through to the "Routed Phase-2 lead with no U1 send recorded" branch. Fix is app-side (either branch on `lead_type` to show `—` for employer, or accept an employer welcome `email_type` once Sasha + Wren agree the type name). Not shipped this session — flagged to next platform session.
+
+**Carry — Freya UX question, leads disappearing from Open tab.** Same screenshot: Freya noted that after marking `attempt_1_no_answer`, the lead leaves the Open tab. Working as designed (Open filters `status='open'`; attempted-but-no-answer rows move into Calling). Not a bug. Design call for next session: either add an "All in-flight" superset tab or extend Open to include attempts. Flagged to next session.
+
+---
+
 ## 2026-05-18 (Session 51) — S4B employer chaser path
 
 Sibling to the learner chaser. Closes a wiring drift that silently misfired against Riverside earlier today.

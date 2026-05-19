@@ -127,6 +127,7 @@ const LEARNER_SECONDARY_FILTERS: Array<{ value: Filter; label: string; tone?: "r
 const EMPLOYER_FILTER_DEFS: Array<{ value: Filter; label: string; tone?: "rose" | "amber" }> = [
   { value: "all", label: "All" },
   { value: "open", label: "Open" },
+  { value: "calling", label: "Calling" },
   { value: "engaged", label: "Engaged" },
   { value: "in_progress", label: "In progress" },
   { value: "signed", label: "Signed" },
