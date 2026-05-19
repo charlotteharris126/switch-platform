@@ -56,6 +56,50 @@ export async function markErrorResolved(deadLetterId: number, note: string): Pro
   return { ok: true };
 }
 
+// Clear the Claude-queue marker from every flagged-for-Claude row inside the
+// 60-day window. Rows already have replayed_at set (they were resolved at
+// flag time); this just appends a "claude flag cleared" marker so the panel
+// filter excludes them. Audit trail stays intact — original error_context +
+// "Flagged for next session" note are preserved verbatim.
+//
+// Use case: Charlotte has actioned (or decided to ignore) the flagged batch
+// and wants the panel to go quiet without losing the dead_letter history.
+export async function bulkClearClaudeFlags(): Promise<ActionResult & { cleared?: number }> {
+  const supabase = await createClient();
+  const stamp = new Date().toISOString();
+  const annotation = `\n[claude flag cleared ${stamp}]`;
+  const sinceISO = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
+
+  const { data: existing, error: readErr } = await supabase
+    .schema("leads")
+    .from("dead_letter")
+    .select("id, error_context")
+    .not("replayed_at", "is", null)
+    .ilike("error_context", "%Flagged for next session%")
+    .not("error_context", "ilike", "%claude flag cleared%")
+    .gte("received_at", sinceISO)
+    .limit(500);
+
+  if (readErr) return { ok: false, error: readErr.message };
+  const rows = existing ?? [];
+  if (rows.length === 0) return { ok: true, cleared: 0 };
+
+  let cleared = 0;
+  for (const r of rows) {
+    const annotated = `${r.error_context ?? ""}${annotation}`.trim();
+    const { data: updated, error: updateErr } = await supabase
+      .schema("leads")
+      .from("dead_letter")
+      .update({ error_context: annotated })
+      .eq("id", r.id)
+      .select("id");
+    if (!updateErr && updated && updated.length > 0) cleared += 1;
+  }
+
+  revalidatePath("/errors");
+  return { ok: true, cleared };
+}
+
 // Bulk-mark all unresolved rows for a given source as resolved with a single
 // note. For sources where individual rows don't need per-row review (e.g.
 // "Brevo upsert failed" — Brevo is eventually consistent, the row exists

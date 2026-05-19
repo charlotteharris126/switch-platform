@@ -16,6 +16,7 @@ import { PageHeader } from "@/components/page-header";
 import { ResolveButton } from "./resolve-button";
 import { BulkResolveButton } from "./bulk-resolve";
 import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
+import { ClearClaudeFlagsButton } from "./clear-claude-flags-button";
 // Data ops panels moved here from /admin/data-ops in the consolidation
 // pass — single page for any data-layer attention. Old /data-ops route
 // redirects here.
@@ -328,6 +329,7 @@ export default async function ErrorsPage({
       .select("id,source,received_at,error_context,replayed_at,replay_submission_id,raw_payload")
       .not("replayed_at", "is", null)
       .ilike("error_context", "%Flagged for next session%")
+      .not("error_context", "ilike", "%claude flag cleared%")
       .gte("received_at", flaggedSinceISO)
       .order("received_at", { ascending: false })
       .limit(50),
@@ -941,14 +943,20 @@ function FlaggedForClaudePanel({
   return (
     <Card className="border-amber-300 bg-amber-50/40">
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm text-amber-900">
-          Flagged for Claude — {rows.length}
-        </CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-sm text-amber-900">
+            Flagged for Claude — {rows.length}
+          </CardTitle>
+          <ClearClaudeFlagsButton count={rows.length} />
+        </div>
       </CardHeader>
       <CardContent className="space-y-2">
         <p className="text-xs text-amber-900/80 leading-relaxed">
           Rows you flagged for next platform session. The platform agent reads
-          this list at session-start. Last 60 days, most recent first.
+          this list at session-start. Last 60 days, most recent first. Use{" "}
+          <em>Clear all</em> when the batch has been handled — rows stay in
+          <code className="text-[11px] bg-white/60 px-1 py-0.5 rounded ml-1">leads.dead_letter</code>
+          {" "}for audit, they just stop showing here.
         </p>
         <Table>
           <TableHeader>
