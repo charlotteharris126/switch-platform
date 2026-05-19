@@ -4,6 +4,41 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-19 (Session 54) — Drift digest + orphan cleanup
+
+Two follow-ups from the S53 plan, plus a perf fix on the Brevo reconciler from earlier in the session.
+
+**Brevo reconciler perf fix.** Initial S54 build of `brevo-attribute-reconcile` ran ~50s on 200 contacts (sequential per-contact SQL with max:1 pool) — beyond Netlify's 26s Server Action cap. Charlotte hit the timeout on first use. Refactored into two passes: pass 1 (read-only) evaluates every contact in parallel inside each Brevo page; pass 2 (apply only) re-fires upserts sequentially with the 250ms throttle. SQL pool bumped to max:8. Now well inside the cap.
+
+**Drift digest daily.** New Edge Function `drift-digest-daily`. Reads every `leads.dead_letter` row received in the last 25h that's still unreplayed, groups by source, sends Charlotte one summary email at 06:30 UTC. Quiet days send nothing. `data-ops/040_drift_digest_cron_2026_05_19.sql` schedules the cron and unschedules `dead-letter-alert-hourly` in one transaction. The hourly dead-letter alert and the per-cron sheet-drift email both stop firing — same signals, one inbox channel.
+
+`sheet-drift-reconcile-daily` patched: dead_letter writes continue (digest reads them), but the inline `sendOwnerSummary` call is suppressed. Helper kept in source as reference if we ever want to re-enable per-source channels.
+
+**024 orphan cleanup.** The legacy SW_REFERRAL_URL + SW_FASTRACK_URL backfill panel + Edge Function. Repo deletions:
+- `app/app/admin/data-ops/run-024-panel.tsx`
+- `BackfillSpotCheck` / `BackfillSummary` / `BackfillResult` types + `runBackfillAction` + `callBackfillFunction` helper from `app/app/admin/data-ops/actions.ts`
+- `supabase/functions/backfill-referral-fastrack-urls/` (entire directory)
+- `[functions.backfill-referral-fastrack-urls]` entry in `supabase/config.toml`
+
+**025 orphan cleanup.** The client_nonce backfill panel was already deleted in S52; this session removes the rest:
+- `supabase/functions/backfill-client-nonce/` (entire directory)
+- `[functions.backfill-client-nonce]` entry in `supabase/config.toml`
+- Migration **0153_drop_count_client_nonce_pending.sql** — drops the `public.count_client_nonce_pending` RPC that powered the panel's auto-hide.
+
+**config.toml additions.** `brevo-attribute-reconcile` + `drift-digest-daily` added to `[functions.*]` for canonical declaration.
+
+**Remote-state follow-ups (need owner action, NOT auto-run).**
+1. **Run migration 0153** via Supabase SQL editor (drops the orphan RPC).
+2. **Apply data-ops/040** via Supabase SQL editor (schedules digest cron, unschedules dead-letter-alert-hourly). Substitute AUDIT_SHARED_SECRET first.
+3. **Delete remote Edge Functions** (optional but recommended): `supabase functions delete backfill-referral-fastrack-urls backfill-client-nonce`. The repo no longer carries the source so they can't be redeployed.
+4. **Deploy new functions** (the ones in this session): `supabase functions deploy drift-digest-daily --no-verify-jwt` (brevo-attribute-reconcile already deployed earlier in the session).
+
+**Verification.** TypeScript clean (`tsc --noEmit`). Deno clean on `drift-digest-daily`, `sheet-drift-reconcile-daily`, `brevo-attribute-reconcile` (the two pre-existing `route-lead.ts` errors at lines 1393 + 1547, present on `main`, are untouched). Eslint clean on the changed app files.
+
+**Schema-versioning note.** Migration 0153 is a DROP of a SECURITY DEFINER function with no callers — additive change is being undone, no version bump anywhere. Data-ops 040 is a pg_cron schedule change, not a schema change.
+
+---
+
 ## 2026-05-19 (Session 54) — DB ↔ Brevo full SW_* attribute reconciler
 
 S53 left the DB ↔ Brevo card scoped to SW_REFERRAL_URL + SW_FASTRACK_URL (the 024 backfill panel). This session replaces it with a per-attribute reconciler that covers every SW_* attribute the canonical upsert helpers produce.

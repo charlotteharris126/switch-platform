@@ -422,6 +422,12 @@ verify_jwt = false
 [functions.netlify-forms-audit]
 verify_jwt = false
 
+[functions.brevo-attribute-reconcile]
+verify_jwt = false
+
+[functions.drift-digest-daily]
+verify_jwt = false
+
 [functions.routing-confirm]
 verify_jwt = false
 
@@ -492,12 +498,6 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.provider-support-notify]
-verify_jwt = false
-
-[functions.backfill-referral-fastrack-urls]
-verify_jwt = false
-
-[functions.backfill-client-nonce]
 verify_jwt = false
 
 [functions.backfill-sw-provider-contact-block]

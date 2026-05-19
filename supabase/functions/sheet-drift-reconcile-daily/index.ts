@@ -160,10 +160,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
     totalNewDrift += result.drift_new;
   }
 
-  let alertSent = false;
-  if (totalNewDrift > 0) {
-    alertSent = await sendOwnerSummary(providerResults, newDriftRows);
-  }
+  // Email sending suppressed 2026-05-19 (Session 54) — drift-digest-daily
+  // now sends one consolidated 06:30 UTC email covering every dead_letter
+  // source. The sheet-drift dead_letter writes above are picked up by the
+  // digest. sendOwnerSummary is kept in source for reference but no longer
+  // invoked.
+  const alertSent = false;
 
   return json({
     checked_at: new Date().toISOString(),
