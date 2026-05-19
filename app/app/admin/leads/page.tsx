@@ -315,7 +315,7 @@ export default async function LeadsPage({
   const u1StatusBySubId = new Map<number, string>();
   const lastChaserBySubId = new Map<number, string>();
   for (const e of (emailLogRes.data ?? []) as Array<{ submission_id: number; email_type: string; status: string; triggered_at: string }>) {
-    if (e.email_type === "u1_funded" || e.email_type === "u1_self") {
+    if (e.email_type === "u1_funded" || e.email_type === "u1_self" || e.email_type === "s4b_employer_u1") {
       if (!u1StatusBySubId.has(e.submission_id)) {
         u1StatusBySubId.set(e.submission_id, e.status);
       }
