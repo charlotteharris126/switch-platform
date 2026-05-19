@@ -16,6 +16,7 @@ import { PageHeader } from "@/components/page-header";
 import { ResolveButton } from "./resolve-button";
 import { BulkResolveButton } from "./bulk-resolve";
 import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
+import { ReconcileNetlifyPanel } from "./reconcile-netlify-panel";
 import { ClearClaudeFlagsButton } from "./clear-claude-flags-button";
 // Data ops panels moved here from /admin/data-ops in the consolidation
 // pass — single page for any data-layer attention. Old /data-ops route
@@ -520,7 +521,7 @@ export default async function ErrorsPage({
           </Card>
         )}
 
-        <NetlifyVsDbPlaceholderCard />
+        <NetlifyVsDbCard />
 
         <Card>
           <CardHeader>
@@ -851,29 +852,34 @@ function MetaVsDbCard({
   );
 }
 
-function NetlifyVsDbPlaceholderCard() {
+function NetlifyVsDbCard() {
   return (
-    <Card className="border-[#dad4cb] bg-[#f4f1ed]/40">
+    <Card>
       <CardHeader>
-        <CardTitle className="text-sm flex items-center gap-2">
-          Netlify ↔ DB
-          <Badge className="text-[10px] bg-[#dad4cb] text-[#11242e] hover:bg-[#dad4cb]">Not built yet</Badge>
-        </CardTitle>
-        <p className="text-xs text-[#5a6a72] mt-1">
-          Will compare Netlify Forms&apos; received-submission count to the
-          row count in <code className="text-[11px] bg-white/60 px-1 py-0.5 rounded">leads.submissions</code>{" "}
-          over the same window. Any gap = silent lead loss between the
-          form post and our ingest path.
-        </p>
+        <CardTitle className="text-sm">Netlify ↔ DB</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
         <p className="text-xs text-[#5a6a72] leading-relaxed">
-          Today the closest signal is the <code className="text-[11px] bg-white/60 px-1 py-0.5 rounded">netlify_audit</code>{" "}
-          hourly cron, which checks webhook <em>config</em> (form pointed
-          at the right URL) but not per-submission counts. A real reconciler
-          here needs Netlify Forms API integration — queued for next
-          platform session.
+          Click <em>Check drift</em> — the function reads the last 24h from
+          the Netlify Forms API and compares against{" "}
+          <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">leads.submissions</code>.
+          Any submission Netlify has but our DB doesn&apos;t is silent lead
+          loss between the form post and the ingest path.
         </p>
+        <p className="text-xs text-[#5a6a72] leading-relaxed">
+          Drift &gt; 0 = the webhook fast path failed for some submission(s).
+          The hourly <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">netlify-leads-reconcile</code>{" "}
+          cron back-fills automatically on its next run and emails the owner;
+          this panel surfaces drift on-demand and lets you back-fill now
+          rather than waiting up to 60 min for the cron.
+        </p>
+        <p className="text-xs text-[#5a6a72] leading-relaxed">
+          Webhook <em>config</em> drift (form pointed at the wrong URL, missing
+          webhook) is caught separately by the daily{" "}
+          <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">netlify-forms-audit</code>{" "}
+          cron — surfaces under <code>netlify_audit</code> in the Errors list below.
+        </p>
+        <ReconcileNetlifyPanel />
       </CardContent>
     </Card>
   );

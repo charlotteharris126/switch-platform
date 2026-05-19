@@ -4,6 +4,35 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-19 (Session 54) — Netlify ↔ DB reconciler card lands on /admin/errors
+
+S53 left a "Not built yet" placeholder for the fourth reconciliations card. This session replaces it with a working dry-run + back-fill panel.
+
+**Edge Function change.** `netlify-leads-reconcile` (the existing hourly back-fill cron) gains an `apply` body parameter. `apply: true` is the existing behaviour (insert missing rows, write dead-letter audit, process referrals, send owner alert email). `apply: false` does the same Netlify-API ↔ DB diff but skips every side effect — returns a `would_backfill` count + the drift list so the operator can see what's missing before any insert fires. Default stays `true` so the hourly cron (which posts `{}`) is unchanged.
+
+**Schema-versioning note.** No DB schema change. Edge Function response shape is additive: existing consumers of the function (only the hourly cron, which ignores the response body) are unaffected. New fields: `ok: true`, `mode`, `would_backfill`. No version bump needed under the rule's additive-change carve-out.
+
+**UI.** New `app/app/admin/errors/reconcile-netlify-panel.tsx` mirroring the `reconcile-sheet-panel.tsx` shape — Check drift button, drift summary banner, table of missing submissions (netlify_id / form / course / email / submitted-at), Back-fill button with confirm step. `NetlifyVsDbPlaceholderCard` in `page.tsx` replaced with `NetlifyVsDbCard` that hosts the panel + explanatory copy.
+
+**Server action.** `netlifyReconcileAction({ apply })` in `app/app/admin/errors/reconcile-actions.ts`. Same `callEdgeFunction` plumbing as the sheet + GDPR actions (AUDIT_SHARED_SECRET fetched from vault per call).
+
+**Scope decisions (S53 open questions).**
+- *Per-form vs aggregate.* Aggregate. The Edge Function already excludes `contact` (intentionally never ingested) and `fastrack-funded-v1` (handled by a dedicated function); every other form name is in scope. Per-form filtering adds UI complexity for no clear use — the drift list shows `form_name` per row, which is enough drill-down.
+- *Window.* 24h, matching the existing hourly cron's lookback. The panel uses the same constant (`LOOKBACK_HOURS`) so dry-run reflects exactly what the next cron run would see.
+- *Auth.* Same `AUDIT_SHARED_SECRET` from vault as Sheet ↔ DB; no new secret.
+
+**Touched files.**
+- `platform/supabase/functions/netlify-leads-reconcile/index.ts` — body parsing for `apply`, gate side-effects, additive response fields.
+- `platform/app/app/admin/errors/reconcile-actions.ts` — new `netlifyReconcileAction` + types.
+- `platform/app/app/admin/errors/reconcile-netlify-panel.tsx` — new client component.
+- `platform/app/app/admin/errors/page.tsx` — placeholder card replaced with the working card.
+
+**Verification.** TypeScript clean (`tsc --noEmit`), Deno clean (`deno check`), eslint clean on the changed/new files (three pre-existing `Date.now()` purity warnings in `page.tsx` remain, untouched). Edge Function deploy pending owner confirm.
+
+**Next from S53 plan (still queued).** Extend the DB ↔ Brevo reconciler to every `SW_*` attribute; daily drift digest consolidated email cron; delete orphaned 025 surfaces (`count_client_nonce_pending` RPC + `backfill-client-nonce` Edge Function).
+
+---
+
 ## 2026-05-19 (Session 52) — BEFORE INSERT trigger stamps funded client_nonce
 
 Closes the leak path the 025 backfill panel was mopping up.

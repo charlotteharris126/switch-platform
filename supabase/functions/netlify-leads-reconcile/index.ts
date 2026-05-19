@@ -6,6 +6,15 @@
 // using the shared ingest pipeline. Emails the owner if any row was back-filled
 // so a broken webhook becomes observable within 60 minutes instead of days.
 //
+// Two modes:
+//   - apply (default, cron-triggered): inserts missing rows, writes dead_letter
+//     audit rows, processes referrals, sends owner alert on back-fill.
+//   - dry_run (panel-triggered): same drift detection, no inserts/writes/emails.
+//     Returns the drift list so the operator can decide whether to back-fill.
+//
+// Body: { "apply"?: boolean }   — defaults to true for backwards compat with the
+// existing hourly cron, which posts {}.
+//
 // Why this exists:
 //   The netlify-lead-router Edge Function is the fast path — Netlify POSTs each
 //   submission at us and we INSERT it. But the webhook is a single point of
@@ -84,7 +93,8 @@ interface NetlifyApiSubmission {
 }
 
 interface BackfillRecord {
-  submission_id: number;
+  // null in dry-run mode: we never call insertSubmission so no DB id exists.
+  submission_id: number | null;
   netlify_id: string;
   form_name: string;
   course_id: string | null;
@@ -110,6 +120,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
   if (!NETLIFY_API_TOKEN || !NETLIFY_SITE_ID) {
     return json({ error: "NETLIFY_API_TOKEN and NETLIFY_SITE_ID must be set" }, 500);
+  }
+
+  // apply defaults to true so the existing hourly cron (which posts `{}`) keeps
+  // back-filling without a config change. The Data health panel sends apply:false
+  // for the dry-run drift check.
+  let apply = true;
+  if (req.method === "POST") {
+    try {
+      const raw = await req.text();
+      if (raw.trim().length > 0) {
+        const body = JSON.parse(raw) as { apply?: unknown };
+        if (typeof body.apply === "boolean") apply = body.apply;
+      }
+    } catch (err) {
+      return json({ error: `invalid JSON body: ${describeError(err)}` }, 400);
+    }
   }
 
   const startedAt = new Date();
@@ -171,6 +197,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     try {
       const row = normaliseAndOverride(formName, sub as Record<string, JsonValue>, sub as JsonValue);
+
+      if (!apply) {
+        // Dry-run: record the would-back-fill row and move on. No insert, no
+        // dead-letter, no referral processing, no alert email.
+        backfills.push({
+          submission_id: null,
+          netlify_id: sub.id,
+          form_name: formName,
+          course_id: row.course_id,
+          email: row.email,
+          created_at: sub.created_at ?? null,
+        });
+        continue;
+      }
+
       const result = await insertSubmission(sql, row);
 
       if (result.duplicate) {
@@ -207,14 +248,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
         }
       }
     } catch (err) {
-      console.error(`reconcile insert failed for ${sub.id}:`, describeError(err));
+      console.error(`reconcile ${apply ? "insert" : "dry-run"} failed for ${sub.id}:`, describeError(err));
       errors.push({ netlify_id: sub.id, error: describeError(err) });
     }
   }
 
   // Alert the owner whenever reconcile had to act. Fire-and-forget via
-  // waitUntil so the HTTP response doesn't block on Brevo.
-  if (backfills.length > 0) {
+  // waitUntil so the HTTP response doesn't block on Brevo. Dry-run is
+  // operator-driven from the panel, no email needed.
+  if (apply && backfills.length > 0) {
     const alertTask = sendReconcileAlert(backfills, errors).catch((alertErr) => {
       console.error("reconcile alert email failed:", describeError(alertErr));
     });
@@ -225,11 +267,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   return json({
+    ok: true,
     status: "ok",
+    mode: apply ? "apply" : "dry_run",
     window_hours: LOOKBACK_HOURS,
     netlify_seen: netlifySubs.length,
     already_present: alreadyPresent,
-    backfilled: backfills.length,
+    backfilled: apply ? backfills.length : 0,
+    would_backfill: apply ? 0 : backfills.length,
     errors: errors.length,
     backfills,
     errors_detail: errors,
@@ -352,7 +397,11 @@ async function sendReconcileAlert(
 
   const rows = backfills
     .map((b) => {
-      const leadId = formatLeadId(b.submission_id, b.created_at ?? new Date().toISOString());
+      // submission_id is non-null in apply mode (only path that reaches here)
+      // but the type is `number | null` to accommodate dry-run. Fall back to 0
+      // for the lead-id formatting in the unlikely case of an apply row with
+      // no id — only happens if insertSubmission misbehaves.
+      const leadId = formatLeadId(b.submission_id ?? 0, b.created_at ?? new Date().toISOString());
       return `<tr><td style="padding:4px 12px 4px 0;"><code>${escapeHtml(leadId)}</code></td><td style="padding:4px 12px 4px 0;">${escapeHtml(b.form_name)}</td><td style="padding:4px 12px 4px 0;">${escapeHtml(b.course_id ?? "-")}</td><td style="padding:4px 0;">${escapeHtml(b.email ?? "-")}</td></tr>`;
     })
     .join("");

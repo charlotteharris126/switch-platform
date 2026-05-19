@@ -93,6 +93,48 @@ export async function republishSheetAction(args: {
 }
 
 // =============================================================================
+// Netlify ↔ DB reconcile
+// =============================================================================
+//
+// Wraps the existing netlify-leads-reconcile Edge Function. The function
+// already does back-fill (apply mode) on an hourly cron; this panel exposes
+// the new dry-run mode so the operator can see the drift before a back-fill
+// fires, and trigger an out-of-band back-fill without waiting for the cron.
+
+export interface NetlifyReconcileBackfill {
+  submission_id: number | null;
+  netlify_id: string;
+  form_name: string;
+  course_id: string | null;
+  email: string | null;
+  created_at: string | null;
+}
+
+export interface NetlifyReconcileSummary {
+  ok: true;
+  mode: "dry_run" | "apply";
+  window_hours: number;
+  netlify_seen: number;
+  already_present: number;
+  backfilled: number;
+  would_backfill: number;
+  errors: number;
+  backfills: NetlifyReconcileBackfill[];
+  errors_detail: Array<{ netlify_id: string; error: string }>;
+  ran_at: string;
+}
+
+export type NetlifyReconcileResult = NetlifyReconcileSummary | { ok: false; error: string };
+
+export async function netlifyReconcileAction(args: {
+  apply: boolean;
+}): Promise<NetlifyReconcileResult> {
+  return callEdgeFunction("netlify-leads-reconcile", {
+    apply: args.apply,
+  }) as Promise<NetlifyReconcileResult>;
+}
+
+// =============================================================================
 // GDPR right-to-erasure
 // =============================================================================
 
