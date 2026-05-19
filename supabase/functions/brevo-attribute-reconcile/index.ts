@@ -16,10 +16,14 @@
 //
 // Auth: x-audit-key matched against AUDIT_SHARED_SECRET in vault.
 //
-// Body: { "apply": boolean }
+// Body: { "apply": boolean, "log_drift"?: boolean }
 //   apply=false → dry-run, no writes, returns the diff
 //   apply=true  → re-runs upsertLearnerInBrevo / upsertLearnerInBrevoNoMatch
 //                 for every drifted contact via the canonical path
+//   log_drift=true (dry-run only) → writes one summary leads.dead_letter row
+//                 with source='brevo_attribute_drift' when contacts_with_drift > 0.
+//                 Daily cron uses this to leave a signal for the /admin/errors
+//                 status pill + the drift-digest email.
 //
 // Response shape (200):
 //   {
@@ -411,16 +415,45 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ ok: false, error: "Unauthorized" }, 401);
   }
 
-  let body: { apply?: unknown };
+  let body: { apply?: unknown; log_drift?: unknown };
   try {
-    body = await req.json() as { apply?: unknown };
+    body = await req.json() as { apply?: unknown; log_drift?: unknown };
   } catch {
     return json({ ok: false, error: "invalid JSON body" }, 400);
   }
   const apply = body.apply === true;
+  const logDrift = body.log_drift === true;
 
   try {
     const summary = await run(apply);
+
+    // Daily cron uses log_drift=true so /admin/errors can show a status pill
+    // and the digest can pick up the drift summary. Only writes when there's
+    // something to report — clean runs leave no row, the pill defaults to
+    // Aligned in their absence.
+    if (!apply && logDrift && summary.contacts_with_drift > 0) {
+      try {
+        await sql.begin(async (trx) => {
+          await trx`SET LOCAL ROLE functions_writer`;
+          await trx`
+            INSERT INTO leads.dead_letter (source, raw_payload, error_context)
+            VALUES (
+              'brevo_attribute_drift',
+              ${sql.json({
+                contacts_with_drift: summary.contacts_with_drift,
+                processed: summary.processed,
+                per_attribute_drift: summary.per_attribute_drift,
+                ran_at: summary.ran_at,
+              })},
+              ${`Brevo attribute reconcile (daily dry-run): ${summary.contacts_with_drift} of ${summary.processed} contacts drift from canonical projection. Run apply via /admin/errors → DB ↔ Brevo → Re-sync.`}
+            )
+          `;
+        });
+      } catch (logErr) {
+        console.error("brevo drift dead_letter log failed:", String(logErr));
+      }
+    }
+
     return json({ ok: true, ...summary });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

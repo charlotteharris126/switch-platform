@@ -4,6 +4,40 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-19 (Session 54) — Status pills on every reconciler card
+
+Closes the "some cards show drift state at-a-glance, others require clicking Check drift" inconsistency Charlotte raised. All five reconciler cards on `/admin/errors` now render a status pill on page load.
+
+**The pattern.** Sheet ↔ DB, Netlify ↔ DB, DB ↔ Brevo each have a daily/hourly cron that writes a `leads.dead_letter` row when drift is found. The page now counts those rows per source in the last 25h and renders a small badge on the card title: green "Aligned" if zero, amber "N drifted (last 24h) · time ago" if non-zero. Meta ↔ DB and Internal DB sanity already had inline status — no change there.
+
+**Brevo cron added.** `brevo-attribute-reconcile-daily` at 06:15 UTC via `data-ops/041`. Fires the function with `apply: false, log_drift: true`. New `log_drift` body param: when dry-run + drift > 0, writes one summary `leads.dead_letter` row with source='brevo_attribute_drift' (raw_payload = drift stats). Clean runs leave no row — the pill defaults to Aligned in their absence.
+
+Schedule timing: 06:15 UTC sits between the 06:00 sheet-drift cron and the 06:30 drift-digest cron, so today's Brevo drift signal lands in dead_letter before the digest reads.
+
+**`ReconcilerStatusPill` component.** Single rendering helper for all three cards. Inputs: drifted count + lastSeen timestamp + label (varies per card — Sheet uses "row", Netlify uses "back-fill", Brevo uses "run"). Green when zero, amber with formatAgo timestamp when non-zero.
+
+**Card semantics.**
+- **Sheet ↔ DB**: count of `sheet_drift_detected` dead_letter rows in last 25h
+- **Netlify ↔ DB**: count of `reconcile_backfill` rows. Non-zero = webhook missed N submissions in last 24h (cron self-healed by back-filling).
+- **DB ↔ Brevo**: count of `brevo_attribute_drift` rows. Non-zero = latest daily reconciler run found contacts with stale SW_* attribute values.
+
+The on-demand Check drift / Re-sync buttons are unchanged on every card — pill is the cached at-a-glance, click is the fresh check.
+
+**Touched files.**
+- `platform/supabase/functions/brevo-attribute-reconcile/index.ts` — new `log_drift` body param + dead_letter write when drift > 0.
+- `platform/supabase/data-ops/041_brevo_attribute_reconcile_cron_2026_05_19.sql` — schedules the new daily cron. Uses `public.get_shared_secret(...)` at fire time (same pattern as data-ops/040).
+- `platform/app/app/admin/errors/page.tsx` — drift-count tally per source in the existing server fetch, new `ReconcilerStatusPill` component, pill wired into each card's title.
+
+**Verification.** TypeScript clean, Deno clean (two pre-existing `route-lead.ts` errors untouched), eslint clean on the changed page (three pre-existing `Date.now()` purity warnings untouched). Edge Function deploy + cron apply pending owner action.
+
+**Owner follow-ups.**
+1. Deploy: `supabase functions deploy brevo-attribute-reconcile --no-verify-jwt` (re-deploy for the new `log_drift` body param).
+2. Apply `data-ops/041` via Supabase SQL editor (schedules the 06:15 UTC cron, no secret substitution).
+
+Once both are done, the Brevo pill will read "Aligned" until the next morning's cron run, then either stay Aligned or flip to "N runs (last 24h)" if drift detected.
+
+---
+
 ## 2026-05-19 (Session 54) — Drift digest + orphan cleanup
 
 Two follow-ups from the S53 plan, plus a perf fix on the Brevo reconciler from earlier in the session.

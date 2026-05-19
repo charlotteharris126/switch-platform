@@ -389,6 +389,7 @@ export default async function ErrorsPage({
   const archivedIds = new Set(((archivedRes.data ?? []) as Array<{ id: number }>).map((r) => r.id));
   const archivedRoutedRows = routingLogRows.filter((id) => archivedIds.has(id)).length;
 
+
   const liveRows = (liveRoutedRes.data ?? []) as Array<{ email: string | null; parent_submission_id: number | null }>;
   const liveRowCount = liveRows.length;
   const liveDistinctEmails = new Set(
@@ -458,6 +459,35 @@ export default async function ErrorsPage({
     bySource.get(r.source)!.push(r);
   }
 
+  // Cached drift signal per reconciler card. Counts unresolved dead_letter
+  // rows in the last 25h matching each reconciler's source. Zero = pill
+  // shows Aligned. Non-zero = pill shows count + last-seen timestamp.
+  // "Check drift" remains available on each card for an on-demand fresh
+  // check. Sources:
+  //   - sheet_drift_detected: sheet-drift-reconcile-daily (06:00 UTC)
+  //   - reconcile_backfill: netlify-leads-reconcile hourly back-fills
+  //   - brevo_attribute_drift: brevo-attribute-reconcile-daily (06:15 UTC,
+  //     log_drift=true writes one summary row when drift > 0)
+  const driftCutoffMs = now - 25 * 3600 * 1000;
+  const reconcilerStatus = {
+    sheet: { drifted: 0, lastSeen: null as string | null },
+    netlify: { drifted: 0, lastSeen: null as string | null },
+    brevo: { drifted: 0, lastSeen: null as string | null },
+  };
+  for (const r of unresolved) {
+    if (new Date(r.received_at).getTime() < driftCutoffMs) continue;
+    let key: keyof typeof reconcilerStatus | null = null;
+    if (r.source === "sheet_drift_detected") key = "sheet";
+    else if (r.source === "reconcile_backfill") key = "netlify";
+    else if (r.source === "brevo_attribute_drift") key = "brevo";
+    if (!key) continue;
+    const bucket = reconcilerStatus[key];
+    bucket.drifted++;
+    if (!bucket.lastSeen || r.received_at > bucket.lastSeen) {
+      bucket.lastSeen = r.received_at;
+    }
+  }
+
   return (
     <div className="max-w-6xl space-y-6">
       <PageHeader
@@ -485,7 +515,14 @@ export default async function ErrorsPage({
         {sheetProviders.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Sheet ↔ DB</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-2">
+                Sheet ↔ DB
+                <ReconcilerStatusPill
+                  drifted={reconcilerStatus.sheet.drifted}
+                  lastSeen={reconcilerStatus.sheet.lastSeen}
+                  driftedLabel="row"
+                />
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-xs text-[#5a6a72] leading-relaxed">
@@ -518,11 +555,21 @@ export default async function ErrorsPage({
           </Card>
         )}
 
-        <NetlifyVsDbCard />
+        <NetlifyVsDbCard
+          drifted={reconcilerStatus.netlify.drifted}
+          lastSeen={reconcilerStatus.netlify.lastSeen}
+        />
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">DB ↔ Brevo</CardTitle>
+            <CardTitle className="text-sm flex items-center gap-2">
+              DB ↔ Brevo
+              <ReconcilerStatusPill
+                drifted={reconcilerStatus.brevo.drifted}
+                lastSeen={reconcilerStatus.brevo.lastSeen}
+                driftedLabel="run"
+              />
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-[#5a6a72] leading-relaxed">
@@ -751,6 +798,38 @@ interface ReconciliationData {
   rapid_fire_dupes: number;
 }
 
+// Status pill rendered on the Sheet/Netlify/Brevo reconciler cards. Reads
+// the cached drift count from the most recent dead_letter rows for the
+// matching source over the last 25h. Zero = green Aligned pill; non-zero =
+// amber pill with count + how long ago the latest signal landed.
+//
+// Trade-off vs. live API check on page load: badge can be up to 24h stale
+// since the daily cron last ran, but the Check drift button on each card
+// still triggers a live, fresh check on demand.
+function ReconcilerStatusPill({
+  drifted,
+  lastSeen,
+  driftedLabel,
+}: {
+  drifted: number;
+  lastSeen: string | null;
+  driftedLabel: string;
+}) {
+  if (drifted === 0) {
+    return (
+      <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">
+        Aligned
+      </Badge>
+    );
+  }
+  const ago = lastSeen ? formatAgo(lastSeen) : null;
+  return (
+    <Badge className="text-[10px] bg-[#cd8b76] text-white hover:bg-[#cd8b76]">
+      {drifted} {driftedLabel}{drifted === 1 ? "" : "s"} (last 24h){ago ? ` · ${ago}` : ""}
+    </Badge>
+  );
+}
+
 function MetaVsDbCard({
   metaReported,
   dbDistinct,
@@ -839,11 +918,20 @@ function MetaVsDbCard({
   );
 }
 
-function NetlifyVsDbCard() {
+function NetlifyVsDbCard({
+  drifted,
+  lastSeen,
+}: {
+  drifted: number;
+  lastSeen: string | null;
+}) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm">Netlify ↔ DB</CardTitle>
+        <CardTitle className="text-sm flex items-center gap-2">
+          Netlify ↔ DB
+          <ReconcilerStatusPill drifted={drifted} lastSeen={lastSeen} driftedLabel="back-fill" />
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-xs text-[#5a6a72] leading-relaxed">
