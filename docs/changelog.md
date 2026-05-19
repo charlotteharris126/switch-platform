@@ -4,6 +4,22 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-19 (Session 52) — BEFORE INSERT trigger stamps funded client_nonce
+
+Closes the leak path the 025 backfill panel was mopping up.
+
+**Background.** Migration 0087 added `client_nonce` so every funded learner could carry a per-lead fastrack URL. The form path (`_shared/ingest.ts`) reads `client_nonce` from the form payload, so any insert path that didn't supply one (legacy form snapshots, ad-hoc replays, future ingestion sources) silently landed funded rows with NULL nonces. The 025 backfill panel existed to mop them up; over time the trickle kept reappearing.
+
+**Migration 0152:** new `leads.stamp_client_nonce_if_funded()` PL/pgSQL function + BEFORE INSERT trigger on `leads.submissions`. Stamps `gen_random_uuid()` when funding_category is gov/loan and incoming `client_nonce` is NULL. No-op when the caller already supplies a nonce — the form path stays in control of which UUID lands on a fresh submission.
+
+**Effect:** every present and future insert path is automatically protected. The 025 backfill function + admin panel become genuinely vestigial — pending count stays at 0 forever now, panel auto-hides.
+
+**Carry — drop the 025 panel.** Once we've gone a week with no new pending rows, remove `count_client_nonce_pending`, the `backfill-client-nonce` Edge Function call from the UI, and the panel component itself. Flagged to next platform session.
+
+**Carry — same instinct elsewhere.** Audit any other panel under "Data ops — one-shot fixes" that exists to compensate for an upstream gap. Most likely candidates: nothing else currently surfaced, but worth a sweep when the data-ops reshape ships.
+
+---
+
 ## 2026-05-19 (Session 52) — enrolments_status_check widened to employer taxonomy
 
 Closes a constraint-vs-RPC drift that blocked the provider portal on Riverside leads.
