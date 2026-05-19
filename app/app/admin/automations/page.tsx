@@ -114,6 +114,21 @@ const UTILITY_TYPES: Array<{
     display_name: "Provider presumed-warning (day-12)",
     trigger_description: "Daily cron at 05:00 UTC. Provider-facing — fires 2 days before the 14-day auto-flip would mark a routed lead presumed_enrolled. Dormant until BREVO_TEMPLATE_PROVIDER_PRESUMED_WARNING env var is set.",
   },
+  {
+    email_type: "s4b_employer_u1",
+    display_name: "S4B Employer U1 — welcome",
+    trigger_description: "Fires from netlify-employer-lead-router on every routed employer-apprenticeship lead. Sibling of u1_funded/u1_self for learners.",
+  },
+  {
+    email_type: "s4b_employer_chaser",
+    display_name: "S4B Employer chaser",
+    trigger_description: "Auto-fires from markOutcomeAction on attempt_1/2/3_no_answer + cannot_reach status changes for employer-apprenticeship leads. Sibling of chaser_funded/chaser_self for learners. 10-min rate-limit per submission.",
+  },
+  {
+    email_type: "s4b_employer_ud",
+    display_name: "S4B Employer UD — disqualified",
+    trigger_description: "Reserved. No live trigger in v1: there's no real 'not a fit right now' path for employer leads yet.",
+  },
 ];
 
 const CRON_JOBS: CronRow[] = [

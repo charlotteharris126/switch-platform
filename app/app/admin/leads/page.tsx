@@ -305,12 +305,16 @@ export default async function LeadsPage({
   // Maps derived from the email_log query. The query orders triggered_at DESC,
   // so the first row per (sub_id, email_type) is the latest send.
   // - u1StatusBySubId: latest U1 transactional status, surfaced in the
-  //   "U1" column for at-a-glance Phase 2 parity.
+  //   "U1" column. Folds u1_funded / u1_self (learner) and
+  //   s4b_employer_u1 (employer) into one badge — the dashboard surface
+  //   only cares that a welcome went out, not which audience-specific
+  //   template fired.
   // - lastChaserBySubId: latest chaser triggered_at over healthy delivery
   //   statuses, replaces the dropped crm.enrolments.last_chaser_at column
-  //   (migration 0086, Phase 4 closeout). chaser_funded and chaser_self
-  //   are both folded into one timestamp here — the dashboard surface
-  //   doesn't distinguish funded vs self chaser at this view.
+  //   (migration 0086, Phase 4 closeout). chaser_funded / chaser_self
+  //   (learner) and s4b_employer_chaser (employer) are all folded into
+  //   one timestamp here — the column shows "when did we last chase",
+  //   not "which template".
   const HEALTHY_CHASER_STATUSES = new Set(["sent", "delivered", "opened", "clicked"]);
   const u1StatusBySubId = new Map<number, string>();
   const lastChaserBySubId = new Map<number, string>();
@@ -320,7 +324,7 @@ export default async function LeadsPage({
         u1StatusBySubId.set(e.submission_id, e.status);
       }
     }
-    if (e.email_type === "chaser_funded" || e.email_type === "chaser_self") {
+    if (e.email_type === "chaser_funded" || e.email_type === "chaser_self" || e.email_type === "s4b_employer_chaser") {
       if (HEALTHY_CHASER_STATUSES.has(e.status) && !lastChaserBySubId.has(e.submission_id)) {
         lastChaserBySubId.set(e.submission_id, e.triggered_at);
       }
@@ -476,7 +480,8 @@ export default async function LeadsPage({
                   <TableCell className="text-xs">
                     {(() => {
                       // Phase 2 U1 parity at-a-glance.
-                      // - Routed leads should have a u1_funded or u1_self row.
+                      // - Routed learner leads should have a u1_funded /
+                      //   u1_self row; routed employer leads s4b_employer_u1.
                       // - Pre-Phase-2 leads (anyone routed before 2026-05-05)
                       //   never had a transactional U1 sent. Showing "—" for
                       //   them is the right answer; "missing" would be a false
