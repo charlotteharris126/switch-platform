@@ -29,7 +29,7 @@ Two follow-ups from the S53 plan, plus a perf fix on the Brevo reconciler from e
 
 **Remote-state follow-ups (need owner action, NOT auto-run).**
 1. **Run migration 0153** via Supabase SQL editor (drops the orphan RPC).
-2. **Apply data-ops/040** via Supabase SQL editor (schedules digest cron, unschedules dead-letter-alert-hourly). Substitute AUDIT_SHARED_SECRET first.
+2. **Apply data-ops/040** via Supabase SQL editor (schedules digest cron, unschedules dead-letter-alert-hourly). No secret substitution — body calls `public.get_shared_secret('AUDIT_SHARED_SECRET')` at fire time, so vault rotations propagate automatically and no plaintext secret lives in `cron.job`.
 3. **Delete remote Edge Functions** (optional but recommended): `supabase functions delete backfill-referral-fastrack-urls backfill-client-nonce`. The repo no longer carries the source so they can't be redeployed.
 4. **Deploy new functions** (the ones in this session): `supabase functions deploy drift-digest-daily --no-verify-jwt` (brevo-attribute-reconcile already deployed earlier in the session).
 

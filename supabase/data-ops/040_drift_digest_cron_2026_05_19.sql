@@ -28,11 +28,13 @@
 --
 -- How to run:
 --   1. Open this file in the Supabase SQL editor.
---   2. Replace BOTH `<REPLACE_WITH_AUDIT_SHARED_SECRET>` placeholders with
---      the live AUDIT_SHARED_SECRET (Supabase dashboard → Edge Functions →
---      Manage secrets). Same value the existing crons carry.
---   3. Run the whole file.
---   4. Verify with the SELECTs at the bottom.
+--   2. Paste and run the whole file. No substitutions needed — the cron body
+--      calls public.get_shared_secret('AUDIT_SHARED_SECRET') at execution
+--      time, so the live vault value is fetched on every fire. Rotating the
+--      secret never requires re-scheduling.
+--   3. Verify with the SELECTs at the bottom.
+--   4. (Optional) Smoke-test the function manually with the curl block at
+--      the bottom of this file before the first scheduled fire.
 --
 -- Rollback:
 --   - Re-schedule dead-letter-alert-hourly with the same body the original
@@ -52,6 +54,12 @@ BEGIN;
 -- Timeout: 10000ms. Function does one SELECT on leads.dead_letter + one
 -- count + one Brevo transactional send. Pilot volume keeps this well under
 -- a second; 10s is generous headroom.
+--
+-- Secret handling: the body calls public.get_shared_secret(...) at execution
+-- time rather than baking the secret into the scheduled command. Avoids
+-- plaintext secrets in cron.job and means secret rotation propagates
+-- automatically. The function is SECURITY DEFINER from migration 0019;
+-- pg_cron's executing role can call it.
 SELECT cron.schedule(
   'drift-digest-daily',
   '30 6 * * *',
@@ -59,7 +67,7 @@ SELECT cron.schedule(
   SELECT net.http_post(
     url := 'https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/drift-digest-daily',
     headers := jsonb_build_object(
-      'x-audit-key', '<REPLACE_WITH_AUDIT_SHARED_SECRET>',
+      'x-audit-key', public.get_shared_secret('AUDIT_SHARED_SECRET'),
       'content-type', 'application/json'
     ),
     body := '{}'::jsonb,
@@ -81,10 +89,16 @@ COMMIT;
 --   Old schedule gone:
 --     SELECT jobname FROM public.vw_cron_jobs WHERE jobname = 'dead-letter-alert-hourly';
 --     -- Expected: zero rows.
---   Smoke test (after secret substitution above is committed live):
---     curl -X POST 'https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/drift-digest-daily' \
---          -H 'x-audit-key: <REPLACE_WITH_AUDIT_SHARED_SECRET>' \
---          -H 'content-type: application/json' \
---          -d '{}'
---     -- Expected: { ok: true, ... } with either candidates: 0 (quiet) or
---     -- candidates: N + sent: 1 if any dead_letter rows landed in the last 25h.
+--   Smoke test (no secret needed; the public.get_shared_secret call inside
+--   the cron body fetches it from the vault at execution time):
+--     SELECT net.http_post(
+--       url := 'https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/drift-digest-daily',
+--       headers := jsonb_build_object(
+--         'x-audit-key', public.get_shared_secret('AUDIT_SHARED_SECRET'),
+--         'content-type', 'application/json'
+--       ),
+--       body := '{}'::jsonb,
+--       timeout_milliseconds := 10000
+--     );
+--     -- Expected: a row with status_code 200, content like
+--     -- { ok: true, candidates: N, sent: 0|1, ... }.

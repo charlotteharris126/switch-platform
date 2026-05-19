@@ -36,7 +36,7 @@ Six admin fixes shipped end-to-end alongside two new DB safety mechanisms (migra
    - Brevo URL backfill panel should stay at ≤2 mutations (S51 carry).
    - Per-provider CPL / CPE / P/L scoreboard (S49 carry).
    - Brevo orphan deletion once Wren confirms `u1-funded` template verified live (S48-49 carry).
-   - Wren brief: utility SMS for funded learners — two-trigger flow spec at `switchable/email/docs/sms-utility-design.md` (S52 carry).
+   - Wren brief: utility SMS for funded learners — two-trigger flow spec at `switchable/email/docs/sms-utility-design.md` (S52 carry). **Update 2026-05-19:** body delivery is in-TS template literals inside `sendOutboundMessage`, NOT Brevo-stored SMS templates. One Brevo SMS API key env var, no per-variant template IDs.
 
 ## Decisions and open questions
 
