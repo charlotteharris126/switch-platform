@@ -4,6 +4,21 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-19 (Session 54) — Sheet pill bug fix (dedup-aware window)
+
+Caught by Charlotte right after the pills shipped: the Sheet ↔ DB pill could falsely flip to "Aligned" on day 3 of standing drift.
+
+**Root cause.** `sheet-drift-reconcile-daily` deduplicates against existing unresolved drift rows. If drift first appeared Tuesday, a dead_letter row was written; Wednesday's cron sees the same drift, skips writing (dedup), so the only signal is Tuesday's row. My pill used a 25h window matching the other reconcilers — so by Thursday the Tuesday row falls out of the window and the pill says Aligned while standing drift exists.
+
+**Fix.** Per-source window policy in `reconcilerStatus` tally:
+- `sheet_drift_detected`: count ALL unresolved (no time filter). Unresolved-ever = current standing drift, courtesy of the cron's own dedup.
+- `reconcile_backfill`: keep 25h window (event-log per back-fill, not standing state).
+- `brevo_attribute_drift`: keep 25h window (one summary row per drifty run, latest is current state).
+
+**Touched files.** `platform/app/app/admin/errors/page.tsx` — `respectWindow` flag per source in the unresolved walk.
+
+---
+
 ## 2026-05-19 (Session 54) — Status pills on every reconciler card
 
 Closes the "some cards show drift state at-a-glance, others require clicking Check drift" inconsistency Charlotte raised. All five reconciler cards on `/admin/errors` now render a status pill on page load.
