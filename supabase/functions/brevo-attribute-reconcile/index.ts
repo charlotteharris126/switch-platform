@@ -60,7 +60,12 @@ if (!DATABASE_URL) throw new Error("SUPABASE_DB_URL not set");
 const BREVO_API_KEY = Deno.env.get("BREVO_API_KEY");
 if (!BREVO_API_KEY) throw new Error("BREVO_API_KEY not set in Edge Function env");
 
-const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, prepare: false });
+// Pool size 8: dry-run does ~6 SQL queries per contact (loadSubmissionByEmail
+// + loadEmailAggregateState's 4 selects + crm.enrolments). With 200 contacts
+// at max:1 sequential we'd burn ~50s — beyond Netlify's 26s Server Action
+// cap. Pool of 8 + Promise.all on each Brevo page (100 contacts) brings the
+// dry-run inside the cap. Reads only, no write contention concern.
+const sql = postgres(DATABASE_URL, { max: 8, idle_timeout: 20, prepare: false });
 
 const BREVO_BASE = "https://api.brevo.com/v3";
 const BATCH_SIZE = 100;
@@ -208,19 +213,24 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+// Per-contact evaluation result. Pass 1 produces these in parallel; pass 2
+// (apply only) re-upserts drift entries sequentially with rate-limit throttling.
+type Evaluation =
+  | { kind: "skipped_no_email"; contact: BrevoContact }
+  | { kind: "skipped_no_submission"; contact: BrevoContact }
+  | { kind: "error"; contact: BrevoContact; message: string }
+  | { kind: "aligned"; contact: BrevoContact; submission: SubmissionRow; mode: "matched" | "no_match" | "pending" }
+  | {
+      kind: "drift";
+      contact: BrevoContact;
+      submission: SubmissionRow;
+      mode: "matched" | "no_match" | "pending";
+      provider: ProviderRow | null;
+      drifted_attrs: string[];
+    };
+
 async function run(apply: boolean): Promise<RunSummary> {
   const startedAt = new Date();
-
-  let processed = 0;
-  let aligned = 0;
-  let drifted = 0;
-  let skippedNoSub = 0;
-  let skippedNoEmail = 0;
-  let appliedOk = 0;
-  let errors = 0;
-  const errorMessages: string[] = [];
-  const perAttribute: Record<string, number> = {};
-  const driftList: DriftEntry[] = [];
 
   // Cache providers we've loaded this run; provider rows rarely change and
   // the pilot has <10 providers — reload-once-per-run keeps the SQL count
@@ -233,122 +243,138 @@ async function run(apply: boolean): Promise<RunSummary> {
     return row;
   }
 
+  async function evaluateContact(contact: BrevoContact): Promise<Evaluation> {
+    if (!contact.email) return { kind: "skipped_no_email", contact };
+    const submission = await loadSubmissionByEmail(contact.email);
+    if (!submission) return { kind: "skipped_no_submission", contact };
+
+    // Mirrors admin-brevo-resync's branching:
+    //   is_dq → no_match
+    //   !primary_routed_to → pending
+    //   else matched (need provider row)
+    let mode: "matched" | "no_match" | "pending";
+    let desired: Record<string, unknown>;
+    let provider: ProviderRow | null = null;
+
+    try {
+      if (submission.is_dq) {
+        mode = "no_match";
+        desired = await buildLearnerBrevoAttributesNoMatch(sql, submission, "no_match");
+      } else if (!submission.primary_routed_to) {
+        mode = "pending";
+        desired = await buildLearnerBrevoAttributesNoMatch(sql, submission, "pending");
+      } else {
+        provider = await getProvider(submission.primary_routed_to);
+        if (!provider) {
+          return { kind: "error", contact, message: `provider ${submission.primary_routed_to} not found` };
+        }
+        if (!provider.active || provider.archived_at) {
+          return { kind: "error", contact, message: `provider ${submission.primary_routed_to} inactive/archived` };
+        }
+        mode = "matched";
+        desired = await buildLearnerBrevoAttributes(sql, provider, submission);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { kind: "error", contact, message: `build desired attrs failed: ${msg}` };
+    }
+
+    const drifted_attrs = diffAttributes(desired, contact.attributes);
+    if (drifted_attrs.length === 0) {
+      return { kind: "aligned", contact, submission, mode };
+    }
+    return { kind: "drift", contact, submission, mode, provider, drifted_attrs };
+  }
+
+  // Pass 1 — walk Brevo + evaluate in parallel within each page. Read-only,
+  // SQL pool of 8 absorbs the concurrent SELECTs. Sized to finish ~200
+  // contacts well inside the Netlify Server Action cap.
+  const evaluations: Evaluation[] = [];
   let offset = 0;
 
   while (true) {
     const batch = await listBrevoContacts(offset);
     if (batch.length === 0) break;
+    const results = await Promise.all(batch.map(evaluateContact));
+    evaluations.push(...results);
+    if (batch.length < BATCH_SIZE) break;
+    offset += batch.length;
+  }
 
-    let batchErrors = 0;
+  // Tally
+  let processed = 0;
+  let aligned = 0;
+  let drifted = 0;
+  let skippedNoSub = 0;
+  let skippedNoEmail = 0;
+  let errors = 0;
+  const errorMessages: string[] = [];
+  const perAttribute: Record<string, number> = {};
+  const driftList: DriftEntry[] = [];
 
-    for (const contact of batch) {
-      processed++;
-      if (!contact.email) {
+  for (const e of evaluations) {
+    processed++;
+    switch (e.kind) {
+      case "skipped_no_email":
         skippedNoEmail++;
-        continue;
-      }
-      const submission = await loadSubmissionByEmail(contact.email);
-      if (!submission) {
+        break;
+      case "skipped_no_submission":
         skippedNoSub++;
-        continue;
-      }
-
-      // Determine path. Mirrors admin-brevo-resync's branching:
-      //   - is_dq → no_match
-      //   - !primary_routed_to → pending
-      //   - else matched (need provider row)
-      let mode: "matched" | "no_match" | "pending";
-      let desired: Record<string, unknown>;
-
-      try {
-        if (submission.is_dq) {
-          mode = "no_match";
-          desired = await buildLearnerBrevoAttributesNoMatch(sql, submission, "no_match");
-        } else if (!submission.primary_routed_to) {
-          mode = "pending";
-          desired = await buildLearnerBrevoAttributesNoMatch(sql, submission, "pending");
-        } else {
-          const provider = await getProvider(submission.primary_routed_to);
-          if (!provider) {
-            errors++;
-            batchErrors++;
-            const msg = `${contact.email}: provider ${submission.primary_routed_to} not found`;
-            errorMessages.push(msg);
-            continue;
-          }
-          if (!provider.active || provider.archived_at) {
-            errors++;
-            batchErrors++;
-            const msg = `${contact.email}: provider ${submission.primary_routed_to} inactive/archived`;
-            errorMessages.push(msg);
-            continue;
-          }
-          mode = "matched";
-          desired = await buildLearnerBrevoAttributes(sql, provider, submission);
-        }
-      } catch (err) {
+        break;
+      case "error":
         errors++;
-        batchErrors++;
-        const msg = `${contact.email}: build desired attrs failed: ${err instanceof Error ? err.message : String(err)}`;
-        errorMessages.push(msg);
-        console.error("[error]", msg);
-        continue;
-      }
-
-      const driftedAttrs = diffAttributes(desired, contact.attributes);
-      if (driftedAttrs.length === 0) {
+        errorMessages.push(`${e.contact.email}: ${e.message}`);
+        break;
+      case "aligned":
         aligned++;
-        continue;
-      }
+        break;
+      case "drift":
+        drifted++;
+        for (const k of e.drifted_attrs) perAttribute[k] = (perAttribute[k] ?? 0) + 1;
+        if (driftList.length < DRIFT_LIST_CAP) {
+          driftList.push({
+            email: e.contact.email,
+            submission_id: e.submission.id,
+            mode: e.mode,
+            drifted_attrs: e.drifted_attrs,
+          });
+        }
+        break;
+    }
+  }
 
-      drifted++;
-      for (const k of driftedAttrs) {
-        perAttribute[k] = (perAttribute[k] ?? 0) + 1;
-      }
-      if (driftList.length < DRIFT_LIST_CAP) {
-        driftList.push({
-          email: contact.email,
-          submission_id: submission.id,
-          mode,
-          drifted_attrs: driftedAttrs,
-        });
-      }
-
-      if (!apply) continue;
-
-      // Apply via the canonical upsert path. For matched leads use the
-      // provider we already loaded; for no_match/pending the upsert helper
-      // re-fetches the submission row itself (so we pass the id, not the
-      // row we built off).
+  // Pass 2 (apply only) — re-fire canonical upsert sequentially for every
+  // drift entry. Throttled to stay under Brevo's 10 req/s ceiling while
+  // leaving headroom for any concurrent route-lead.ts upserts.
+  let appliedOk = 0;
+  if (apply) {
+    const drifts = evaluations.filter((e): e is Extract<Evaluation, { kind: "drift" }> => e.kind === "drift");
+    let batchErrors = 0;
+    for (let i = 0; i < drifts.length; i++) {
+      const d = drifts[i];
+      if (i > 0) await sleep(INTER_WRITE_DELAY_MS);
       try {
-        if (mode === "matched") {
-          const provider = await getProvider(submission.primary_routed_to!);
-          if (!provider) throw new Error("provider disappeared mid-run");
-          const r = await upsertLearnerInBrevo(sql, provider, submission);
+        if (d.mode === "matched") {
+          if (!d.provider) throw new Error("provider missing on drift entry");
+          const r = await upsertLearnerInBrevo(sql, d.provider, d.submission);
           if (!r.ok) throw new Error(r.error ?? "unknown");
         } else {
-          const r = await upsertLearnerInBrevoNoMatch(sql, submission.id, mode);
+          const r = await upsertLearnerInBrevoNoMatch(sql, d.submission.id, d.mode);
           if (!r.ok) throw new Error(r.error ?? "unknown");
         }
         appliedOk++;
       } catch (err) {
         errors++;
         batchErrors++;
-        const msg = `${contact.email} resync (${mode}): ${err instanceof Error ? err.message : String(err)}`;
+        const msg = `${d.contact.email} resync (${d.mode}): ${err instanceof Error ? err.message : String(err)}`;
         errorMessages.push(msg);
         console.error("[error]", msg);
       }
-      await sleep(INTER_WRITE_DELAY_MS);
     }
-
-    const batchErrorRate = batch.length > 0 ? batchErrors / batch.length : 0;
-    if (batchErrorRate > HALT_ERROR_RATE) {
-      console.error(`HALT — batch error rate ${(batchErrorRate * 100).toFixed(2)}% exceeds threshold`);
-      break;
+    const errorRate = drifts.length > 0 ? batchErrors / drifts.length : 0;
+    if (errorRate > HALT_ERROR_RATE) {
+      console.error(`HALT signal — apply error rate ${(errorRate * 100).toFixed(2)}% exceeds threshold`);
     }
-
-    if (batch.length < BATCH_SIZE) break;
-    offset += batch.length;
   }
 
   return {
