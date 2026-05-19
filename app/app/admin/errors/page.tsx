@@ -20,7 +20,6 @@ import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
 // pass — single page for any data-layer attention. Old /data-ops route
 // redirects here.
 import { Run024Panel } from "../data-ops/run-024-panel";
-import { RunClientNoncePanel } from "../data-ops/run-client-nonce-panel";
 import { GdprEraseLearnerPanel } from "./gdpr-erase-learner-panel";
 
 interface DeadLetterRow {
@@ -276,13 +275,7 @@ export default async function ErrorsPage({
   const supabase = await createClient();
   const { republish: republishProviderParam } = await searchParams;
 
-  // Pending data-ops count (currently just 025 client_nonce; 024 lives
-  // Brevo-side and can't be cheaply checked from Postgres). Used to gate
-  // the "Open Data ops" banner so it only shows when there's actually
-  // something to do.
   const admin = createAdminClient();
-  const { data: noncePendingRaw } = await admin.rpc("count_client_nonce_pending");
-  const noncePending = typeof noncePendingRaw === "number" ? noncePendingRaw : 0;
 
   // Providers eligible for the sheet republish tool (have a webhook
   // configured). Loaded once for the picker. Lightweight.
@@ -474,110 +467,100 @@ export default async function ErrorsPage({
           deadLetterRes.error ? (
             <span className="text-[#b3412e]">Error: {deadLetterRes.error.message}</span>
           ) : (
-            <>Two sections: does the database reconcile, and is anything broken right now.</>
+            <>Three sections: do the reconcilers agree, GDPR tools, and is anything broken right now.</>
           )
         }
       />
 
-      {noncePending > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
-          <span className="font-semibold">Data ops: {noncePending} pending</span>
-          {" — "}
-          {noncePending === 1 ? "1 funded lead needs" : `${noncePending} funded leads need`}{" "}
-          a fastrack URL stamped. Run the <strong>025</strong> backfill panel below to fix.
-        </div>
-      )}
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold text-[#11242e] uppercase tracking-wide">
+          Reconciliations
+        </h2>
+        <p className="text-xs text-[#5a6a72] leading-relaxed">
+          Three places the DB has to stay in sync with an external system.
+          DB is always the source of truth; each panel projects the DB
+          through to what the external system should hold, then diffs.
+        </p>
 
-      {sheetProviders.length > 0 && (
+        {sheetProviders.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Sheet ↔ DB</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-[#5a6a72] leading-relaxed">
+                Pick a provider, click <em>Check drift</em> — the function reads the
+                live sheet, compares against DB, and lists any rows that differ.
+                Two cure directions on offer:
+              </p>
+              <ul className="text-xs text-[#5a6a72] list-disc list-inside space-y-1 leading-relaxed">
+                <li>
+                  <span className="font-semibold text-[#11242e]">Apply sheet → DB</span>{" "}
+                  when the provider&apos;s been editing the sheet and DB hasn&apos;t caught up
+                  (the WYK 2026-05-09 pattern). Updates <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">crm.enrolments</code>{" "}
+                  with audit log + Brevo resync.
+                </li>
+                <li>
+                  <span className="font-semibold text-[#11242e]">Push DB → sheet</span>{" "}
+                  when admin/portal has been editing DB and the sheet is stale. Re-writes
+                  status, lost reason, and fastrack columns from DB state.
+                </li>
+              </ul>
+              <p className="text-xs text-[#5a6a72] leading-relaxed">
+                Idempotent. Daily 06:00 UTC cron logs new drift to dead_letter and
+                emails the owner.
+              </p>
+              <ReconcileSheetPanel
+                providers={sheetProviders}
+                initialProviderId={initialRepublishProvider}
+              />
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">Sheet ↔ DB reconcile</CardTitle>
+            <CardTitle className="text-sm">DB ↔ Brevo</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-[#5a6a72] leading-relaxed">
-              Pick a provider, click <em>Check drift</em> — the function reads the
-              live sheet, compares against DB, and lists any rows that differ.
-              Two cure directions on offer:
-            </p>
-            <ul className="text-xs text-[#5a6a72] list-disc list-inside space-y-1 leading-relaxed">
-              <li>
-                <span className="font-semibold text-[#11242e]">Apply sheet → DB</span>{" "}
-                when the provider&apos;s been editing the sheet and DB hasn&apos;t caught up
-                (the WYK 2026-05-09 pattern). Updates <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">crm.enrolments</code>{" "}
-                with audit log + Brevo resync.
-              </li>
-              <li>
-                <span className="font-semibold text-[#11242e]">Push DB → sheet</span>{" "}
-                when admin/portal has been editing DB and the sheet is stale. Re-writes
-                status, lost reason, and fastrack columns from DB state.
-              </li>
-            </ul>
-            <p className="text-xs text-[#5a6a72] leading-relaxed">
-              Idempotent. Daily 06:00 UTC cron logs new drift to dead_letter and
-              emails the owner.
-            </p>
-            <ReconcileSheetPanel
-              providers={sheetProviders}
-              initialProviderId={initialRepublishProvider}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Data ops — one-shot panels for backfills that can't (yet) be
-          auto-resolved by the live infrastructure. Each panel triggers a
-          Supabase Edge Function with dry-run + apply gates. Panels with
-          a pending-count check auto-hide when complete; others (Brevo-
-          side state) stay visible. */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Data ops — one-shot fixes</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <p className="text-xs text-[#5a6a72] leading-relaxed">
-            Manual backfills that aren&apos;t (yet) automated. Dry-run first,
-            review, then apply. Panels with a pending-count check hide
-            themselves when nothing&apos;s left to do.
-          </p>
-
-          {noncePending !== 0 && (
-            <section className="border-t border-[#dde3e6] pt-4">
-              <h3 className="text-sm font-semibold text-[#11242e]">025: client_nonce backfill</h3>
-              <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
-                Stamps a fresh nonce into funded in-funnel leads that pre-date
-                the per-lead fastrack URL. Auto-hides when the pending count
-                hits zero.
-              </p>
-              <RunClientNoncePanel />
-            </section>
-          )}
-
-          <section className="border-t border-[#dde3e6] pt-4">
-            <h3 className="text-sm font-semibold text-[#11242e]">Brevo: refresh learner referral &amp; fastrack URLs</h3>
-            <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
-              Pushes each learner&apos;s personal referral link and fastrack link
-              to their Brevo contact record so email broadcasts render the right
-              URL per learner. Brevo&apos;s side can&apos;t be cheaply checked from
-              the platform, so this panel always shows — run dry-run any time
-              the URL builder changes (anything in
+              Pushes each learner&apos;s personal referral link and fastrack
+              link to their Brevo contact record so email broadcasts render
+              the right URL per learner. Brevo&apos;s side can&apos;t be
+              cheaply checked from the platform, so this panel always
+              shows — run dry-run any time the URL builder changes
+              (anything in
               {" "}<code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">_shared/route-lead.ts</code>
               {" "}touching <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildReferralUrl</code>
               {" "}or <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildFastrackUrl</code>),
-              or if a broadcast was sent and you&apos;re unsure whether contacts
-              had the latest URLs.
+              or if a broadcast was sent and you&apos;re unsure whether
+              contacts had the latest URLs.
             </p>
-            <p className="text-xs text-[#5a6a72] mt-1 mb-3 leading-relaxed">
-              The dry-run number you see in &ldquo;Would mutate&rdquo; is the count
-              of contacts whose Brevo record disagrees with the current builder
-              output — that&apos;s the drift. Apply to push the fresh URLs.
+            <p className="text-xs text-[#5a6a72] leading-relaxed">
+              The dry-run number you see in &ldquo;Would mutate&rdquo; is
+              the count of contacts whose Brevo record disagrees with the
+              current builder output — that&apos;s the drift. Apply to
+              push the fresh URLs.
             </p>
-            <p className="text-[11px] text-[#5a6a72] italic mb-3">
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              <strong>Coverage today:</strong> SW_REFERRAL_URL +
+              SW_FASTRACK_URL only. Broader Brevo attribute reconciler
+              (every SW_* attribute) is queued for next platform session.
+            </p>
+            <p className="text-[11px] text-[#5a6a72] italic">
               Last applied: 2026-05-11 (174 audience / 160 mutated / 0 errors).
             </p>
             <Run024Panel />
-          </section>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+
+        <ReconciliationCard
+          data={reconciliation}
+          metaReported={metaReported30d}
+          dbDistinct={dbDistinct30d}
+          windowStartDate={reconcileCutoffDate}
+        />
+      </div>
 
       <Card>
         <CardHeader>
@@ -593,13 +576,6 @@ export default async function ErrorsPage({
           <GdprEraseLearnerPanel />
         </CardContent>
       </Card>
-
-      <ReconciliationCard
-        data={reconciliation}
-        metaReported={metaReported30d}
-        dbDistinct={dbDistinct30d}
-        windowStartDate={reconcileCutoffDate}
-      />
 
       {flaggedForClaude.length > 0 && (
         <FlaggedForClaudePanel rows={flaggedForClaude} subsById={subsById} />
@@ -860,11 +836,14 @@ function ReconciliationCard({
     <Card className={cardCls}>
       <CardHeader>
         <CardTitle className="text-sm flex items-center gap-2">
-          Reconciliation
+          Meta ↔ DB
           <Badge className={`text-[10px] ${overallBadge.cls}`}>{overallBadge.label}</Badge>
         </CardTitle>
         <p className="text-xs text-[#5a6a72] mt-1">
-          Two sanity checks: do our internal counts add up, and do they match what Meta reports.
+          Informational only — Meta&apos;s API can&apos;t accept retroactive writes,
+          so this is a read-only check on whether our DB and Meta&apos;s counts
+          line up. Two sub-checks: do our internal counts add up, and do they
+          match what Meta reports.
         </p>
       </CardHeader>
       <CardContent className="space-y-5">

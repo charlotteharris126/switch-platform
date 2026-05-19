@@ -38,32 +38,6 @@ export async function runBackfillAction(args: { apply: boolean }): Promise<Backf
   return callBackfillFunction("backfill-referral-fastrack-urls", args) as Promise<BackfillResult>;
 }
 
-// --- Client-nonce backfill -------------------------------------------------
-
-export interface NonceSpotCheck {
-  id: number;
-  email: string | null;
-  full_name: string;
-  funding_category: string | null;
-  submitted_at: string;
-  new_nonce: string;
-  fastrack_url: string;
-}
-
-export interface NonceBackfillSummary {
-  ok: true;
-  mode: "dry_run" | "apply";
-  audience_size: number;
-  mutated: number;
-  spot_checks: NonceSpotCheck[];
-}
-
-export type NonceBackfillResult = NonceBackfillSummary | { ok: false; error: string };
-
-export async function runNonceBackfillAction(args: { apply: boolean }): Promise<NonceBackfillResult> {
-  return callBackfillFunction("backfill-client-nonce", args) as Promise<NonceBackfillResult>;
-}
-
 // --- Backfill sheet Submission IDs (legacy rows pre-2026-05-07) ----------
 
 export interface BackfillSheetIdProvider {
