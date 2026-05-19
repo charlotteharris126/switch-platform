@@ -11,31 +11,79 @@ export interface FireProviderChaserResult {
   perId: Array<{ submissionId: number; status: string; reason: string | null }>;
 }
 
-// Bulk-fire the SF2 "Provider tried no answer" Brevo chaser for the
-// selected submission ids. The SQL function audits the chaser-fire intent
-// and async-invokes admin-brevo-chase via pg_net; the Edge Function calls
-// sendTransactional which writes the canonical crm.email_log row (single
-// source of truth post-migration 0086, Phase 4 closeout). The user gets
-// back the per-id resolution (ok / skipped) immediately for UI feedback.
+// Bulk-fire the "tried no answer" Brevo chaser for the selected submission
+// ids. Dispatches by lead_type so each lead routes to its own SQL function
+// + Edge Function pair:
+//   - learner               → fire_provider_chaser → admin-brevo-chase
+//                              (SF2 list-add + chaser_funded/chaser_self
+//                              template)
+//   - employer_apprenticeship → fire_employer_chaser → admin-brevo-chase-employer
+//                              (transactional only, s4b_employer_chaser
+//                              template, no list-add)
+// Each SQL function audits the chaser-fire intent and async-invokes its
+// Edge Function via pg_net; the Edge Function calls sendTransactional
+// which writes the canonical crm.email_log row (single source of truth
+// post-migration 0086, Phase 4 closeout). Pre-2026-05-19 this function
+// only called fire_provider_chaser, which silently swallowed employer
+// leads at the Edge Function step (skipped on !funding_category) while
+// still reporting status='ok' — sub #496 was the bug that surfaced this.
 export async function fireProviderChaser(
   submissionIds: number[],
 ): Promise<FireProviderChaserResult> {
-  const supabase = await createClient();
-
-  const { data, error } = await supabase.schema("crm").rpc("fire_provider_chaser", {
-    p_submission_ids: submissionIds,
-  });
-
-  if (error) {
-    return {
-      ok: false,
-      fired: 0,
-      skipped: 0,
-      perId: [],
-    };
+  if (submissionIds.length === 0) {
+    return { ok: true, fired: 0, skipped: 0, perId: [] };
   }
 
-  const rows = (data as Array<{ submission_id: number; email: string | null; status: string; reason: string | null }>) ?? [];
+  const supabase = await createClient();
+
+  // Look up lead_type per submission so we can route each to the right
+  // chaser SQL function. Submissions missing a lead_type default to
+  // learner (matches the historical default + pre-S4B data shape).
+  const { data: leadTypeRows, error: lookupError } = await supabase
+    .schema("leads")
+    .from("submissions")
+    .select("id, lead_type")
+    .in("id", submissionIds);
+
+  if (lookupError) {
+    return { ok: false, fired: 0, skipped: 0, perId: [] };
+  }
+
+  const leadTypeById = new Map<number, string>();
+  for (const r of (leadTypeRows ?? []) as Array<{ id: number; lead_type: string | null }>) {
+    leadTypeById.set(r.id, r.lead_type ?? "learner");
+  }
+
+  const learnerIds: number[] = [];
+  const employerIds: number[] = [];
+  for (const id of submissionIds) {
+    const t = leadTypeById.get(id) ?? "learner";
+    if (t === "employer_apprenticeship") {
+      employerIds.push(id);
+    } else {
+      learnerIds.push(id);
+    }
+  }
+
+  type ChaserRow = { submission_id: number; email: string | null; status: string; reason: string | null };
+
+  const [learnerRes, employerRes] = await Promise.all([
+    learnerIds.length > 0
+      ? supabase.schema("crm").rpc("fire_provider_chaser", { p_submission_ids: learnerIds })
+      : Promise.resolve({ data: [] as ChaserRow[], error: null }),
+    employerIds.length > 0
+      ? supabase.schema("crm").rpc("fire_employer_chaser", { p_submission_ids: employerIds })
+      : Promise.resolve({ data: [] as ChaserRow[], error: null }),
+  ]);
+
+  if (learnerRes.error || employerRes.error) {
+    return { ok: false, fired: 0, skipped: 0, perId: [] };
+  }
+
+  const rows: ChaserRow[] = [
+    ...((learnerRes.data as ChaserRow[]) ?? []),
+    ...((employerRes.data as ChaserRow[]) ?? []),
+  ];
   const fired = rows.filter((r) => r.status === "ok").length;
   const skipped = rows.filter((r) => r.status === "skipped").length;
 
