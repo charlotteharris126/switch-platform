@@ -18,6 +18,7 @@ export function statusToSheetLabel(status: string): string {
   switch (status) {
     case "open":
       return "Open";
+    // Learner
     case "attempt_1_no_answer":
     case "attempt_2_no_answer":
     case "attempt_3_no_answer":
@@ -32,6 +33,17 @@ export function statusToSheetLabel(status: string): string {
       return "Lost";
     case "cannot_reach":
       return "Cannot reach";
+    // Employer (Switchable for Business v1)
+    case "engaged":
+      return "Engaged";
+    case "in_progress":
+      return "In progress";
+    case "signed":
+      return "Signed";
+    case "not_signed":
+      return "Not signed";
+    case "presumed_employer_signed":
+      return "Presumed signed";
     default:
       return status;
   }
@@ -63,13 +75,20 @@ export function sheetLabelToStatus(label: string | null | undefined): string | n
   const norm = String(label).trim().toLowerCase();
   if (norm === "") return null;
   switch (norm) {
+    // Learner
     case "open": return "open";
-    case "calling": return null; // ambiguous, skip
+    case "calling": return null; // ambiguous (3 attempt_X states), skip
     case "meeting booked": return "enrolment_meeting_booked";
     case "enrolled": return "enrolled";
     case "presumed enrolled": return "presumed_enrolled";
     case "lost": return "lost";
     case "cannot reach": return "cannot_reach";
+    // Employer (Switchable for Business v1)
+    case "engaged": return "engaged";
+    case "in progress": return "in_progress";
+    case "signed": return "signed";
+    case "not signed": return "not_signed";
+    case "presumed signed": return "presumed_employer_signed";
     default: return null;
   }
 }

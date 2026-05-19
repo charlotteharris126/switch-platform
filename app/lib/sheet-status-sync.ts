@@ -12,14 +12,26 @@
 //   and Jane / Andy see drift between portal and sheet.
 //
 // Design:
-//   - Sub-states (attempt_1/2/3_no_answer, learner enrolment_meeting_booked,
-//     employer in_progress) DO NOT push to the sheet. The sheet's Status
-//     column carries the HIGH-LEVEL state only — attempts live in the
-//     portal. While the lead is in attempt-phase the sheet shows "Open"
-//     and the portal carries the granular counter.
+//   - Every non-`open` portal status pushes a corresponding sheet label so
+//     the sheet's Status column tracks the portal in real time. Providers
+//     who still work in the sheet see the same granular state Charlotte /
+//     Freya see in the portal (Calling, Meeting booked, In progress, etc.).
+//   - `open` is the initial state set at routing and never re-pushed from
+//     here — the routing function writes it directly when the row first
+//     lands on the sheet, and there's no portal action that transitions
+//     anything back to open.
+//   - Before 2026-05-19 sub-states (attempt_*, enrolment_meeting_booked,
+//     in_progress) were deliberately NOT pushed, on the theory that the
+//     sheet carried the high-level state only. The daily reconcile cron's
+//     projection (statusToSheetLabel in _shared/sheet-status.ts) disagreed
+//     with that — it projected DB through to Calling / Meeting booked and
+//     flagged the gap as drift on every attempt click. Aligning both
+//     directions stops the loop. Drop-down on each provider sheet was
+//     extended on 2026-05-19 to accept the new labels.
 //   - Major transitions (cannot_reach, enrolled, presumed_enrolled, lost,
-//     engaged, signed, not_signed, presumed_employer_signed) push to the
-//     sheet via the provider's sheet_webhook_url with mode='update_by_submission_id'.
+//     engaged, signed, not_signed, presumed_employer_signed) push the
+//     same way via the provider's sheet_webhook_url with
+//     mode='update_by_submission_id'.
 //   - Best-effort. A sheet-side failure logs to console but doesn't roll
 //     back the DB status change. Daily reconcile cron is the safety net.
 
@@ -27,23 +39,23 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { LeadStatus } from "@/lib/lead-status";
 
 // Maps portal status → sheet Status cell label. NULL means "don't push"
-// (sub-state, sheet stays at its current high-level value).
+// (only `open` is null — set once at routing, never re-pushed from here).
 const STATUS_TO_SHEET_LABEL: Record<LeadStatus, string | null> = {
-  // Learner sub-states
+  // Routing-set, never re-pushed from portal
   open: null,
-  attempt_1_no_answer: null,
-  attempt_2_no_answer: null,
-  attempt_3_no_answer: null,
-  enrolment_meeting_booked: null,  // sub-state for learner sheets
+  // Learner sub-states
+  attempt_1_no_answer: "Calling",
+  attempt_2_no_answer: "Calling",
+  attempt_3_no_answer: "Calling",
+  enrolment_meeting_booked: "Meeting booked",
   // Learner terminal / major
   enrolled: "Enrolled",
   presumed_enrolled: "Presumed enrolled",
   lost: "Lost",
   cannot_reach: "Cannot reach",
-  // Employer sub-states
-  in_progress: null,                // sub-state — sheet stays at Engaged
-  // Employer major
+  // Employer states
   engaged: "Engaged",
+  in_progress: "In progress",
   signed: "Signed",
   not_signed: "Not signed",
   presumed_employer_signed: "Presumed signed",
