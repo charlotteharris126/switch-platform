@@ -704,27 +704,20 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
 // (admin-brevo-resync reports per-id status; route-lead's auto/owner paths
 // ignore it because routing is already committed and Brevo is best-effort).
 // Failure also logs a leads.dead_letter row regardless of caller behaviour.
-export async function upsertLearnerInBrevo(
+// Pure attribute builder for the matched-path Brevo upsert. Used by:
+//   1. upsertLearnerInBrevo, the canonical write path
+//   2. brevo-attribute-reconcile, the per-attribute drift reconciler
+// Same shape on both sides so the reconciler's projection is the same set
+// of values that the live upsert would produce. Any future field added to
+// the matched attributes goes here and both call sites pick it up.
+export async function buildLearnerBrevoAttributes(
   sql: Sql,
   provider: ProviderRow,
   submission: SubmissionRow,
-): Promise<{ ok: boolean; error?: string }> {
-  if (!submission.email) return { ok: false, error: "submission has no email" };
-
-  // Both list IDs are optional. Utility list-add is legacy post the 2026-05-07
-  // transactional cutover (utility emails fire via Brevo Transactional API,
-  // not list automations); the env var stays during the 90-day retention
-  // window (~delete 2026-08-06) so existing membership doesn't drift before
-  // the list is deleted. Marketing list-add is consent-gated by
-  // submission.marketing_opt_in. If both env vars are unset, the contact
-  // upsert still fires (attributes + channel state) but with no list
-  // membership change — Brevo handles empty listIds.
-  const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
-  const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
-
+): Promise<BrevoAttributes> {
   const ctx = await composeBrevoCourseContext(submission);
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
-  const agg = await loadEmailAggregateState(sql, submission.email);
+  const agg = await loadEmailAggregateState(sql, submission.email ?? "");
 
   // SW_ENROL_STATUS reads crm.enrolments.status for this (submission, provider)
   // pair. LEFT JOIN-equivalent: if no row (race condition on resync paths
@@ -758,7 +751,7 @@ export async function upsertLearnerInBrevo(
   // SW_ prefix so it doesn't collide with future SwitchLeads SL_-prefixed
   // attributes on the same Brevo contact (one email = one Brevo contact
   // across both brands). Decision 2026-04-29.
-  const attributes: BrevoAttributes = {
+  return {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
     SW_COURSE_NAME: ctx.courseTitle,
@@ -813,6 +806,27 @@ export async function upsertLearnerInBrevo(
     SW_PROVIDER_PHONE: contactValues.phone,
     SW_PROVIDER_CONTACT_AFTER: contactValues.after,
   };
+}
+
+export async function upsertLearnerInBrevo(
+  sql: Sql,
+  provider: ProviderRow,
+  submission: SubmissionRow,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!submission.email) return { ok: false, error: "submission has no email" };
+
+  // Both list IDs are optional. Utility list-add is legacy post the 2026-05-07
+  // transactional cutover (utility emails fire via Brevo Transactional API,
+  // not list automations); the env var stays during the 90-day retention
+  // window (~delete 2026-08-06) so existing membership doesn't drift before
+  // the list is deleted. Marketing list-add is consent-gated by
+  // submission.marketing_opt_in. If both env vars are unset, the contact
+  // upsert still fires (attributes + channel state) but with no list
+  // membership change — Brevo handles empty listIds.
+  const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
+  const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
+
+  const attributes = await buildLearnerBrevoAttributes(sql, provider, submission);
 
   // One upsert call adds the contact to both lists atomically. Previously
   // this was a two-call sequence (upsert + addContactToList) which raced
@@ -986,44 +1000,39 @@ async function sendU1Transactional(
 // Same best-effort posture as the matched helper: failure logs to
 // leads.dead_letter and returns. The submission is already committed by the
 // caller, so Brevo failure doesn't unwind anything.
-export async function upsertLearnerInBrevoNoMatch(
+// Same column list as fetchSubmission inside routeLead so the helpers stay
+// aligned. Exposed so the Brevo reconciler can pull a submission row once
+// and feed both build helpers without duplicating the SELECT.
+export const SUBMISSION_FULL_COLUMNS = `id, submitted_at, course_id, funding_category, funding_route,
+       first_name, last_name, email, phone,
+       la, region_scheme, age_band, employment_status,
+       prior_level_3_or_higher, can_start_on_intake_date,
+       outcome_interest, why_this_course,
+       postcode, region, reason, interest, situation,
+       qualification, start_when, budget, courses_selected,
+       is_dq, dq_reason, primary_routed_to, archived_at,
+       marketing_opt_in,
+       preferred_intake_id, acceptable_intake_ids,
+       referral_code, client_nonce,
+       start_timing, interest_breadth, investment_willingness,
+       current_qualification, source_form, enriched_at,
+       fastracked_at`;
+
+// Pure attribute builder for the no_match / pending paths. Same role as
+// buildLearnerBrevoAttributes for the matched path — used by both the
+// canonical upsertLearnerInBrevoNoMatch write path and the per-attribute
+// drift reconciler so the projection sees the same shape the upsert would
+// produce.
+export async function buildLearnerBrevoAttributesNoMatch(
   sql: Sql,
-  submissionId: number,
+  submission: SubmissionRow,
   matchStatus: "no_match" | "pending",
-): Promise<{ ok: boolean; error?: string }> {
-  const [submission] = await sql<SubmissionRow[]>`
-    SELECT id, submitted_at, course_id, funding_category, funding_route,
-           first_name, last_name, email, phone,
-           la, region_scheme, age_band, employment_status,
-           prior_level_3_or_higher, can_start_on_intake_date,
-           outcome_interest, why_this_course,
-           postcode, region, reason, interest, situation,
-           qualification, start_when, budget, courses_selected,
-           is_dq, dq_reason, primary_routed_to, archived_at,
-           marketing_opt_in,
-           preferred_intake_id, acceptable_intake_ids,
-           referral_code,
-           start_timing, interest_breadth, investment_willingness,
-           current_qualification, source_form, enriched_at,
-           fastracked_at
-      FROM leads.submissions
-     WHERE id = ${submissionId}
-     LIMIT 1
-  `;
-  if (!submission) return { ok: false, error: "submission not found" };
-  if (submission.archived_at) return { ok: false, error: "submission archived" };
-  if (!submission.email) return { ok: false, error: "submission has no email" };
-
-  // Both list IDs optional — see upsertLearnerInBrevo for the post-cutover
-  // rationale (utility list-add is legacy, kept during 90-day retention).
-  const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
-  const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
-
+): Promise<BrevoAttributes> {
   const ctx = await composeBrevoCourseContext(submission);
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
-  const agg = await loadEmailAggregateState(sql, submission.email);
+  const agg = await loadEmailAggregateState(sql, submission.email ?? "");
 
-  const attributes: BrevoAttributes = {
+  return {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
     SW_COURSE_NAME: ctx.courseTitle,
@@ -1069,6 +1078,42 @@ export async function upsertLearnerInBrevoNoMatch(
     SW_PROVIDER_PHONE: "",
     SW_PROVIDER_CONTACT_AFTER: "",
   };
+}
+
+export async function upsertLearnerInBrevoNoMatch(
+  sql: Sql,
+  submissionId: number,
+  matchStatus: "no_match" | "pending",
+): Promise<{ ok: boolean; error?: string }> {
+  const [submission] = await sql<SubmissionRow[]>`
+    SELECT id, submitted_at, course_id, funding_category, funding_route,
+           first_name, last_name, email, phone,
+           la, region_scheme, age_band, employment_status,
+           prior_level_3_or_higher, can_start_on_intake_date,
+           outcome_interest, why_this_course,
+           postcode, region, reason, interest, situation,
+           qualification, start_when, budget, courses_selected,
+           is_dq, dq_reason, primary_routed_to, archived_at,
+           marketing_opt_in,
+           preferred_intake_id, acceptable_intake_ids,
+           referral_code,
+           start_timing, interest_breadth, investment_willingness,
+           current_qualification, source_form, enriched_at,
+           fastracked_at
+      FROM leads.submissions
+     WHERE id = ${submissionId}
+     LIMIT 1
+  `;
+  if (!submission) return { ok: false, error: "submission not found" };
+  if (submission.archived_at) return { ok: false, error: "submission archived" };
+  if (!submission.email) return { ok: false, error: "submission has no email" };
+
+  // Both list IDs optional — see upsertLearnerInBrevo for the post-cutover
+  // rationale (utility list-add is legacy, kept during 90-day retention).
+  const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
+  const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
+
+  const attributes = await buildLearnerBrevoAttributesNoMatch(sql, submission, matchStatus);
 
   const listIds: number[] = [];
   if (utilityListId != null) listIds.push(utilityListId);

@@ -17,11 +17,8 @@ import { ResolveButton } from "./resolve-button";
 import { BulkResolveButton } from "./bulk-resolve";
 import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
 import { ReconcileNetlifyPanel } from "./reconcile-netlify-panel";
+import { ReconcileBrevoPanel } from "./reconcile-brevo-panel";
 import { ClearClaudeFlagsButton } from "./clear-claude-flags-button";
-// Data ops panels moved here from /admin/data-ops in the consolidation
-// pass — single page for any data-layer attention. Old /data-ops route
-// redirects here.
-import { Run024Panel } from "../data-ops/run-024-panel";
 import { GdprEraseLearnerPanel } from "./gdpr-erase-learner-panel";
 
 interface DeadLetterRow {
@@ -529,33 +526,23 @@ export default async function ErrorsPage({
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-[#5a6a72] leading-relaxed">
-              Pushes each learner&apos;s personal referral link and fastrack
-              link to their Brevo contact record so email broadcasts render
-              the right URL per learner. Brevo&apos;s side can&apos;t be
-              cheaply checked from the platform, so this panel always
-              shows — run dry-run any time the URL builder changes
-              (anything in
-              {" "}<code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">_shared/route-lead.ts</code>
-              {" "}touching <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildReferralUrl</code>
-              {" "}or <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildFastrackUrl</code>),
-              or if a broadcast was sent and you&apos;re unsure whether
-              contacts had the latest URLs.
+              Walks every Brevo contact, projects each contact&apos;s most-recent
+              submission through the canonical{" "}
+              <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">upsertLearnerInBrevo</code>{" "}
+              builder, and reports per-attribute drift — every SW_* attribute,
+              not just the referral/fastrack URLs the 024 panel covered.
             </p>
             <p className="text-xs text-[#5a6a72] leading-relaxed">
-              The dry-run number you see in &ldquo;Would mutate&rdquo; is
-              the count of contacts whose Brevo record disagrees with the
-              current builder output — that&apos;s the drift. Apply to
-              push the fresh URLs.
+              Run dry-run any time the attribute composition changes (anything
+              in <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">_shared/route-lead.ts</code>{" "}
+              touching <code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildLearnerBrevoAttributes</code>{" "}
+              /{" "}<code className="text-[11px] bg-[#f4f1ed] px-1 py-0.5 rounded">buildLearnerBrevoAttributesNoMatch</code>),
+              before a broadcast that references an SW_* attribute,
+              or after a matrix.json / provider trust-line / regional-contacts
+              change. Apply re-fires the canonical upsert for every drifted
+              contact (same code path that runs on live submission insert).
             </p>
-            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-              <strong>Coverage today:</strong> SW_REFERRAL_URL +
-              SW_FASTRACK_URL only. Broader Brevo attribute reconciler
-              (every SW_* attribute) is queued for next platform session.
-            </p>
-            <p className="text-[11px] text-[#5a6a72] italic">
-              Last applied: 2026-05-11 (174 audience / 160 mutated / 0 errors).
-            </p>
-            <Run024Panel />
+            <ReconcileBrevoPanel />
           </CardContent>
         </Card>
 

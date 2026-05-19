@@ -4,6 +4,44 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-19 (Session 54) — DB ↔ Brevo full SW_* attribute reconciler
+
+S53 left the DB ↔ Brevo card scoped to SW_REFERRAL_URL + SW_FASTRACK_URL (the 024 backfill panel). This session replaces it with a per-attribute reconciler that covers every SW_* attribute the canonical upsert helpers produce.
+
+**Pure-builder refactor on `_shared/route-lead.ts`.** Two new exports:
+- `buildLearnerBrevoAttributes(sql, provider, submission)` — extracted from `upsertLearnerInBrevo`. Returns the matched-path attribute dict without writing.
+- `buildLearnerBrevoAttributesNoMatch(sql, submission, matchStatus)` — extracted from `upsertLearnerInBrevoNoMatch`. Returns the no_match/pending attribute dict without writing.
+
+Both existing upsert functions now call the new builders internally. **No behaviour change** — same attributes pushed to Brevo by the live path. The extraction exists so the reconciler can project DB → desired-attrs using the same code path as the canonical upsert.
+
+**New Edge Function: `brevo-attribute-reconcile`.** Forked from `backfill-referral-fastrack-urls` (the 024 function). Walks Brevo's contact list, looks up each contact's most-recent non-archived submission by email, determines path (matched / no_match / pending) via the same logic admin-brevo-resync uses, projects through the new builder, diffs per attribute. Returns:
+- `per_attribute_drift: Record<string, number>` — count per attribute.
+- `drift_list` — up to 50 drifting contacts with their drifted attr names.
+- Standard `audience_size / processed / contacts_with_drift / contacts_aligned / skipped_no_submission / skipped_no_email` counts.
+
+Apply mode re-fires the canonical `upsertLearnerInBrevo` / `upsertLearnerInBrevoNoMatch` for every drifted contact (not just the first 50 sample) with 250ms throttling.
+
+**Schema-versioning note.** No DB schema change. New Edge Function. Pure refactor on shared module. No version bump needed.
+
+**UI.** New `app/app/admin/errors/reconcile-brevo-panel.tsx` mirroring the sheet + netlify panel shape. DB ↔ Brevo card on `/admin/errors` now hosts the new panel — the legacy `Run024Panel` import + the "Coverage today" amber note are dropped.
+
+**Server action.** `brevoAttributeReconcileAction({ apply })` in `reconcile-actions.ts`. Same `callEdgeFunction` plumbing.
+
+**Touched files.**
+- `platform/supabase/functions/_shared/route-lead.ts` — extracted `buildLearnerBrevoAttributes` + `buildLearnerBrevoAttributesNoMatch`; existing upsert helpers thinned to call them.
+- `platform/supabase/functions/brevo-attribute-reconcile/index.ts` — new function.
+- `platform/app/app/admin/errors/reconcile-actions.ts` — new `brevoAttributeReconcileAction` + types.
+- `platform/app/app/admin/errors/reconcile-brevo-panel.tsx` — new client component.
+- `platform/app/app/admin/errors/page.tsx` — DB ↔ Brevo card now renders the new panel; `Run024Panel` import removed.
+
+**Verification.** TypeScript clean (`tsc --noEmit`), Deno clean on the new function (`deno check`), eslint clean on the three changed/new files. The two pre-existing `route-lead.ts` Deno errors (lines 1393 + 1547, present on `main`) are untouched. Three pre-existing `Date.now()` purity warnings in `page.tsx` remain. Edge Function deploy pending owner confirm.
+
+**Legacy paths.** `backfill-referral-fastrack-urls` Edge Function + `data-ops/run-024-panel.tsx` are now unused but stay deployed. Cleanup goes onto the next session's "delete orphaned 025 surfaces" pass.
+
+**Next from S53 plan (still queued).** Daily drift digest consolidated email cron; delete orphaned 024 + 025 surfaces (panels + RPC + Edge Functions).
+
+---
+
 ## 2026-05-19 (Session 54) — Netlify ↔ DB reconciler card lands on /admin/errors
 
 S53 left a "Not built yet" placeholder for the fourth reconciliations card. This session replaces it with a working dry-run + back-fill panel.

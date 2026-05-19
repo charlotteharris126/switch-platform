@@ -135,7 +135,51 @@ export async function netlifyReconcileAction(args: {
 }
 
 // =============================================================================
-// GDPR right-to-erasure
+// DB ↔ Brevo (full SW_* attribute reconcile)
+// =============================================================================
+//
+// Successor to the 024 `runNonceBackfillAction` panel. Walks Brevo's contact
+// list, projects each contact's submission through the canonical
+// upsertLearnerInBrevo / upsertLearnerInBrevoNoMatch builders, and reports
+// per-attribute drift. Apply re-fires the canonical upsert for every
+// drifted contact.
+
+export interface BrevoDriftEntry {
+  email: string;
+  submission_id: number;
+  mode: "matched" | "no_match" | "pending";
+  drifted_attrs: string[];
+}
+
+export interface BrevoReconcileSummary {
+  ok: true;
+  mode: "dry_run" | "apply";
+  audience_size: number;
+  processed: number;
+  contacts_with_drift: number;
+  contacts_aligned: number;
+  skipped_no_submission: number;
+  skipped_no_email: number;
+  per_attribute_drift: Record<string, number>;
+  drift_list: BrevoDriftEntry[];
+  applied_count: number;
+  errors: number;
+  error_messages: string[];
+  ran_at: string;
+}
+
+export type BrevoReconcileResult = BrevoReconcileSummary | { ok: false; error: string };
+
+export async function brevoAttributeReconcileAction(args: {
+  apply: boolean;
+}): Promise<BrevoReconcileResult> {
+  return callEdgeFunction("brevo-attribute-reconcile", {
+    apply: args.apply,
+  }) as Promise<BrevoReconcileResult>;
+}
+
+// =============================================================================
+// Netlify ↔ DB reconcile
 // =============================================================================
 
 export interface ErasureSheetEntry {
