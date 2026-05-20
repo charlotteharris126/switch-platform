@@ -4,6 +4,24 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-20 (Session 55) — Experiment_id random backfill (24 rows)
+
+Mable shipped the site-side fix (switchable/site commit `574b2c5`) for the funded-course DQ panel forms missing `experiment_id` / `experiment_variant` hidden inputs. New submissions land with metadata. Historical rows stay NULL until this backfill.
+
+**Why random fill** (option 2 from Mable's push): exact attribution is impossible. `ads_switchable.page_views` has no `session_id` (aggregate by design, migration 0068). The variant-router sets a browser cookie that's never recorded against the submission. Live view splits were 1805/1780 + 1653/1695 — within 0.5% of 50/50, so random fill is statistically valid for aggregate DQ% comparison.
+
+**Scope** (Mable's "out of scope" rule respected — pre-experiment-start rows left alone):
+- `counselling-tees-hero-variant-2026-05`: 13 rows (1 qualified + 12 DQ) from 2026-05-04 BST onwards.
+- `smm-tees-hero-variant-2026-05`: 11 rows (all DQ) from 2026-05-06 BST onwards.
+
+**Audit**: data-ops 045 writes a `system:data-ops:045 / experiment_id_random_backfill` row to `audit.actions` with per-experiment totals and `attribution_is_exact=false`. Visible in `/admin/audit`. Mira's Monday audit will pick it up.
+
+**Not row-attributable**: individual rows can't be traced to their actual variant. Aggregate DQ% comparison on `/admin/experiments` is valid. If a future view of `/admin/leads` filters by `experiment_variant`, expect ~24 historical rows whose assignment is synthetic.
+
+**Deferred polish**: small banner on `/admin/experiments` showing "24 historical rows backfilled 50/50 on 2026-05-20" (read from audit.actions). Not built — trail lives in changelog + audit row for now.
+
+---
+
 ## 2026-05-20 (Session 55) — /admin/actions reshaped for an auto-chase world
 
 Charlotte: "esp now we auto chase, this page isn't helpful". Three of the six existing sections were duplicating cron work (Approaching 14-day auto-flip, Needs another chase, Cannot reach no chaser sent). Dropped them. Replaced with provider-pattern cards she actually needs to action.
