@@ -4,6 +4,40 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-20 (Session 55) — Archive demo providers + Charlotte as per-provider admin
+
+Charlotte switching off demo accounts and standing up per-provider admin accounts on real providers. Decision: per-provider rather than impersonation, because impersonation needs auth-gate branching + RLS fanout + audit + view-as banner and pays off at 10+ providers, not 4.
+
+**Demo providers archived.** Data-ops 042 archives `demo-b2c`, `demo-b2b`, `demo-provider-ltd` (sets `active=false`, `archived_at=now()`) and suspends their 5 provider_users rows. Hard delete blocked by FK ON DELETE RESTRICT on demo-provider-ltd's 13 routing_log + 13 enrolments + 13 submissions rows; archive across the board for consistency + audit preservation.
+
+**Charlotte's portal accounts.** Self-invite via the existing `/admin/providers/[id]/` UI for the two real portal-enabled providers (EMS + Riverside). One passkey per provider in iCloud Keychain. Email aliases: `hello+ems@switchleads.co.uk`, `hello+riverside@switchleads.co.uk`. Display name `Charlotte (admin)`, role `provider_admin`.
+
+**Courses Direct + WYK Digital left sheet-only** (paused, `portal_enabled=false`). Re-enable when they un-pause.
+
+---
+
+## 2026-05-20 (Session 55) — Per-user LA scoping of provider notifications
+
+EMS hired three regional managers (George Taylor, Jake Balfour, Nick Rodgers) plus a catch-all account manager (Daniel Mearns). Today new-lead emails go only to Andy at provider-record level; callback-note emails fan out to every active `crm.provider_users` row indiscriminately. Charlotte's call: scope by LA so each manager only gets the leads they own.
+
+**Schema (migration 0154).** `crm.provider_users.notification_las TEXT[]` — NULL or empty = catch-all (every notification, regardless of `submission.la`). Non-empty = include only when `submission.la = ANY(notification_las)`. Slugs match the LA values produced by the funded form (e.g. `'stockton-on-tees'`). Seed values inline: George → Stockton + Hartlepool, Jake → Middlesbrough + Darlington, Nick → Redcar. Andy + Daniel left NULL.
+
+**Recipient pattern (now unified across both notification paths).**
+- New-lead emails (`_shared/route-lead.ts sendProviderNotification`): TO = `provider.contact_email` (Andy). CC = owner (Charlotte from `getOwnerEmail()`) + `provider.cc_emails` + every active `crm.provider_users` row whose `notification_las` matches the lead's LA (NULL = always match). Deduped against TO.
+- Callback-note emails (`admin-notify-callback`): TO = the matched `crm.provider_users` recipients (multi-recipient; team sees each other on the thread). CC = owner + `provider.cc_emails`. Deduped against TO.
+
+**Owner CC on callbacks.** Charlotte was previously not CC'd on callback-note emails. Now she is, matching the new-lead behaviour.
+
+**Greeting change.** `Hi ${provider.contact_name ?? "there"}` → `Hello,` in both `sendProviderNotification` templates (new-enquiry + re-application). Andy's name was being rendered to the whole CC list; "Hello," works for everyone.
+
+**Shared helper.** `fetchAreaScopedProviderUsers(sql, providerId, la)` and `buildCcList(...)` exported from `_shared/route-lead.ts` for both notification paths to share. Single source of truth for the LA-scoping query — no per-function copies to drift apart.
+
+**Andy's portal status.** He's still `invited` (passkey never enrolled). Callback emails skip him (status='active' filter). New-lead emails still reach him via `provider.contact_email`. Charlotte's decision 2026-05-20: leave as-is — he doesn't call leads anyway.
+
+**Impact.** Touched: `platform/supabase/migrations/0154_provider_users_notification_las.sql`, `platform/supabase/functions/_shared/route-lead.ts`, `platform/supabase/functions/admin-notify-callback/index.ts`, `platform/docs/data-architecture.md` (new `crm.provider_users` section). Migration not yet applied — owner runs in Supabase SQL editor. No portal UI for self-edit; DB-only for now per Charlotte 2026-05-20.
+
+---
+
 ## 2026-05-19 (Session 54) — Sheet pill bug fix (dedup-aware window)
 
 Caught by Charlotte right after the pills shipped: the Sheet ↔ DB pill could falsely flip to "Aligned" on day 3 of standing drift.

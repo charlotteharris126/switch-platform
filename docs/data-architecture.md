@@ -935,6 +935,14 @@ CREATE INDEX consent_history_field_changed_at_idx  ON crm.consent_history (field
 
 Append-only by RLS: `functions_writer` has INSERT only, no UPDATE or DELETE. Erasure flow (GDPR Article 17) anonymises `contact_email` in-place rather than deleting rows, preserving the audit trail with PII removed.
 
+### `crm.provider_users` (migration 0094 onward)
+
+The Supabase Auth ↔ provider mapping that powers the provider portal. One row per (auth user, provider) pair. Also the canonical recipient list for provider-facing notification emails (new-lead routing emails from `_shared/route-lead.ts` and callback-note emails from `admin-notify-callback`).
+
+Authoritative migration list: 0094 (base table), 0102 (invited status + invite-token state), 0103 (auth_user_id nullable), 0128 (per-user SLA accepted columns added on `crm.providers`), 0141 (welcome_completed_at), 0144 (sla_accepted_at + sla_accepted_version on this table), 0154 (notification_las).
+
+Notification routing: `notification_las TEXT[]` (migration 0154) carries the user's LA scope. NULL or empty = catch-all, receive every notification for the provider. Non-empty = receive only when the lead's `la` is in the array. Slugs match `leads.submissions.la` values (e.g. `'stockton-on-tees'`). Used identically by `sendProviderNotification` (new leads) and `admin-notify-callback` (callback notes). EMS seed values (Session 55): George Taylor → Stockton-on-Tees + Hartlepool; Jake Balfour → Middlesbrough + Darlington; Nick Rodgers → Redcar-and-Cleveland. Andy Fay + Daniel Mearns left NULL (catch-all). Andy is `status='invited'` so callback emails skip him; new-lead emails still reach him via `crm.providers.contact_email`.
+
 ---
 
 ## Schema: `social`

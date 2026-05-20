@@ -124,7 +124,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
   if (!provider) return json({ error: "routed provider not found" }, 404);
 
-  const result = await sendProviderNotification(provider, submission, "auto_route");
+  const result = await sendProviderNotification(sql, provider, submission, "auto_route");
   if (!result.ok) {
     return json({ ok: false, error: result.error }, 500);
   }

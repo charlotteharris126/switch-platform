@@ -1,9 +1,16 @@
 // Edge Function: admin-notify-callback
 //
 // Fired by the admin Server Action that raises a callback flag on a lead.
-// Looks up all active provider_users for the lead's provider and sends each
-// of them a "Lead update from Switchable" email containing the admin's note
-// + a deep link to the lead detail in the portal.
+//
+// Recipient model (mirrors _shared/route-lead.ts sendProviderNotification):
+//   TO:  every active crm.provider_users row for the provider whose
+//        notification_las matches the lead's la (NULL/empty = catch-all,
+//        always matches). One email, multiple TO recipients — team
+//        members see each other on the thread.
+//   CC:  the owner (Charlotte) + provider.cc_emails. Deduped against TO.
+//
+// Each recipient gets one email containing the admin's note + a deep
+// link to the lead detail in the portal.
 //
 // Architecture: Brevo creds (BREVO_API_KEY, BREVO_SENDER_EMAIL_SWITCHABLE)
 // already live in Edge Function env, so the Next.js Server Action POSTs
@@ -21,17 +28,13 @@
 //   }
 //
 // Response shape:
-//   { "ok": true, "sent": 1, "skipped": 0 }
+//   { "ok": true, "sent": 1, "to": 1, "cc": 2 }
 //   { "ok": false, "error": "..." }
-//
-// Skipping is per-recipient (e.g. one of two provider_users has no email).
-// Per-recipient failures land as console.error here AND are reflected in
-// the response.skipped count, but the function still returns ok:true if at
-// least one recipient succeeded. Caller (Server Action) surfaces the
-// counts to the admin UI if useful.
 
 import postgres from "npm:postgres@3";
 import { sendBrevoEmail } from "../_shared/brevo.ts";
+import { fetchAreaScopedProviderUsers, buildCcList } from "../_shared/route-lead.ts";
+import { getOwnerEmail } from "../_shared/owner-email.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -47,11 +50,6 @@ async function getAuditSharedSecret(): Promise<string> {
   const secret = rows[0]?.secret;
   if (!secret) throw new Error("AUDIT_SHARED_SECRET not in vault");
   return secret;
-}
-
-interface ProviderUser {
-  contact_email: string;
-  display_name: string | null;
 }
 
 interface RequestBody {
@@ -95,61 +93,78 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ error: "note_body must be non-empty" }, 400);
   }
 
-  // Look up active provider_users for the provider.
-  let recipients: ProviderUser[];
+  // Look up the lead's LA + the provider's cc_emails in one round-trip each.
+  let leadLa: string | null = null;
+  let providerCcEmails: string[] = [];
   try {
-    recipients = await sql<ProviderUser[]>`
-      SELECT contact_email, display_name
-        FROM crm.provider_users
-       WHERE provider_id = ${providerId}
-         AND status = 'active'
+    const [row] = await sql<Array<{ la: string | null }>>`
+      SELECT la FROM leads.submissions WHERE id = ${submissionId}
     `;
+    if (!row) return json({ error: `submission ${submissionId} not found` }, 404);
+    leadLa = row.la;
+
+    const [providerRow] = await sql<Array<{ cc_emails: string[] | null }>>`
+      SELECT cc_emails FROM crm.providers WHERE provider_id = ${providerId}
+    `;
+    providerCcEmails = providerRow?.cc_emails ?? [];
   } catch (err) {
-    console.error("provider_users lookup failed:", String(err));
-    return json({ error: "provider_users lookup failed" }, 500);
+    console.error("lead/provider lookup failed:", String(err));
+    return json({ error: "lead/provider lookup failed" }, 500);
   }
 
+  // Recipients: active provider_users matching the lead's LA (NULL/empty =
+  // catch-all). Single source of truth shared with sendProviderNotification.
+  const recipients = await fetchAreaScopedProviderUsers(sql, providerId, leadLa);
+
   if (recipients.length === 0) {
-    // No-op success: no active users to notify, but the flag still raised.
-    return json({ ok: true, sent: 0, skipped: 0, note: "no active provider_users" });
+    // No active users matched. Flag still raised; nothing to email.
+    return json({ ok: true, sent: 0, to: 0, cc: 0, note: "no matching provider_users" });
   }
+
+  const ownerEmail = getOwnerEmail() ?? undefined;
+  // buildCcList dedups CC against the TO addresses we pass via the
+  // first recipient. We build the full TO set separately and pass the
+  // first TO as the dedup anchor; remaining TO emails are added to the
+  // dedup set inline.
+  const toList = recipients;
+  const dedupAnchorTo = toList[0]?.email;
+  const ccList = buildCcList(ownerEmail, providerCcEmails, [], dedupAnchorTo);
+  // Manually dedup the rest of the TO list out of CC (buildCcList only
+  // knew about the first TO).
+  const toEmailsLower = new Set(toList.map((t) => t.email.trim().toLowerCase()));
+  const filteredCc = ccList.filter((c) => !toEmailsLower.has(c.email.trim().toLowerCase()));
 
   const portalUrl = `https://app.switchleads.co.uk/leads/${submissionId}`;
   const subject = `Lead #${submissionId} update from Switchable`;
   const html = composeHtml({ submissionId, noteBody, portalUrl });
 
-  let sent = 0;
-  let skipped = 0;
-  const errors: Array<{ email: string; error: string }> = [];
+  const result = await sendBrevoEmail({
+    brand: "switchable",
+    to: toList,
+    cc: filteredCc.length > 0 ? filteredCc : undefined,
+    subject,
+    htmlContent: html,
+    tags: ["admin-notify-callback"],
+  });
 
-  for (const r of recipients) {
-    if (!r.contact_email) {
-      skipped += 1;
-      continue;
-    }
-    const result = await sendBrevoEmail({
-      brand: "switchable",
-      to: [{ email: r.contact_email, name: r.display_name ?? r.contact_email }],
-      subject,
-      htmlContent: html,
-      tags: ["admin-notify-callback"],
+  if (!result.ok) {
+    console.error(
+      `Brevo send failed: ${result.error ?? "unknown"} (status ${result.status ?? "n/a"})`,
+    );
+    return json({
+      ok: false,
+      sent: 0,
+      to: toList.length,
+      cc: filteredCc.length,
+      error: result.error ?? "unknown",
     });
-    if (result.ok) {
-      sent += 1;
-    } else {
-      console.error(
-        `Brevo send failed for ${r.contact_email}: ${result.error ?? "unknown"} (status ${result.status ?? "n/a"})`,
-      );
-      errors.push({ email: r.contact_email, error: result.error ?? "unknown" });
-      skipped += 1;
-    }
   }
 
   return json({
-    ok: sent > 0 || recipients.length === 0,
-    sent,
-    skipped,
-    ...(errors.length > 0 ? { errors } : {}),
+    ok: true,
+    sent: 1,
+    to: toList.length,
+    cc: filteredCc.length,
   });
 });
 
@@ -162,7 +177,7 @@ function composeHtml(args: {
   return `
 <!doctype html>
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; line-height: 1.5; padding: 16px; max-width: 560px;">
-  <p>Hi,</p>
+  <p>Hello,</p>
   <p>Lead <strong>#${args.submissionId}</strong> has been in touch.</p>
   <div style="margin: 16px 0; padding: 14px 16px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px;">
     <p style="margin: 0 0 4px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #92400e;">Note from Switchable</p>

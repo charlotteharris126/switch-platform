@@ -310,7 +310,7 @@ export async function routeLead(
     }
   }
 
-  const emailResult = await sendProviderNotification(provider, submission, trigger, reApplicationContext);
+  const emailResult = await sendProviderNotification(sql, provider, submission, trigger, reApplicationContext);
   if (!emailResult.ok) {
     await persistDeadLetter(sql, "edge_function_provider_email",
       { provider_id: provider.provider_id, submission_id: submission.id },
@@ -1374,6 +1374,7 @@ async function pushToProviderCrm(
 // -------- Emails --------
 
 export async function sendProviderNotification(
+  sql: Sql,
   provider: ProviderRow,
   submission: SubmissionRow,
   trigger: RouteTrigger,
@@ -1390,7 +1391,8 @@ export async function sendProviderNotification(
     : null;
 
   const ownerEmail = getOwnerEmail();
-  const ccList = buildCcList(ownerEmail, provider.cc_emails);
+  const providerUserCcs = await fetchAreaScopedProviderUsers(sql, provider.provider_id, submission.la);
+  const ccList = buildCcList(ownerEmail, provider.cc_emails, providerUserCcs, provider.contact_email);
 
   // Action link block — portal as primary CTA when available, sheet
   // always rendered as a fallback link below it when present, so the
@@ -1410,7 +1412,7 @@ export async function sendProviderNotification(
       ? `<p>Open the lead in the portal — the re-application is logged in its history.</p>`
       : `<p>You'll see a new row at the bottom of your sheet with status <strong>Re-applied</strong>, referencing the original.</p>`;
     const html = `
-      <p>Hi ${provider.contact_name ?? "there"},</p>
+      <p>Hello,</p>
       <p>A previous enquiry (${reApplicationContext.parentLeadId}) has just resubmitted the form.</p>
       ${actionBlock}
       ${reAppContextLine}
@@ -1432,7 +1434,7 @@ export async function sendProviderNotification(
     ? `<p>The lead is at status <strong>open</strong>. Click through to see contact details, mark outcomes as you call, and add notes.</p>`
     : `<p>The lead has been added with status <strong>open</strong>. Please update the status and notes in your sheet as you work through the follow-up.</p>`;
   const html = `
-    <p>Hi ${provider.contact_name ?? "there"},</p>
+    <p>Hello,</p>
     <p>You have a new enquiry (${leadId}) ${portalLink ? "ready in your SwitchLeads portal" : "in your SwitchLeads sheet"}.</p>
     ${actionBlock}
     ${enquiryContextLine}
@@ -1447,6 +1449,39 @@ export async function sendProviderNotification(
     brand: "switchleads_leads",
     tags: ["route-lead", "provider-notification"],
   });
+}
+
+// Fetch provider_users CC recipients for a given (provider, lead-LA) pair.
+// Active users only. notification_las NULL or empty = catch-all (always
+// included). Non-empty = included only when submission.la is in the array.
+// la=null on the submission falls back to catch-all matches only.
+//
+// Used by sendProviderNotification (new leads) and admin-notify-callback
+// (callback notes) — same query, single source of truth for area routing.
+export async function fetchAreaScopedProviderUsers(
+  sql: Sql,
+  providerId: string,
+  la: string | null,
+): Promise<Array<{ email: string; name?: string }>> {
+  try {
+    const rows = await sql<Array<{ contact_email: string; display_name: string | null }>>`
+      SELECT contact_email, display_name
+        FROM crm.provider_users
+       WHERE provider_id = ${providerId}
+         AND status      = 'active'
+         AND (
+           notification_las IS NULL
+           OR cardinality(notification_las) = 0
+           OR ${la}::text = ANY(notification_las)
+         )
+    `;
+    return rows.map((r) => r.display_name
+      ? { email: r.contact_email, name: r.display_name }
+      : { email: r.contact_email });
+  } catch (err) {
+    console.error("fetchAreaScopedProviderUsers failed:", err);
+    return [];
+  }
 }
 
 async function sendOwnerSheetFailureEmail(
@@ -1515,11 +1550,20 @@ async function sendOwnerSheetFailureEmail(
 
 // -------- Helpers --------
 
-function buildCcList(
-  ownerEmail: string | undefined,
+// Build the CC list, deduplicated against the TO address (if supplied)
+// and against duplicate emails within CC. Order of preference:
+//   1. Owner (Charlotte)
+//   2. provider.cc_emails (free-form per-provider catch-all CCs)
+//   3. provider_users matching the lead's LA scope (from fetchAreaScoped…)
+// Returning [] is safe — sendBrevoEmail will omit the cc field.
+export function buildCcList(
+  ownerEmail: string | null | undefined,
   providerCcEmails: string[] | null,
+  providerUserCcs: Array<{ email: string; name?: string }> = [],
+  toEmail?: string,
 ): Array<{ email: string; name?: string }> {
   const seen = new Set<string>();
+  if (toEmail) seen.add(toEmail.trim().toLowerCase());
   const result: Array<{ email: string; name?: string }> = [];
   const add = (email: string | null | undefined, name?: string) => {
     if (!email) return;
@@ -1530,6 +1574,7 @@ function buildCcList(
   };
   add(ownerEmail, "Charlotte");
   for (const cc of providerCcEmails ?? []) add(cc);
+  for (const cc of providerUserCcs) add(cc.email, cc.name);
   return result;
 }
 

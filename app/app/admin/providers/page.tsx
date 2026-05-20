@@ -60,6 +60,7 @@ export default async function ProvidersPage() {
       .from("providers")
       .select("provider_id,company_name")
       .eq("is_demo", true)
+      .is("archived_at", null)
       .order("company_name"),
   ]);
 
