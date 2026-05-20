@@ -2,60 +2,71 @@
 
 ## Current state
 
-EMS provider notification routing now scopes by LA per user. New per-user column `notification_las` on `crm.provider_users` carries the LA slug array; new-lead emails (`_shared/route-lead.ts`) and callback-note emails (`admin-notify-callback`) both honour it. Demo providers archived and excluded from the admin demo strip. Courses Direct + WYK Digital flipped to `active=false` to actually block routing while staying visible on the admin list.
+Big session — six discrete shipments. EMS provider notification routing now scopes by LA per user. Demo providers archived; Courses Direct + WYK Digital paused (active=false, still visible). Charlotte set up as `provider_admin` on EMS + Riverside via her own portal accounts. Employer routing now writes `audit.actions` rows in shape parity with the funded flow; 30 historical Riverside routings backfilled. Experiments page enrolment status buckets fixed to use the full migration-0151 enum, and 24 historical NULL `experiment_id` rows backfilled via 50/50 random so the page is now readable. `/admin/actions` rebuilt for an auto-chase world — three cron-handled sections out, four useful sections in.
 
 ## What was done this session
 
 - **Migration 0154 — `notification_las TEXT[]` on `crm.provider_users`.** NULL/empty = catch-all, non-empty = scoped. Seed: George Taylor → Stockton + Hartlepool; Jake Balfour → Middlesbrough + Darlington; Nick Rodgers → Redcar. Andy + Daniel left NULL (catch-all).
 - **`_shared/route-lead.ts` updates.** `sendProviderNotification` now takes `sql`, fetches area-scoped CCs via new exported helper `fetchAreaScopedProviderUsers`, threads through `buildCcList` (also exported, dedup against TO). Greeting changed from `Hi ${provider.contact_name ?? "there"}` → `Hello,` in both new-enquiry and re-application templates.
-- **`admin-notify-callback` rewritten.** Was one email per provider_user (separate TO each). Now one email with matched provider_users in TO (team sees each other), owner + provider.cc_emails in CC. Filters by lead's `la` via `fetchAreaScopedProviderUsers`. Charlotte CC'd on every callback email (was missing).
-- **`admin-test-email` signature updated.** Passes `sql` to `sendProviderNotification`.
-- **Data-ops 042 — archive demo providers.** `demo-b2c`, `demo-b2b`, `demo-provider-ltd` set `active=false`, `archived_at=now()`. Their 5 provider_users rows suspended. Hard delete blocked by 13 routing_log + 13 enrolments + 13 submissions FK on demo-provider-ltd; archive across all three for consistency + audit preservation.
-- **Admin providers page demo-strip filter.** `/admin/providers` "Demo" badge strip now adds `.is("archived_at", null)` to the `is_demo=true` query so archived demos disappear from the strip.
-- **Data-ops 043 — pause Courses Direct + WYK Digital.** Both had `pilot_status='paused'` but `active=true`; routing gates on `active` not `pilot_status`, so they could still receive leads. Flipped `active=false`. Not archived (paused is temporary). Stay visible on admin list with "Inactive" badge.
-- **Charlotte's per-provider portal accounts.** Self-invited via `/admin/providers/[id]/` UI as `provider_admin` on EMS (`support+ems@switchleads.co.uk`) and Riverside. Two passkeys total. Decision: per-provider accounts over impersonation — at 4 providers the build cost of impersonation (auth-gate branching, RLS fanout, audit, banner) isn't worth it; revisit at 10+ providers.
-- **`crm.provider_users` documented.** New section in `platform/docs/data-architecture.md` (had no entry before). Lists authoritative migration history + notification_las semantics + EMS seed values.
+- **`admin-notify-callback` rewritten** to single-email pattern (matched provider_users in TO, owner + provider.cc_emails as CC, area-filtered by lead's `la`). Charlotte CC'd on callback emails (was missing).
+- **`admin-test-email` signature updated** to pass `sql` to `sendProviderNotification`.
+- **Data-ops 042 — archive demo providers.** `demo-b2c`, `demo-b2b`, `demo-provider-ltd` set `active=false`, `archived_at=now()`. Their 5 provider_users rows suspended. Hard delete blocked by FK ON DELETE RESTRICT on demo-provider-ltd (13 routing_log + 13 enrolments + 13 submissions).
+- **Admin providers page demo-strip filter.** Demo badge strip now filters `is_demo=true AND archived_at IS NULL`.
+- **Data-ops 043 — pause Courses Direct + WYK Digital.** Flipped `active=false` (pilot_status was already 'paused' but doesn't gate routing).
+- **Charlotte's per-provider portal accounts.** Self-invited as `provider_admin` on EMS (`support+ems@switchleads.co.uk`) and Riverside (`support+riverside@switchleads.co.uk`). Decision: per-provider accounts over impersonation at this scale.
+- **`crm.provider_users` documented** in `platform/docs/data-architecture.md` (had no entry).
+- **Riverside routing audit gap fixed.** `netlify-employer-lead-router` now writes `audit.actions` rows for routings (action=`auto_route_lead`, with sheet/email outcome flags). Shape parity with funded router via `writeAuditSystem`. Data-ops 044 backfills 30 historical Riverside routings with `created_at` backdated to `routed_at`.
+- **Experiments page bucket fix.** `BILLABLE_STATUSES`, `IN_FLIGHT_STATUSES`, `LOST_STATUSES` now cover all 14 enum values from migration 0151. Was silently dropping `attempt_1/2/3_no_answer`, `enrolment_meeting_booked`, `engaged`, `in_progress`, `signed`, `presumed_employer_signed`, `not_signed`.
+- **Experiment_id propagation gap surfaced + pushed to Mable.** 32/39 DQs + 20/100 qualified from the two Tees experiment pages landed without metadata. Mable fixed site-side (commit `574b2c5`), then asked for historical backfill.
+- **Data-ops 045 — experiment_id random backfill.** 13 counselling rows + 11 smm rows back-filled with 50/50 random `experiment_variant`. Audit row written via `audit.log_system_action` with per-experiment totals and `attribution_is_exact=false`. Aggregate DQ comparison now reads cleanly on `/admin/experiments`; individual rows are not row-attributable.
+- **`/admin/actions` reshaped.** Dropped three cron-handled sections (Approaching 14-day auto-flip, Needs another chase, Cannot reach no chaser sent). Added: U1 welcome email bounces (lead-level), Provider patterns parent card with three sub-tables (SLA breaches, cannot-reach hotspots, zero-confirmation providers). Tuning constants exposed at top of file (`SLA_OPEN_DAYS=7`, `RECENT_WINDOW_DAYS=7`, `CONFIRM_PATTERN_DAYS=30`, `MIN_ROUTINGS_FOR_CONFIRM_PATTERN=5`, `CANNOT_REACH_HOTSPOT_PCT=20`).
 
 ## Next steps
 
-1. **Run data-ops 043** in Supabase SQL editor (pause CD + WYK). 2 rows updated. Charlotte hasn't applied yet.
-2. **First-fire verification 06:00-06:30 UTC tomorrow (2026-05-21).** Carries from S54: watch the three reconciler crons land (06:00 sheet-drift → 06:15 brevo-attribute → 06:30 drift-digest). If digest email arrives and pills update, the loop is verified end-to-end.
-3. **Watch first real EMS lead.** Confirm CC list matches the LA-based rules: Middlesbrough → Jake in CC, not George/Nick; Stockton → George in CC, not Jake/Nick; Redcar → Nick in CC, not Jake/George. Greeting reads `Hello,` not `Hi Andy Fay,`.
-4. **Remote Edge Function deletion (carry from S54).** `supabase functions delete backfill-referral-fastrack-urls --project-ref igvlngouxcirqhlsrhga`, then same for `backfill-client-nonce`. Repo source already gone.
-5. **Auto-flip cron + day-12 warning email (carry from S51, reopened S54).** Migration 0097 still unapplied. 37 EMS stale leads waiting. Pre-conditions: Brevo warning template, provider heads-up emails, Mira's activity-gate framework, optional `auto_flip_enabled` per-provider flag.
+1. **First-fire verification 06:00-06:30 UTC tomorrow (2026-05-21).** Carries from S54: watch the three reconciler crons land (06:00 sheet-drift → 06:15 brevo-attribute → 06:30 drift-digest). Digest email should arrive (or nothing on quiet days).
+2. **Watch first real EMS lead.** Live test of LA-scoped CC routing. Confirm CC list matches the LA rules (Middlesbrough → Jake; Stockton → George; Redcar → Nick). Greeting reads `Hello,`.
+3. **Auto-flip cron + day-12 warning email (carry from S51, reopened S54).** Migration 0097 still unapplied. EMS has 50 leads past 7-day SLA (visible on the new /admin/actions card) — auto-flip would mop those up at day 14. Pre-conditions: Brevo warning template, provider heads-up emails, Mira's activity-gate framework, optional `auto_flip_enabled` per-provider flag.
+4. **Counselling-tees experiment decision.** After backfill: A=27 qualified (18% DQ), B=34 qualified (28% DQ). B wins on volume, A wins on quality. Charlotte's call once she's weighed CPL vs CPE.
+5. **Remote Edge Function deletion (carry from S54).** `supabase functions delete backfill-referral-fastrack-urls --project-ref igvlngouxcirqhlsrhga`, then same for `backfill-client-nonce`.
 6. **Per-provider CPL / CPE / P/L scoreboard (carry from S49).** Still queued.
 7. **Brevo orphan deletion** once Wren confirms `u1-funded` template verified live (carry from S48-49).
-8. **Infrastructure-manifest update (carry from S54).** Add `brevo-attribute-reconcile-daily` + `drift-digest-daily` cron rows; remove `dead-letter-alert-hourly` row. Update last-verified timestamps.
-9. **Defer: portal UI for self-edit of `notification_las`.** At 4 providers + DB-only edits the manual SQL path is fine. Build when the second provider asks for area routing, or when Charlotte needs George/Jake/Nick to swap LAs without a ticket.
+8. **Infrastructure-manifest update (carry from S54).** Add `brevo-attribute-reconcile-daily` + `drift-digest-daily` cron rows; remove `dead-letter-alert-hourly`.
+9. **Cannot-reach-no-chaser → /admin/errors.** This signal is system-reliability (chaser cron failed), not a task. Move it from /admin/actions (where it was dropped) to /admin/errors as a new pill / reconciler card.
+10. **Defer: portal UI for self-edit of `notification_las`.** DB-only edits via SQL for now. Build when a second provider asks for area routing.
 
 ## Decisions and open questions
 
 **Decisions:**
 
-- **Per-user LA scoping via `notification_las` on `crm.provider_users`, not a separate table.** Why: everyone Charlotte mentioned (Andy, Daniel, George, Jake, Nick) is already a `provider_users` row. A separate `provider_area_notifications` table would duplicate the recipient list. Single column, optional, NULL = pre-existing catch-all behaviour.
-- **`fetchAreaScopedProviderUsers` exported from `_shared/route-lead.ts`, not a new shared module.** Used by both `sendProviderNotification` and `admin-notify-callback`. Single source of truth for the area-filter query — same SQL in both paths, no drift risk.
-- **Callback notification model: matched provider_users in TO (multi-recipient), owner + cc_emails in CC.** Why: team visibility (they see each other on the thread) + matches the new-lead email pattern.
-- **Archive (not delete) demo providers.** Why: demo-provider-ltd has 13 routing_log + 13 enrolments + 13 submissions rows; FK ON DELETE RESTRICT would block hard delete, cascade would destroy audit chain. Archive across all three for consistency.
-- **Per-provider admin accounts over impersonation.** Why: impersonation needs auth-gate branching + RLS fanout on every provider-scoped table + audit start/stop + view-as banner; pays off at 10+ providers, not 4. iCloud Keychain holds passkeys; one per provider is manageable.
-- **Pause CD + WYK via `active=false`, not `archived_at`.** Why: `pilot_status='paused'` is metadata only — routing in `_shared/route-lead.ts` gates on `active`/`archived_at`. Need `active=false` to truly block routing. Not archiving because paused is temporary; archive means gone.
-- **Andy stays `invited` status (no nudge to enrol).** Why: Charlotte 2026-05-20 — he doesn't call leads. New-lead emails still reach him via `provider.contact_email`. Callback emails skip him (`status='active'` filter). Acceptable per owner.
+- **Per-user LA scoping via `notification_las` on `crm.provider_users`, not a separate table.** Why: everyone Charlotte mentioned is already a `provider_users` row. Single column, optional, NULL = pre-existing catch-all behaviour.
+- **`fetchAreaScopedProviderUsers` exported from `_shared/route-lead.ts`.** Used by both `sendProviderNotification` and `admin-notify-callback`. Single source of truth for the area-filter query.
+- **Callback notification model: matched provider_users in TO (multi-recipient), owner + cc_emails in CC.** Team visibility + matches the new-lead pattern.
+- **Archive (not delete) demo providers.** demo-provider-ltd's 13 routing_log + 13 enrolments rows would cascade-destroy audit chain on hard delete.
+- **Per-provider admin accounts over impersonation.** Impersonation needs auth-gate branching + RLS fanout + audit start/stop + view-as banner; pays off at 10+ providers, not 4.
+- **Pause CD + WYK via `active=false`.** `pilot_status='paused'` is metadata only; routing gates on `active`. Not archiving because paused is temporary.
+- **Andy stays `invited` status (no nudge to enrol).** Charlotte 2026-05-20: he doesn't call leads. New-lead emails still reach him via `provider.contact_email`. Callback emails skip him.
+- **Riverside audit backfill: random not exact.** `ads_switchable.page_views` has no `session_id`; variant cookie was never recorded against submission. View splits were within 0.5% of 50/50 so random is statistically valid for aggregate. Tagged `attribution_is_exact=false` in audit context.
+- **/admin/actions: drop everything the cron handles.** Auto-chase + auto-flip mean those sections are duplicating cron work. Replaced with provider-pattern cards (SLA breach, cannot-reach hotspot, zero-confirm) that surface the kind of signal where the cron can't act for you.
 
 **Open questions:**
 
-- **Charlotte's portal alias on EMS landed as `support+ems@switchleads.co.uk`, not `hello+ems@switchleads.co.uk` as proposed.** Same effect (catch-all to her inbox). Just note for consistency if she onboards onto more providers — pick one prefix and stick with it.
-- **Should Andy be CC'd on callback notes anyway** (even though `invited`)? Today he's filtered out by the `status='active'` clause. If Charlotte wants him kept on the chain for visibility, the filter widens to `status IN ('active','invited')` — one-line change.
+- **Charlotte's portal alias landed as `support+ems@switchleads.co.uk`, not `hello+ems@switchleads.co.uk`** as originally proposed. Same inbox effect. Pick one prefix and stick to it as she onboards onto more providers.
+- **Should Andy be CC'd on callback notes** (even though `invited`)? Today filtered out by `status='active'`. If yes, widen to `status IN ('active','invited')`.
+- **Owner decides: counselling-tees experiment.** B wins volume (+26% qualified), A wins quality (lower DQ rate). Depends on CPL vs CPE focus. Bring decision to next session.
 
 ## Watch items
 
-- **First real EMS lead** — verify CC list matches the new LA scoping rules. Until that lands, the wiring is unverified in production.
-- **Migration 0154 deployed?** Charlotte confirmed "all done" — DB query confirms seed values present, schema column live. Edge Functions deployed per her confirmation; not independently verified from this session.
-- **Data-ops 043 not yet applied.** CD + WYK still `active=true` until Charlotte runs the SQL.
-- **Carries from S54 still open** — first-fire verification 06:00-06:30 UTC 2026-05-21; remote Edge Function deletion; infrastructure-manifest cron rows.
+- **Tomorrow 06:00-06:30 UTC** — first natural fire of the three reconciler crons (S54 carry). Inbox should see one digest email or nothing.
+- **First real EMS lead** — live test of LA-scoped CC routing. Until that lands, the wiring is unverified in production.
+- **`audit.actions` for next Riverside routing** — should land as a live (non-backfilled) `auto_route_lead` row from the deployed employer router fix.
+- **`/admin/experiments` DQ rates post-backfill** — counselling-tees now reads A=18% / B=28% DQ. Verify the page renders these numbers when Charlotte loads it.
+- **`/admin/actions` SLA breach card** — EMS shows 50 leads past 7d SLA. That's the dominant signal on the new actions page until auto-flip ships.
+- **U1 bounces** — 2 entries today. Manual chase or mark lost.
 - **Carries from S52 still open** — crm.email_log rows 504-506 (employer chaser webhook events), first natural Riverside attempt transition by Freya without manual SQL, leads.dead_letter sources `channel_b_sheet_writeback` (S50) + `edge_function_brevo_chase_employer` (S52) should stay empty.
 - **Carries from S51 still open** — auto-flip cron + day-12 warning (migration 0097 unapplied), `u_fastrack_qualified` row in `crm.email_log`, invite-claim audit via `public.log_system_action_v1`, `TEST_MODE = false` re-verification before any B2B test submission.
 
 ## Next session
 
 - **Folder:** `platform`
-- **First task:** Confirm overnight 06:00-06:30 UTC cron loop fired cleanly (sheet-drift → brevo-attribute → drift-digest), then verify the next real EMS lead's email CC list matches the LA-scoped routing. If clean, proceed with the auto-flip cron + day-12 warning email reopened scope (migration 0097, biggest unblocker on Charlotte's billing path).
-- **Cross-project:** None.
+- **First task:** Confirm overnight 06:00-06:30 UTC cron loop fired cleanly, then verify the next real EMS lead's email CC list and the live (non-backfilled) Riverside routing audit row. If clean, proceed with the auto-flip cron + day-12 warning email reopened scope (migration 0097, biggest unblocker on Charlotte's billing path) or the deferred cannot-reach-no-chaser → /admin/errors move.
+- **Cross-project:** None. Mable's push (experiment_id site-side fix) closed in-session, no new push owed.
