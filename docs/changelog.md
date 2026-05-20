@@ -4,6 +4,28 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-20 (Session 55) — /admin/actions reshaped for an auto-chase world
+
+Charlotte: "esp now we auto chase, this page isn't helpful". Three of the six existing sections were duplicating cron work (Approaching 14-day auto-flip, Needs another chase, Cannot reach no chaser sent). Dropped them. Replaced with provider-pattern cards she actually needs to action.
+
+**Kept**: Awaiting your call (pending AI), Unrouted, Presumed (awaiting confirmation).
+
+**Dropped**: Approaching 14-day auto-flip, Needs another chase, Cannot reach no chaser sent.
+
+**Added**:
+- **U1 bounces** (lead-level): `crm.email_log` rows where `email_type LIKE 'u1_%' AND status LIKE 'bounced_%'`. Welcome email didn't land; learner won't get nurture. Manual chase or mark lost.
+- **Provider patterns** (one parent card with three sub-tables, drift signals at provider level):
+  - **Leads past SLA (7d)**: open enrolments with `sent_to_provider_at < now() - 7d`. Tighter than 14d auto-flip clock = early signal.
+  - **Cannot-reach hotspots (7d)**: providers where >20% of recent routings hit cannot_reach (min 3 routings to avoid divide-by-tiny-N).
+  - **Zero confirmations despite 5+ routings (30d)**: providers receiving leads but never marking signed/enrolled.
+- All three provider-level cards exclude paused/archived/demo providers (CD, WYK, demos drop out automatically).
+
+**Constants exposed at file top** (`SLA_OPEN_DAYS`, `RECENT_WINDOW_DAYS`, `CONFIRM_PATTERN_DAYS`, `MIN_ROUTINGS_FOR_CONFIRM_PATTERN`, `CANNOT_REACH_HOTSPOT_PCT`) for easy tuning without hunting the code.
+
+**Deferred follow-up**: the "cannot reach but no chaser fired" signal is system-reliability (chaser cron failed), not a task — add it as a card/pill on `/admin/errors` instead of `/admin/actions`. Logged for next platform session.
+
+---
+
 ## 2026-05-20 (Session 55) — Experiment page enrolment status buckets + experiment_id propagation gap
 
 Charlotte spotted: `/admin/experiments` page variants weren't reporting DQ + enrolled correctly. Two findings, one fixed in platform, one pushed to switchable/site.

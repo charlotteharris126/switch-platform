@@ -15,37 +15,66 @@ import { formatDateTime, formatAgo } from "@/lib/format";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { PendingActions } from "../sheet-activity/pending-actions";
 import { InlineOutcomeButtons } from "./inline-outcome-buttons";
-import { InlineChaserButton } from "./inline-chaser-button";
 
-// One page that surfaces every actionable lead state, so Charlotte never
-// has to skim the full leads list to find what needs doing.
+// What needs your attention — items that require human judgement, not
+// states the auto-chase / auto-flip crons already handle.
 //
-// Three sections:
-// 1. Unrouted — qualified leads sitting in the queue, awaiting a routing
-//    decision. Today the only signal is to send to a provider; Phase 2
-//    auto-routing slots into the same query.
-// 2. Approaching 14-day auto-flip — leads routed 12+ days ago with no
-//    terminal-state enrolment outcome. The cron flips them at day 14 to
-//    'presumed_enrolled'; this section gives a chance to chase the
-//    provider for a real outcome BEFORE that happens.
-// 3. Presumed enrolled (awaiting confirmation/dispute) — leads the cron
-//    has already flipped. Provider has 7 days to dispute, Charlotte
-//    should follow up with the provider for a definitive outcome
-//    ('enrolled' triggers billing, 'disputed' resets, 'not_enrolled'
-//    closes without billing).
+// Lead-level decisions:
+// - Awaiting your call: AI-suggested status changes from sheet notes
+//   that need approve/reject.
+// - Unrouted: qualified leads with no routing decision yet.
+// - Presumed (awaiting confirmation): the cron has flipped a lead;
+//   you confirm/dispute, which triggers billing or pauses it.
+// - U1 bounces: welcome email to learner bounced; chase manually.
+//
+// Provider-level patterns (drift signals — chase the provider, not the lead):
+// - SLA breaches: provider has N leads sat 'open' past the threshold.
+// - Cannot-reach hotspots: provider's cannot_reach rate >20% this week.
+// - Zero-confirmation providers: 5+ routings in 30d, no confirmations.
+//
+// Sections deliberately NOT shown (cron handles them):
+// - Approaching 14-day auto-flip: cron flips at day 14.
+// - Needs another chase: auto-chaser re-fires on schedule.
+// - Cannot reach, no chaser sent: auto-chaser fires SF2 automatically
+//   when status flips. Non-empty = system bug — belongs on /admin/errors,
+//   not as a task.
+
+// SLA threshold (days). A lead routed >this many days ago that's still
+// 'open' counts as past SLA. 7d is tighter than the 14d auto-flip clock
+// — gives an early signal before the cron auto-flips.
+const SLA_OPEN_DAYS = 7;
+
+// "Recent" window for provider rate metrics (cannot_reach hotspots).
+const RECENT_WINDOW_DAYS = 7;
+
+// Window for "no confirmations despite N routings" pattern.
+const CONFIRM_PATTERN_DAYS = 30;
+const MIN_ROUTINGS_FOR_CONFIRM_PATTERN = 5;
+
+// Cannot-reach rate threshold for a "hotspot" flag.
+const CANNOT_REACH_HOTSPOT_PCT = 20;
+
+// Confirmation statuses (B2C + B2B billable).
+const CONFIRMATION_STATUSES = new Set([
+  "enrolled", "presumed_enrolled",
+  "signed", "presumed_employer_signed",
+]);
 
 export default async function ActionsPage() {
   const supabase = await createClient();
 
-  const fiveDaysAgoISO = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+  const slaCutoffISO = new Date(Date.now() - SLA_OPEN_DAYS * 24 * 3600 * 1000).toISOString();
+  const recentCutoffISO = new Date(Date.now() - RECENT_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
+  const confirmWindowCutoffISO = new Date(Date.now() - CONFIRM_PATTERN_DAYS * 24 * 3600 * 1000).toISOString();
 
   const [
     unroutedRes,
-    approachingFlipRes,
     presumedEnrolledRes,
     pendingAiRes,
-    needsChasingRes,
-    cannotReachNoChaserRes,
+    slaBreachRes,
+    recentEnrolmentsRes,
+    confirmWindowEnrolmentsRes,
+    u1BounceRes,
   ] = await Promise.all([
     supabase
       .schema("leads")
@@ -55,16 +84,6 @@ export default async function ActionsPage() {
       .is("primary_routed_to", null)
       .is("archived_at", null)
       .order("submitted_at", { ascending: true }),
-
-    // Approaching 14-day auto-flip: routed_at older than 12 days, status still
-    // 'open'. After migration 0028 the only early state is 'open' — 'contacted'
-    // was folded in.
-    supabase
-      .schema("crm")
-      .from("enrolments")
-      .select("id, submission_id, provider_id, status, sent_to_provider_at, updated_at")
-      .eq("status", "open")
-      .lt("sent_to_provider_at", new Date(Date.now() - 12 * 24 * 3600 * 1000).toISOString()),
 
     // Presumed-state queue spans both lead types: learner
     // presumed_enrolled (14-day auto-flip) AND employer
@@ -85,31 +104,42 @@ export default async function ActionsPage() {
       .eq("status", "pending")
       .order("created_at", { ascending: false }),
 
-    // Needs another chase: status still 'open' but the last provider chaser
-    // fired 5+ days ago with no resolution since. Either the provider has
-    // gone quiet or the learner has — owner decides whether to re-chase or
-    // mark cannot_reach. latest_chaser_at is derived from email_log via
-    // crm.vw_enrolments_chaser_state (migration 0086, Phase 4 closeout).
+    // SLA breaches: open enrolments routed > SLA_OPEN_DAYS ago. Aggregated
+    // per-provider in JS below. Excludes paused / archived providers.
     supabase
       .schema("crm")
-      .from("vw_enrolments_chaser_state")
-      .select("id, submission_id, provider_id, status, latest_chaser_at, status_updated_at")
+      .from("enrolments")
+      .select("provider_id")
       .eq("status", "open")
-      .not("latest_chaser_at", "is", null)
-      .lt("latest_chaser_at", fiveDaysAgoISO)
-      .order("latest_chaser_at", { ascending: true }),
+      .lt("sent_to_provider_at", slaCutoffISO),
 
-    // Cannot reach but no chaser ever fired. The SF2 Brevo chaser escalates
-    // to the learner directly — should fire whenever a provider hits the
-    // tried-no-answer wall. If status is cannot_reach with latest_chaser_at
-    // null, that escalation hasn't happened yet.
+    // Cannot-reach hotspots: every enrolment created in the last
+    // RECENT_WINDOW_DAYS, aggregate per-provider in JS for rate calc.
     supabase
       .schema("crm")
-      .from("vw_enrolments_chaser_state")
-      .select("id, submission_id, provider_id, status, status_updated_at")
-      .eq("status", "cannot_reach")
-      .is("latest_chaser_at", null)
-      .order("status_updated_at", { ascending: true }),
+      .from("enrolments")
+      .select("provider_id, status")
+      .gte("sent_to_provider_at", recentCutoffISO),
+
+    // Zero-confirmation pattern: every enrolment in the last
+    // CONFIRM_PATTERN_DAYS, aggregate per-provider in JS for the
+    // 5+ routings with no confirmations rule.
+    supabase
+      .schema("crm")
+      .from("enrolments")
+      .select("provider_id, status")
+      .gte("sent_to_provider_at", confirmWindowCutoffISO),
+
+    // U1 bounces: welcome email to the learner bounced (hard or soft).
+    // Source is crm.email_log; email_type='u1_funded' / 'u1_self' / etc.
+    supabase
+      .schema("crm")
+      .from("email_log")
+      .select("id, submission_id, recipient_email, email_type, status, sent_at, error_text")
+      .like("email_type", "u1_%")
+      .like("status", "bounced_%")
+      .order("sent_at", { ascending: false })
+      .limit(50),
   ]);
 
   const unrouted = (unroutedRes.data ?? []) as Array<{
@@ -120,14 +150,6 @@ export default async function ActionsPage() {
     email: string | null;
     course_id: string | null;
     funding_category: string | null;
-  }>;
-
-  const approachingFlipRaw = (approachingFlipRes.data ?? []) as Array<{
-    id: number;
-    submission_id: number;
-    provider_id: string;
-    status: string;
-    sent_to_provider_at: string;
   }>;
 
   const presumedEnrolledRaw = (presumedEnrolledRes.data ?? []) as Array<{
@@ -153,42 +175,91 @@ export default async function ActionsPage() {
     created_at: string;
   }>;
 
-  const needsChasingRaw = (needsChasingRes.data ?? []) as Array<{
+  const slaBreachRaw = (slaBreachRes.data ?? []) as Array<{ provider_id: string }>;
+  const recentEnrolments = (recentEnrolmentsRes.data ?? []) as Array<{ provider_id: string; status: string }>;
+  const confirmWindowEnrolments = (confirmWindowEnrolmentsRes.data ?? []) as Array<{ provider_id: string; status: string }>;
+  const u1BouncesRaw = (u1BounceRes.data ?? []) as Array<{
     id: number;
     submission_id: number;
-    provider_id: string;
+    recipient_email: string;
+    email_type: string;
     status: string;
-    latest_chaser_at: string;
-    status_updated_at: string;
+    sent_at: string | null;
+    error_text: string | null;
   }>;
 
-  const cannotReachNoChaserRaw = (cannotReachNoChaserRes.data ?? []) as Array<{
-    id: number;
-    submission_id: number;
-    provider_id: string;
-    status: string;
-    status_updated_at: string;
-  }>;
-
-  // Filter out enrolments for demo providers — they're test data that
-  // shouldn't surface in the admin attention queue. Unrouted leads don't
-  // have a provider yet so they pass through unchanged. Single small
-  // round-trip to fetch the demo set.
-  const { data: demoProvidersData } = await supabase
+  // Provider lookup: company_name + active/archived for both filtering paused
+  // providers off the per-provider cards AND for showing company names.
+  const { data: allProvidersData } = await supabase
     .schema("crm")
     .from("providers")
-    .select("provider_id")
-    .eq("is_demo", true);
-  const demoProviderIds = new Set<string>(
-    ((demoProvidersData ?? []) as Array<{ provider_id: string }>).map((p) => p.provider_id),
+    .select("provider_id, company_name, active, archived_at, is_demo");
+  const providersById = new Map<string, { company_name: string; active: boolean; archived_at: string | null; is_demo: boolean }>(
+    ((allProvidersData ?? []) as Array<{ provider_id: string; company_name: string; active: boolean; archived_at: string | null; is_demo: boolean }>)
+      .map((p) => [p.provider_id, p]),
   );
+  const demoProviderIds = new Set<string>(
+    Array.from(providersById.entries()).filter(([, v]) => v.is_demo).map(([k]) => k),
+  );
+
+  // A provider counts for per-provider cards only if active AND not archived
+  // AND not demo. Paused/archived providers (CD, WYK) drop out — Charlotte
+  // can't action their leads via them anyway.
+  function providerEligibleForCards(providerId: string): boolean {
+    const p = providersById.get(providerId);
+    if (!p) return false;
+    return p.active && !p.archived_at && !p.is_demo;
+  }
   function notDemo<T extends { provider_id: string }>(r: T): boolean {
     return !demoProviderIds.has(r.provider_id);
   }
-  const approachingFlip = approachingFlipRaw.filter(notDemo);
   const presumedEnrolled = presumedEnrolledRaw.filter(notDemo);
-  const needsChasing = needsChasingRaw.filter(notDemo);
-  const cannotReachNoChaser = cannotReachNoChaserRaw.filter(notDemo);
+  const u1Bounces = u1BouncesRaw; // not provider-tagged; filter via submission lookup later
+
+  // ── Provider-level aggregates ──────────────────────────────────────────
+  // SLA breaches: per-provider count of open enrolments routed > SLA_OPEN_DAYS ago.
+  const slaByProvider = new Map<string, number>();
+  for (const r of slaBreachRaw) {
+    if (!providerEligibleForCards(r.provider_id)) continue;
+    slaByProvider.set(r.provider_id, (slaByProvider.get(r.provider_id) ?? 0) + 1);
+  }
+  const slaBreaches = Array.from(slaByProvider.entries())
+    .map(([provider_id, count]) => ({ provider_id, count }))
+    .sort((a, b) => b.count - a.count);
+
+  // Cannot-reach hotspots: per-provider count + rate over RECENT_WINDOW_DAYS.
+  const recentByProvider = new Map<string, { total: number; cannotReach: number }>();
+  for (const r of recentEnrolments) {
+    if (!providerEligibleForCards(r.provider_id)) continue;
+    const bucket = recentByProvider.get(r.provider_id) ?? { total: 0, cannotReach: 0 };
+    bucket.total += 1;
+    if (r.status === "cannot_reach") bucket.cannotReach += 1;
+    recentByProvider.set(r.provider_id, bucket);
+  }
+  const cannotReachHotspots = Array.from(recentByProvider.entries())
+    .filter(([, v]) => v.total >= 3 && (v.cannotReach / v.total) * 100 > CANNOT_REACH_HOTSPOT_PCT)
+    .map(([provider_id, v]) => ({
+      provider_id,
+      total: v.total,
+      cannotReach: v.cannotReach,
+      pct: (v.cannotReach / v.total) * 100,
+    }))
+    .sort((a, b) => b.pct - a.pct);
+
+  // Zero-confirmation pattern: 5+ routings in CONFIRM_PATTERN_DAYS, none
+  // ended in a confirmation status.
+  const confirmWindowByProvider = new Map<string, { total: number; confirmed: number }>();
+  for (const r of confirmWindowEnrolments) {
+    if (!providerEligibleForCards(r.provider_id)) continue;
+    const bucket = confirmWindowByProvider.get(r.provider_id) ?? { total: 0, confirmed: 0 };
+    bucket.total += 1;
+    if (CONFIRMATION_STATUSES.has(r.status)) bucket.confirmed += 1;
+    confirmWindowByProvider.set(r.provider_id, bucket);
+  }
+  const zeroConfirmProviders = Array.from(confirmWindowByProvider.entries())
+    .filter(([, v]) => v.total >= MIN_ROUTINGS_FOR_CONFIRM_PATTERN && v.confirmed === 0)
+    .map(([provider_id, v]) => ({ provider_id, total: v.total }))
+    .sort((a, b) => b.total - a.total);
 
   // Hydrate enrolment + submission context for pending AI suggestions.
   // Demo-provider enrolments are skipped via the same filter as above.
@@ -206,15 +277,12 @@ export default async function ActionsPage() {
     }
   }
 
-  // For the approaching-flip + presumed-enrolled + pending-AI sections we
-  // want learner names. Pull all relevant submissions in one query.
+  // Learner names for sections that render lead-level rows.
   const submissionIdsToLookup = Array.from(
     new Set([
-      ...approachingFlip.map((r) => r.submission_id),
       ...presumedEnrolled.map((r) => r.submission_id),
-      ...needsChasing.map((r) => r.submission_id),
-      ...cannotReachNoChaser.map((r) => r.submission_id),
       ...Array.from(pendingEnrolMap.values()).map((e) => e.submission_id),
+      ...u1Bounces.map((r) => r.submission_id),
     ])
   );
 
@@ -230,27 +298,20 @@ export default async function ActionsPage() {
     }
   }
 
-  // Provider names for pending AI section
-  const providerIds = Array.from(new Set(Array.from(pendingEnrolMap.values()).map((e) => e.provider_id)));
+  // Provider names for pending AI section (re-uses the master providersById map).
   const providerMap = new Map<string, string>();
-  if (providerIds.length > 0) {
-    const { data: provData } = await supabase
-      .schema("crm")
-      .from("providers")
-      .select("provider_id, company_name")
-      .in("provider_id", providerIds);
-    for (const p of (provData ?? []) as Array<{ provider_id: string; company_name: string }>) {
-      providerMap.set(p.provider_id, p.company_name);
-    }
+  for (const [providerId, info] of providersById) {
+    providerMap.set(providerId, info.company_name);
   }
 
   const allSections = [
     pendingAi,
     unrouted,
-    needsChasing,
-    cannotReachNoChaser,
-    approachingFlip,
     presumedEnrolled,
+    u1Bounces,
+    slaBreaches,
+    cannotReachHotspots,
+    zeroConfirmProviders,
   ];
   const totalActions = allSections.reduce((sum, s) => sum + s.length, 0);
 
@@ -397,67 +458,6 @@ export default async function ActionsPage() {
         </CardContent>
       </Card>
 
-      {/* SECTION 2 — Approaching 14-day auto-flip */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            Approaching 14-day auto-flip
-            {approachingFlip.length > 0 && (
-              <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
-                {approachingFlip.length}
-              </Badge>
-            )}
-          </CardTitle>
-          <p className="text-xs text-[#5a6a72] mt-1">
-            Learner leads only. Routed 12+ days ago, no outcome yet. Auto-flip cron sets these to <em>presumed enrolled</em> at day 14 — chase the provider now for a real outcome. Employer (B2B) leads run on a 60-day clock and will get their own approaching-flip section when migration 0097 ships.
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
-          {approachingFlip.length === 0 ? (
-            <p className="text-xs text-[#5a6a72] p-4">Nothing approaching the auto-flip window.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-16">Lead</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Course</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Routed</TableHead>
-                  <TableHead>Days ago</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {approachingFlip.map((r) => {
-                  const sub = submissionsById.get(r.submission_id);
-                  const daysAgo = Math.floor((Date.now() - new Date(r.sent_to_provider_at).getTime()) / (24 * 3600 * 1000));
-                  return (
-                    <TableRow key={r.id} className="hover:bg-[#f4f1ed]/60">
-                      <TableCell className="font-mono text-xs">
-                        <Link href={`/leads/${r.submission_id}`} className="text-[#cd8b76] hover:text-[#b3412e] font-semibold">
-                          {r.submission_id}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {sub ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || "—" : "—"}
-                      </TableCell>
-                      <TableCell className="text-xs">{sub?.course_id ?? "—"}</TableCell>
-                      <TableCell className="text-xs">{r.provider_id}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDateTime(r.sent_to_provider_at)}</TableCell>
-                      <TableCell className="text-xs font-semibold">
-                        {daysAgo}d
-                      </TableCell>
-                      <TableCell className="text-xs uppercase tracking-wide">{r.status}</TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
       {/* SECTION 3 — Presumed states (both lead types) */}
       <Card>
         <CardHeader>
@@ -529,37 +529,34 @@ export default async function ActionsPage() {
         </CardContent>
       </Card>
 
-      {/* SECTION 4 — Needs chasing (open + last chaser 5+ days ago) */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            Needs another chase
-            {needsChasing.length > 0 && (
+      {/* SECTION 4 — U1 welcome email bounces */}
+      {u1Bounces.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm flex items-center gap-2">
+              U1 welcome email bounced
               <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
-                {needsChasing.length}
+                {u1Bounces.length}
               </Badge>
-            )}
-          </CardTitle>
-          <p className="text-xs text-[#5a6a72] mt-1">
-            Last provider chaser fired 5+ days ago, lead still <em>open</em>. Re-fire the chaser or mark <em>cannot reach</em> if the provider has given up.
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
-          {needsChasing.length === 0 ? (
-            <p className="text-xs text-[#5a6a72] p-4">Nothing waiting on a re-chase.</p>
-          ) : (
+            </CardTitle>
+            <p className="text-xs text-[#5a6a72] mt-1">
+              Welcome email to the learner bounced (hard or soft). The learner won't get any automated nurture — chase them on phone if possible or mark the lead lost.
+            </p>
+          </CardHeader>
+          <CardContent className="p-0">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-16">Lead</TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Last chased</TableHead>
-                  <TableHead>Action</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Bounced</TableHead>
+                  <TableHead>Reason</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {needsChasing.map((r) => {
+                {u1Bounces.map((r) => {
                   const sub = submissionsById.get(r.submission_id);
                   return (
                     <TableRow key={r.id} className="hover:bg-[#f4f1ed]/60">
@@ -571,79 +568,146 @@ export default async function ActionsPage() {
                       <TableCell className="text-sm">
                         {sub ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || "—" : "—"}
                       </TableCell>
-                      <TableCell className="text-xs">{r.provider_id}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap" title={formatDateTime(r.latest_chaser_at)}>
-                        {formatAgo(r.latest_chaser_at)}
+                      <TableCell className="text-xs text-[#5a6a72]">{r.recipient_email}</TableCell>
+                      <TableCell className="text-xs uppercase tracking-wide">{r.status.replace("bounced_", "")}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap" title={r.sent_at ? formatDateTime(r.sent_at) : ""}>
+                        {r.sent_at ? formatAgo(r.sent_at) : "—"}
                       </TableCell>
-                      <TableCell>
-                        <InlineChaserButton submissionId={r.submission_id} label="Re-chase" />
+                      <TableCell className="text-xs text-[#5a6a72] max-w-[260px] truncate" title={r.error_text ?? ""}>
+                        {r.error_text ?? "—"}
                       </TableCell>
                     </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* SECTION 5 — Cannot reach with no chaser ever fired */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            Cannot reach, no chaser sent
-            {cannotReachNoChaser.length > 0 && (
-              <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
-                {cannotReachNoChaser.length}
-              </Badge>
-            )}
-          </CardTitle>
-          <p className="text-xs text-[#5a6a72] mt-1">
-            Provider marked <em>cannot reach</em> but the SF2 learner-side chaser never fired. Send it now — gives the learner one last nudge before closing.
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
-          {cannotReachNoChaser.length === 0 ? (
-            <p className="text-xs text-[#5a6a72] p-4">Every cannot-reach lead has been chased.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-16">Lead</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Marked</TableHead>
-                  <TableHead>Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {cannotReachNoChaser.map((r) => {
-                  const sub = submissionsById.get(r.submission_id);
-                  return (
-                    <TableRow key={r.id} className="hover:bg-[#f4f1ed]/60">
-                      <TableCell className="font-mono text-xs">
-                        <Link href={`/leads/${r.submission_id}`} className="text-[#cd8b76] hover:text-[#b3412e] font-semibold">
-                          {r.submission_id}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {sub ? [sub.first_name, sub.last_name].filter(Boolean).join(" ") || "—" : "—"}
-                      </TableCell>
-                      <TableCell className="text-xs">{r.provider_id}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap" title={formatDateTime(r.status_updated_at)}>
-                        {formatAgo(r.status_updated_at)}
-                      </TableCell>
-                      <TableCell>
-                        <InlineChaserButton submissionId={r.submission_id} />
-                      </TableCell>
+      {/* SECTION 5 — Provider patterns: SLA breach + cannot-reach hotspot + zero-confirm */}
+      {(slaBreaches.length > 0 || cannotReachHotspots.length > 0 || zeroConfirmProviders.length > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm flex items-center gap-2">Provider patterns</CardTitle>
+            <p className="text-xs text-[#5a6a72] mt-1">
+              Drift signals at the provider level — chase the provider, not individual leads. Paused / archived providers excluded.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-5">
+
+            {/* SLA breaches */}
+            {slaBreaches.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="font-semibold text-sm text-[#143643]">Leads past SLA ({SLA_OPEN_DAYS}d)</h3>
+                  <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
+                    {slaBreaches.reduce((sum, r) => sum + r.count, 0)}
+                  </Badge>
+                </div>
+                <p className="text-xs text-[#5a6a72] mb-2">
+                  Routed {SLA_OPEN_DAYS}+ days ago, status still <em>open</em>. Auto-flip cron will mop these up at day 14 — but if the count is high, chase the provider for real outcomes first.
+                </p>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Provider</TableHead>
+                      <TableHead className="text-right">Open &gt; {SLA_OPEN_DAYS}d</TableHead>
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {slaBreaches.map((r) => (
+                      <TableRow key={r.provider_id} className="hover:bg-[#f4f1ed]/60">
+                        <TableCell className="text-sm">
+                          <Link href={`/providers/${encodeURIComponent(r.provider_id)}`} className="text-[#143643] hover:text-[#cd8b76]">
+                            {providersById.get(r.provider_id)?.company_name ?? r.provider_id}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">{r.count}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Cannot-reach hotspots */}
+            {cannotReachHotspots.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="font-semibold text-sm text-[#143643]">Cannot-reach hotspots ({RECENT_WINDOW_DAYS}d)</h3>
+                  <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
+                    {cannotReachHotspots.length}
+                  </Badge>
+                </div>
+                <p className="text-xs text-[#5a6a72] mb-2">
+                  Providers where &gt;{CANNOT_REACH_HOTSPOT_PCT}% of recent routings hit cannot_reach. Either the lead quality dropped or the provider is slow to call.
+                </p>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Provider</TableHead>
+                      <TableHead className="text-right">Cannot reach</TableHead>
+                      <TableHead className="text-right">Total routings</TableHead>
+                      <TableHead className="text-right">Rate</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cannotReachHotspots.map((r) => (
+                      <TableRow key={r.provider_id} className="hover:bg-[#f4f1ed]/60">
+                        <TableCell className="text-sm">
+                          <Link href={`/providers/${encodeURIComponent(r.provider_id)}`} className="text-[#143643] hover:text-[#cd8b76]">
+                            {providersById.get(r.provider_id)?.company_name ?? r.provider_id}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-right text-xs">{r.cannotReach}</TableCell>
+                        <TableCell className="text-right text-xs">{r.total}</TableCell>
+                        <TableCell className="text-right font-semibold text-[#b3412e]">{r.pct.toFixed(0)}%</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Zero-confirmation providers */}
+            {zeroConfirmProviders.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="font-semibold text-sm text-[#143643]">Zero confirmations despite {MIN_ROUTINGS_FOR_CONFIRM_PATTERN}+ routings ({CONFIRM_PATTERN_DAYS}d)</h3>
+                  <Badge className="bg-[#cd8b76] text-white text-[10px] hover:bg-[#cd8b76]">
+                    {zeroConfirmProviders.length}
+                  </Badge>
+                </div>
+                <p className="text-xs text-[#5a6a72] mb-2">
+                  Providers who received {MIN_ROUTINGS_FOR_CONFIRM_PATTERN}+ leads in the last {CONFIRM_PATTERN_DAYS} days but confirmed zero. Conversion problem at their end, or they're not updating statuses.
+                </p>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Provider</TableHead>
+                      <TableHead className="text-right">Routings ({CONFIRM_PATTERN_DAYS}d)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {zeroConfirmProviders.map((r) => (
+                      <TableRow key={r.provider_id} className="hover:bg-[#f4f1ed]/60">
+                        <TableCell className="text-sm">
+                          <Link href={`/providers/${encodeURIComponent(r.provider_id)}`} className="text-[#143643] hover:text-[#cd8b76]">
+                            {providersById.get(r.provider_id)?.company_name ?? r.provider_id}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">{r.total}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
