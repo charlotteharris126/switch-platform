@@ -4,6 +4,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-20 (Session 55) — Pause Courses Direct + WYK Digital
+
+Both already had `pilot_status='paused'` but `active=true`. Routing in `_shared/route-lead.ts` gates on `active` + `archived_at`, not `pilot_status`, so they could still have received leads. Data-ops 043 flips `active=false` for both. Not archived (paused is temporary, archive is permanent). Stay visible on `/admin/providers/` with the "Inactive" badge — the list doesn't filter on `active`. Un-pause by setting `active=true`.
+
+---
+
 ## 2026-05-20 (Session 55) — Archive demo providers + Charlotte as per-provider admin
 
 Charlotte switching off demo accounts and standing up per-provider admin accounts on real providers. Decision: per-provider rather than impersonation, because impersonation needs auth-gate branching + RLS fanout + audit + view-as banner and pays off at 10+ providers, not 4.
