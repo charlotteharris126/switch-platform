@@ -74,8 +74,25 @@ interface ExperimentSummary {
   latest: string | null;
 }
 
-const BILLABLE_STATUSES = new Set(["enrolled", "presumed_enrolled"]);
-const IN_FLIGHT_STATUSES = new Set(["open", "cannot_reach"]);
+// Canonical enrolment status enum: migration 0151 enrolments_status_check.
+// Bucketing mirrors /admin/leads page stage filter so both surfaces agree.
+const BILLABLE_STATUSES = new Set([
+  // Learner-lead (B2C)
+  "enrolled", "presumed_enrolled",
+  // Employer-lead (B2B)
+  "signed", "presumed_employer_signed",
+]);
+const IN_FLIGHT_STATUSES = new Set([
+  // Learner-lead (B2C)
+  "open", "attempt_1_no_answer", "attempt_2_no_answer", "attempt_3_no_answer",
+  "enrolment_meeting_booked", "cannot_reach",
+  // Employer-lead (B2B)
+  "engaged", "in_progress",
+]);
+const LOST_STATUSES = new Set([
+  "lost",        // Learner-lead (B2C)
+  "not_signed",  // Employer-lead (B2B)
+]);
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
@@ -237,7 +254,7 @@ export default async function ExperimentsPage() {
       v.enrolmentTotal += 1;
       if (e.status && BILLABLE_STATUSES.has(e.status)) v.enrolmentBillable += 1;
       else if (e.status && IN_FLIGHT_STATUSES.has(e.status)) v.enrolmentInFlight += 1;
-      else if (e.status === "lost") v.enrolmentLost += 1;
+      else if (e.status && LOST_STATUSES.has(e.status)) v.enrolmentLost += 1;
     }
 
     summary.totalLeads += 1;

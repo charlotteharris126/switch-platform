@@ -4,6 +4,28 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-20 (Session 55) — Experiment page enrolment status buckets + experiment_id propagation gap
+
+Charlotte spotted: `/admin/experiments` page variants weren't reporting DQ + enrolled correctly. Two findings, one fixed in platform, one pushed to switchable/site.
+
+**Platform fix.** `experiments/page.tsx` had `BILLABLE_STATUSES = {enrolled, presumed_enrolled}` and `IN_FLIGHT_STATUSES = {open, cannot_reach}`. The canonical enum (migration 0151 `enrolments_status_check`) has 14 statuses. The page was silently dropping `attempt_1/2/3_no_answer`, `enrolment_meeting_booked`, `engaged`, `in_progress`, `signed`, `presumed_employer_signed`, `not_signed`. New buckets mirror `/admin/leads` page stage filter for cross-surface consistency. Lost bucket now uses a Set (`{lost, not_signed}`) instead of literal `=== "lost"`.
+
+**Site-side gap (pushed to switchable/site).** Most DQ submissions (and some qualified) from the two Tees experiment pages are landing in `leads.submissions` without `experiment_id` / `experiment_variant` populated. Sample query of submissions since 1 May: counselling page → 9/69 qualified + 20/27 DQs missing experiment metadata; smm page → 11/31 qualified + 12/12 DQs missing. Likely culprit: DQ-path forms (cohort decline / L3 mismatch / etc.) submit a different Netlify form name than the main qualifier, and those forms lack the hidden experiment_id field. Pushed to `switchable/site/docs/current-handoff.md` as a top-priority audit task for Mable. Until fixed, the platform DQ rate column is under-reported regardless of bucketing.
+
+---
+
+## 2026-05-20 (Session 55) — Employer routing audit consistency
+
+Charlotte spotted: Riverside routings weren't appearing in the admin audit view the way EMS routings were. Root cause: `_shared/route-lead.ts` writes `audit.actions.action='auto_route_lead'` via `writeAuditSystem` on every routing, but `netlify-employer-lead-router` skipped it. 30 historical Riverside routings had no audit row.
+
+**Forward fix.** `netlify-employer-lead-router` now writes the audit row at the end of post-route fan-out (Promise.allSettled outcomes captured into `sheet_appended` / `provider_notified` / `employer_ack_sent` context fields). Same shape as the funded writer — admin audit view renders both consistently from here on.
+
+**Backfill.** Data-ops 044 synthesises `auto_route_lead` audit rows for the 30 existing routing_log entries on `riverside-training`. created_at backdated to `routed_at` so the audit timeline reflects when the routing actually happened. Outcome booleans set to NULL (original functions didn't log them; we don't know retroactively). actor_email tagged with `(backfill data-ops/044)` for traceability. NOT EXISTS guard makes re-runs no-op.
+
+**Audit shape consistency confirmed.** Every other EMS-only action type (`mark_enrolment_outcome`, `sheet_reconcile_*`, `auto_flip_to_presumed_enrolled`, `manual_revert_to_open`, `set_regional_contacts`) is EMS-only because no Riverside event has triggered it yet, not a code gap. Riverside has its own employer-specific actions (`fire_employer_chaser`, `set_b2b_trust_line`) that EMS doesn't.
+
+---
+
 ## 2026-05-20 (Session 55) — Pause Courses Direct + WYK Digital
 
 Both already had `pilot_status='paused'` but `active=true`. Routing in `_shared/route-lead.ts` gates on `active` + `archived_at`, not `pilot_status`, so they could still have received leads. Data-ops 043 flips `active=false` for both. Not archived (paused is temporary, archive is permanent). Stay visible on `/admin/providers/` with the "Inactive" badge — the list doesn't filter on `active`. Un-pause by setting `active=true`.

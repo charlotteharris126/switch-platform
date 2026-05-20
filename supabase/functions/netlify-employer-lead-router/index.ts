@@ -193,6 +193,38 @@ Deno.serve(async (req: Request): Promise<Response> => {
         );
       }
     });
+
+    // Audit row for the routing event. Mirrors _shared/route-lead.ts
+    // writeAuditSystem so /admin audit views render employer routings the
+    // same shape as funded routings (action='auto_route_lead', context
+    // carries provider_id + sheet_appended + provider_notified). The
+    // employer flow runs side effects in waitUntil() after the response
+    // returns, so we log AFTER Promise.allSettled to capture real outcomes.
+    const sheetAppended = results[0].status === "fulfilled";
+    const employerAcked = results[1].status === "fulfilled";
+    const providerNotified = results[2].status === "fulfilled";
+    try {
+      await sql`
+        SELECT audit.log_system_action(
+          ${"system:auto_route:lead_router"},
+          ${"auto_route_lead"},
+          ${"leads.submissions"},
+          ${String(insertedId)},
+          ${null},
+          ${sql.json({ primary_routed_to: RIVERSIDE_PROVIDER_ID, routed_at: row.routed_at })},
+          ${sql.json({
+            trigger: "auto_route",
+            lead_type: row.lead_type,
+            provider_id: RIVERSIDE_PROVIDER_ID,
+            sheet_appended: sheetAppended,
+            provider_notified: providerNotified,
+            employer_ack_sent: employerAcked,
+          })}
+        )
+      `;
+    } catch (err) {
+      console.error("audit log write failed:", describeError(err));
+    }
   })().catch((e) => console.error("post-route fan-out failed:", describeError(e)));
   if (runtime?.waitUntil) runtime.waitUntil(task);
 
