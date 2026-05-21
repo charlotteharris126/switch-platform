@@ -4,6 +4,22 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-21 — Owner-CC leak fix: chaser stopped CCing provider rep
+
+**Incident.** Charlotte spotted a learner chaser email (Stockton-on-Tees lead, EMS) had been CC'd to George Taylor, the EMS provider rep scoped to Stockton/Hartlepool. Her ask: "learner chaser emails dont need to have anyone else cc'd in".
+
+**Root cause.** `sendTransactional` in `_shared/brevo.ts` unconditionally called `appendOwnerCc(undefined)`, which CCs every address in the `OWNER_CC_ALL_EMAILS` Edge Function env var. That env var was added in the email rearchitecture as a launch-monitoring lever but applied indiscriminately to every transactional send, including learner-facing chasers / U1 / stalled / U4 / fastrack ack and employer-facing S4B sends. Any address in the env var (intentionally or accidentally) was leaked into external-party inboxes.
+
+**Fix.** `_shared/brevo.ts`: introduced `OWNER_CC_ELIGIBLE_TYPES` set, currently containing only `provider_presumed_warning` and `provider_presumed_flipped` (the two provider-facing transactional types). `sendTransactional` now appends the owner CC only for those types. Everything else sends with no CC. New-lead + callback emails are unaffected because they CC the owner explicitly via `buildCcList` in `route-lead.ts` / `admin-notify-callback`, not via this env var.
+
+**Deployed.** 9 functions redeployed to land the bundle change: admin-brevo-chase, admin-brevo-chase-employer, email-stalled-cron, email-u4-cron, email-sunset-cron, fastrack-receive, netlify-employer-lead-router, netlify-lead-router, routing-confirm.
+
+**Env var hygiene (separate, owner action).** `OWNER_CC_ALL_EMAILS` value should be inspected by Charlotte (`supabase secrets list --linked` from `platform/`) and any provider-rep addresses removed. After this code change the env var only affects `provider_presumed_*` sends, but it's still meant for owner monitoring only.
+
+**Behaviour shift.** Charlotte no longer receives a CC on U1 / stalled / U4 / fastrack ack / chaser / S4B chaser sends. She does still receive new-lead and callback emails (explicit owner CC via `buildCcList`).
+
+---
+
 ## 2026-05-20 (Session 55) — Experiment_id random backfill (24 rows)
 
 Mable shipped the site-side fix (switchable/site commit `574b2c5`) for the funded-course DQ panel forms missing `experiment_id` / `experiment_variant` hidden inputs. New submissions land with metadata. Historical rows stay NULL until this backfill.

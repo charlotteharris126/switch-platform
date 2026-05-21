@@ -89,6 +89,17 @@ function resolveBrandSender(envName: string): string | undefined {
   return Deno.env.get("BREVO_SENDER_EMAIL");
 }
 
+// Email types where appendOwnerCc applies. Everything else is sent to
+// an external party (learner-facing utility, employer-facing S4B,
+// marketing), and CCing the owner there leaks her address into a
+// recipient inbox. The owner gets explicit visibility on new-lead +
+// callback emails via buildCcList in route-lead.ts and
+// admin-notify-callback, so those don't rely on this list either.
+const OWNER_CC_ELIGIBLE_TYPES: ReadonlySet<EmailLogType> = new Set([
+  "provider_presumed_warning",
+  "provider_presumed_flipped",
+]);
+
 // Optional global cc. When OWNER_CC_ALL_EMAILS env var is set, every
 // email sent via sendBrevoEmail or sendTransactional gets the owner
 // cc'd. Comma-separated list supported. Used during launch monitoring
@@ -458,7 +469,9 @@ export async function sendTransactional(args: SendTransactionalArgs): Promise<Se
     return { ok: false, status: "failed", error: reason, emailLogId, shadowMode };
   }
 
-  const ccList = appendOwnerCc(undefined);
+  const ccList = OWNER_CC_ELIGIBLE_TYPES.has(args.emailType)
+    ? appendOwnerCc(undefined)
+    : undefined;
   const body = {
     sender: { email: senderEmail, name: cfg.senderName },
     to: [args.recipient],
