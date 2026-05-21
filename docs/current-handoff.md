@@ -1,5 +1,24 @@
 # Platform Handoff, Session 55, 2026-05-20
 
+## ⚡ PUSH FROM Mira 2026-05-21: Reconciliation + auto-flip cron + Field Guide infrastructure preview
+
+Operational + Q3 infrastructure asks from strategy session 14. Pickup by next platform session.
+
+**1. Provider reconciliation + auto-flip cron rollout.** Apply migration 0097 prospectively from **1 June 2026 cutoff**. Funded short courses: 14-day clock. Apprenticeship Learner Leads + Employer Leads: 60-day clock per PPA v2. Pre-1-June leads handled via one-time reconciliation message (Nell owns provider comms, deadline 31 May for status updates). Pre-conditions still owed: Mira's activity-gate framework (carried 12+ days).
+
+**2. Monday status nudge cadence.** Brevo automation: Monday morning nudge to each provider listing their open leads from prior week. Friday rejected (weekend signoff kills inbox attention). Escalation to Nell at 14 days silent.
+
+**3. Field Guide infrastructure preview (build June-July).** Landing page at `switchable.org.uk/field-guide`, email signup gates PDF download, Brevo drip sequence over 4 weeks, Skills Translator £5 Stripe checkout integration. Full spec: `strategy/docs/field-guide-outline.md` + `strategy/docs/skills-translator-spec.md`.
+
+**4. Switchable Members tier infrastructure preview (build Aug-Sept).** Stripe subscription + member portal + member-only content gate + sponsored recruiter listings management. Full spec: `strategy/docs/membership-discount-outreach.md`.
+
+**5. Affiliate revenue tracking (deferred but flagging).** Simple admin panel view of per-partner monthly payouts vs UTM source. Lazy version OK: monthly manual check on each platform's payout report.
+
+Reference: `strategy/docs/q3-revenue-plan.md` for the full 8-line revenue stack and sequencing.
+
+---
+
+
 ## Current state
 
 Big session — six discrete shipments. EMS provider notification routing now scopes by LA per user. Demo providers archived; Courses Direct + WYK Digital paused (active=false, still visible). Charlotte set up as `provider_admin` on EMS + Riverside via her own portal accounts. Employer routing now writes `audit.actions` rows in shape parity with the funded flow; 30 historical Riverside routings backfilled. Experiments page enrolment status buckets fixed to use the full migration-0151 enum, and 24 historical NULL `experiment_id` rows backfilled via 50/50 random so the page is now readable. `/admin/actions` rebuilt for an auto-chase world — three cron-handled sections out, four useful sections in.
