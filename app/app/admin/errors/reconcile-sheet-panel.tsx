@@ -323,6 +323,26 @@ function DriftReport({
             </li>
           )}
         </ul>
+        {summary.drift_target_disallowed_details && summary.drift_target_disallowed_details.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-amber-200/60">
+            <p className="text-xs font-semibold text-amber-900 mb-1.5">Skipped leads (open in admin to mark outcome):</p>
+            <ul className="text-xs space-y-0.5">
+              {summary.drift_target_disallowed_details.map((d) => (
+                <li key={d.submission_id}>
+                  <a
+                    href={`/admin/leads/${d.submission_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-amber-900 hover:text-amber-950 underline underline-offset-2"
+                  >
+                    #{d.submission_id}
+                  </a>
+                  <span className="text-amber-800/80"> — sheet says <strong>{d.sheet_status ?? "(blank)"}</strong>, DB has <strong>{d.db_status}</strong></span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {eligibleChanges.length > 0 && (

@@ -44,9 +44,9 @@ const STATUS_TO_SHEET_LABEL: Record<LeadStatus, string | null> = {
   // Routing-set, never re-pushed from portal
   open: null,
   // Learner sub-states
-  attempt_1_no_answer: "Calling",
-  attempt_2_no_answer: "Calling",
-  attempt_3_no_answer: "Calling",
+  attempt_1_no_answer: "Attempt 1 - no answer",
+  attempt_2_no_answer: "Attempt 2 - no answer",
+  attempt_3_no_answer: "Attempt 3 - no answer",
   enrolment_meeting_booked: "Meeting booked",
   // Learner terminal / major
   enrolled: "Enrolled",

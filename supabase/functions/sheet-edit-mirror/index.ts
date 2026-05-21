@@ -89,6 +89,15 @@ const sql = postgres(DATABASE_URL, {
 const STATUS_MAP: Record<string, string> = {
   // Learner
   open: "open",
+  "attempt 1 - no answer": "attempt_1_no_answer",
+  "attempt 2 - no answer": "attempt_2_no_answer",
+  "attempt 3 - no answer": "attempt_3_no_answer",
+  // Raw enum fallbacks (added 2026-05-21 split) — accept what the owner
+  // typed directly into the EMS dropdown before republish ran. Drops out
+  // naturally once the dropdown is cleaned up to human labels only.
+  attempt_1_no_answer: "attempt_1_no_answer",
+  attempt_2_no_answer: "attempt_2_no_answer",
+  attempt_3_no_answer: "attempt_3_no_answer",
   enrolled: "enrolled",
   "presumed enrolled": "presumed_enrolled",
   "cannot reach": "cannot_reach",

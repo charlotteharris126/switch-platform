@@ -370,6 +370,18 @@ async function run(
     .map((s) => Number(s.submission_id))
     .filter((n) => Number.isFinite(n));
   const skippedTargetDisallowed = skipped.filter((s) => s.reason === "target_disallowed").length;
+  const targetDisallowedIds = skipped
+    .filter((s) => s.reason === "target_disallowed")
+    .map((s) => Number(s.submission_id))
+    .filter((n) => Number.isFinite(n));
+  const targetDisallowedDetails = skipped
+    .filter((s) => s.reason === "target_disallowed")
+    .map((s) => ({
+      submission_id: Number(s.submission_id),
+      db_status: s.db_status,
+      sheet_status: s.sheet_status,
+    }))
+    .filter((d) => Number.isFinite(d.submission_id));
 
   if (!apply) {
     return {
@@ -382,6 +394,8 @@ async function run(
       drift_skipped_db_fresher: skippedDbFresher,
       drift_skipped_target_disallowed: skippedTargetDisallowed,
       drift_db_fresher_submission_ids: dbFresherIds,
+      drift_target_disallowed_submission_ids: targetDisallowedIds,
+      drift_target_disallowed_details: targetDisallowedDetails,
       proposed_changes: proposed,
       applied_count: 0,
       errors: [],
@@ -528,6 +542,8 @@ async function run(
     drift_skipped_db_fresher: skippedDbFresher,
     drift_skipped_target_disallowed: skippedTargetDisallowed,
     drift_db_fresher_submission_ids: dbFresherIds,
+    drift_target_disallowed_submission_ids: targetDisallowedIds,
+    drift_target_disallowed_details: targetDisallowedDetails,
     proposed_changes: proposed,
     applied_count: appliedCount,
     errors,

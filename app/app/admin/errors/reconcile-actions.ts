@@ -38,6 +38,12 @@ export interface ReconcileSheetToDbSummary {
   drift_skipped_db_fresher: number;
   drift_skipped_target_disallowed: number;
   drift_db_fresher_submission_ids: number[];
+  drift_target_disallowed_submission_ids?: number[];
+  drift_target_disallowed_details?: Array<{
+    submission_id: number;
+    db_status: string;
+    sheet_status: string | null;
+  }>;
   proposed_changes: ReconcileProposedChange[];
   applied_count: number;
   errors: string[];

@@ -20,9 +20,11 @@ export function statusToSheetLabel(status: string): string {
       return "Open";
     // Learner
     case "attempt_1_no_answer":
+      return "Attempt 1 - no answer";
     case "attempt_2_no_answer":
+      return "Attempt 2 - no answer";
     case "attempt_3_no_answer":
-      return "Calling";
+      return "Attempt 3 - no answer";
     case "enrolment_meeting_booked":
       return "Meeting booked";
     case "enrolled":
@@ -62,14 +64,14 @@ export function lostReasonHumanText(reason: string | null): string {
 // Returns null when:
 //   - The sheet cell is empty/null (treat as no-signal; the provider hasn't
 //     touched it yet). Reconcile should leave DB alone.
-//   - The label is "Calling". The DB has three attempt_*_no_answer states
-//     and the sheet collapses them all to "Calling" — going back the other
-//     way is ambiguous. Reconcile skips these; let sheet-edit-mirror's
-//     Channel A handle attempt-count progression on real edit events.
 //   - The label is unrecognised. Conservative: skip rather than guess.
 //
 // Case-insensitive, whitespace-trimmed. "Open" returns "open" so the
 // caller can choose to no-op when sheet and DB both say open.
+//
+// Legacy "Calling" still maps to null (skip) for safety: any sheet cell
+// that wasn't republished after the 2026-05-21 split keeps its old
+// ambiguous behaviour rather than guessing an attempt count.
 export function sheetLabelToStatus(label: string | null | undefined): string | null {
   if (label == null) return null;
   const norm = String(label).trim().toLowerCase();
@@ -77,7 +79,13 @@ export function sheetLabelToStatus(label: string | null | undefined): string | n
   switch (norm) {
     // Learner
     case "open": return "open";
-    case "calling": return null; // ambiguous (3 attempt_X states), skip
+    case "attempt 1 - no answer":
+    case "attempt_1_no_answer": return "attempt_1_no_answer";
+    case "attempt 2 - no answer":
+    case "attempt_2_no_answer": return "attempt_2_no_answer";
+    case "attempt 3 - no answer":
+    case "attempt_3_no_answer": return "attempt_3_no_answer";
+    case "calling": return null; // legacy, pre-2026-05-21 split; ambiguous, skip
     case "meeting booked": return "enrolment_meeting_booked";
     case "enrolled": return "enrolled";
     case "presumed enrolled": return "presumed_enrolled";
