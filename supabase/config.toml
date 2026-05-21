@@ -497,6 +497,15 @@ verify_jwt = false
 [functions.admin-test-email]
 verify_jwt = false
 
+[functions.admin-test-sms]
+verify_jwt = false
+
+[functions.sms-chaser-attempt-1]
+verify_jwt = false
+
+[functions.sms-fastrack-prompt-cron]
+verify_jwt = false
+
 [functions.provider-support-notify]
 verify_jwt = false
 

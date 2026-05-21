@@ -274,7 +274,7 @@ export default async function LeadsPage({
 
   // Load filter dropdown options + enrolment statuses + email_log status for the rows on this page in parallel.
   const submissionIdsOnPage = (data ?? []).map((r: { id: number }) => r.id);
-  const [categoriesRes, routesRes, coursesRes, providersRes, enrolmentsRes, emailLogRes] = await Promise.all([
+  const [categoriesRes, routesRes, coursesRes, providersRes, enrolmentsRes, emailLogRes, smsLogRes] = await Promise.all([
     supabase.schema("leads").from("submissions").select("funding_category").not("funding_category", "is", null),
     supabase.schema("leads").from("submissions").select("funding_route").not("funding_route", "is", null),
     supabase.schema("leads").from("submissions").select("course_id").not("course_id", "is", null),
@@ -291,6 +291,14 @@ export default async function LeadsPage({
           .schema("crm")
           .from("email_log")
           .select("submission_id, email_type, status, triggered_at")
+          .in("submission_id", submissionIdsOnPage)
+          .order("triggered_at", { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    submissionIdsOnPage.length > 0
+      ? supabase
+          .schema("crm")
+          .from("sms_log")
+          .select("submission_id, comm_type, status, triggered_at")
           .in("submission_id", submissionIdsOnPage)
           .order("triggered_at", { ascending: false })
       : Promise.resolve({ data: [], error: null }),
@@ -317,7 +325,7 @@ export default async function LeadsPage({
   //   not "which template".
   const HEALTHY_CHASER_STATUSES = new Set(["sent", "delivered", "opened", "clicked"]);
   const u1StatusBySubId = new Map<number, string>();
-  const lastChaserBySubId = new Map<number, string>();
+  const lastEmailChaserBySubId = new Map<number, string>();
   for (const e of (emailLogRes.data ?? []) as Array<{ submission_id: number; email_type: string; status: string; triggered_at: string }>) {
     if (e.email_type === "u1_funded" || e.email_type === "u1_self" || e.email_type === "s4b_employer_u1") {
       if (!u1StatusBySubId.has(e.submission_id)) {
@@ -325,9 +333,25 @@ export default async function LeadsPage({
       }
     }
     if (e.email_type === "chaser_funded" || e.email_type === "chaser_self" || e.email_type === "s4b_employer_chaser") {
-      if (HEALTHY_CHASER_STATUSES.has(e.status) && !lastChaserBySubId.has(e.submission_id)) {
-        lastChaserBySubId.set(e.submission_id, e.triggered_at);
+      if (HEALTHY_CHASER_STATUSES.has(e.status) && !lastEmailChaserBySubId.has(e.submission_id)) {
+        lastEmailChaserBySubId.set(e.submission_id, e.triggered_at);
       }
+    }
+  }
+
+  // Last SMS chaser timestamp per submission. SMS chaser fires once per learner
+  // on attempt_1_no_answer (via crm.sms_log comm_type='chaser_call_attempt').
+  // Healthy statuses for SMS are 'sent' / 'delivered' (no opened/clicked
+  // equivalent for SMS — webhooks aren't wired for those yet). Mirrors the
+  // email-chaser column shape.
+  const HEALTHY_SMS_STATUSES = new Set(["sent", "delivered"]);
+  const lastSmsChaserBySubId = new Map<number, string>();
+  for (const s of (smsLogRes.data ?? []) as Array<{ submission_id: number; comm_type: string; status: string; triggered_at: string }>) {
+    if (s.comm_type === "chaser_call_attempt"
+      && HEALTHY_SMS_STATUSES.has(s.status)
+      && !lastSmsChaserBySubId.has(s.submission_id)
+    ) {
+      lastSmsChaserBySubId.set(s.submission_id, s.triggered_at);
     }
   }
 
@@ -391,7 +415,8 @@ export default async function LeadsPage({
               <TableHead>Funding</TableHead>
               <TableHead>Lead status</TableHead>
               <TableHead>U1</TableHead>
-              <TableHead>Last chaser</TableHead>
+              <TableHead>Last email chaser</TableHead>
+              <TableHead>Last SMS chaser</TableHead>
               <TableHead>Campaign</TableHead>
               <TableHead>Routed</TableHead>
             </TableRow>
@@ -399,7 +424,7 @@ export default async function LeadsPage({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center text-[#5a6a72] py-10">
+                <TableCell colSpan={13} className="text-center text-[#5a6a72] py-10">
                   No leads match these filters.
                 </TableCell>
               </TableRow>
@@ -504,31 +529,10 @@ export default async function LeadsPage({
                     })()}
                   </TableCell>
                   <TableCell className="text-xs text-[#5a6a72] whitespace-nowrap">
-                    {(() => {
-                      const lastChaserAt = lastChaserBySubId.get(r.id);
-                      if (!lastChaserAt) return "—";
-                      const d = new Date(lastChaserAt);
-                      // Compare UK calendar days, not elapsed hours, so "today"
-                      // means same calendar day rather than "within last 24h".
-                      const ukKey = (date: Date) =>
-                        date.toLocaleDateString("en-GB", {
-                          year: "numeric",
-                          month: "2-digit",
-                          day: "2-digit",
-                          timeZone: "Europe/London",
-                        });
-                      const todayKey = ukKey(new Date());
-                      const thenKey = ukKey(d);
-                      // Day diff: parse the YYYY-MM-DD (en-GB gives DD/MM/YYYY) and floor.
-                      const parseEnGb = (s: string) => {
-                        const [dd, mm, yyyy] = s.split("/").map((p) => Number(p));
-                        return Date.UTC(yyyy, mm - 1, dd);
-                      };
-                      const days = Math.round((parseEnGb(todayKey) - parseEnGb(thenKey)) / 86_400_000);
-                      const label = days === 0 ? "today" : days === 1 ? "1d ago" : `${days}d ago`;
-                      const cls = days <= 2 ? "text-[#b3412e] font-semibold" : "";
-                      return <span className={cls} title={d.toISOString()}>{label}</span>;
-                    })()}
+                    {renderRelativeDayCell(lastEmailChaserBySubId.get(r.id))}
+                  </TableCell>
+                  <TableCell className="text-xs text-[#5a6a72] whitespace-nowrap">
+                    {renderRelativeDayCell(lastSmsChaserBySubId.get(r.id))}
                   </TableCell>
                   <TableCell className="text-xs text-[#5a6a72]">{truncate(r.utm_campaign, 20)}</TableCell>
                   <TableCell className="text-xs">{r.primary_routed_to ?? "—"}</TableCell>
@@ -615,4 +619,28 @@ function buildPageHref(sp: SearchParams, page: number): string {
   }
   params.set("page", String(page));
   return `/leads?${params.toString()}`;
+}
+
+// Render a relative-day cell for the "Last email chaser" / "Last SMS chaser"
+// columns. Compares UK calendar days (not elapsed hours) so "today" means same
+// calendar day, not "within last 24h". 0-2 days renders bold red as a stale
+// signal; older days render plain. Empty input = em-dash.
+function renderRelativeDayCell(triggeredAtIso: string | undefined) {
+  if (!triggeredAtIso) return "—";
+  const d = new Date(triggeredAtIso);
+  const ukKey = (date: Date) =>
+    date.toLocaleDateString("en-GB", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      timeZone: "Europe/London",
+    });
+  const parseEnGb = (s: string) => {
+    const [dd, mm, yyyy] = s.split("/").map((p) => Number(p));
+    return Date.UTC(yyyy, mm - 1, dd);
+  };
+  const days = Math.round((parseEnGb(ukKey(new Date())) - parseEnGb(ukKey(d))) / 86_400_000);
+  const label = days === 0 ? "today" : days === 1 ? "1d ago" : `${days}d ago`;
+  const cls = days <= 2 ? "text-[#b3412e] font-semibold" : "";
+  return <span className={cls} title={d.toISOString()}>{label}</span>;
 }

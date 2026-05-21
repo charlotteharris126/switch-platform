@@ -1,5 +1,55 @@
 # Platform Handoff, Session 56, 2026-05-21
 
+## ⚡ SHIPPED 2026-05-21 (Sasha, late session): SMS utility Chunks 2 + 3 — full workstream complete
+
+All three triggers from Wren's `switchable/email/docs/sms-utility-design.md` are live in prod. Foundation (Chunk 1) verified end-to-end earlier in the session; Chunks 2 + 3 layered on top without disturbing Chunk 1.
+
+**Chunk 2 — Triggers B + C wired:**
+- Trigger B (save-number SMS on qualify-PASS) wired in `fastrack-receive` step 8.7, sister to the `u-fastrack-qualified` email at step 8.6.
+- Trigger C (chaser SMS on attempt_1_no_answer) wired via new RPC `crm.fire_sms_chaser_attempt_1` (migration 0157) + new EF `sms-chaser-attempt-1`. Server action `markOutcomeAction` calls the RPC alongside the existing email chaser, gated on `attempt_1_no_answer` + learner lead type.
+- New `_shared/sms-utility.ts` module with body templates inline (per spec — not Brevo-templated). Gates: funding gov/loan, learner phone, matched provider, per-provider opt-out flags, regional rep phone resolves. UK phone normalisation to E.164.
+- New `resolveRepFirstName` helper in `route-lead.ts` + new `SW_PROVIDER_REP_FIRST_NAME` Brevo attribute (23 attrs total, up from 22).
+- Bodies match S18 framing: chaser is "prime-the-pickup, they'll try again", save-number keeps "Save their number" CTA.
+- EF chain verified end-to-end via direct curl: submission 512 (Truly, Stockton-on-Tees, George rep) → body rendered "Hi Truly, George tried calling about your Counselling Skills place. They'll try again, keep an eye out. Switchable" (113 chars, single-segment, shadow mode).
+
+**Chunk 3 — Trigger A (fastrack-link cron):**
+- Migration 0158 — `cron.schedule('sms-fastrack-prompt-cron', '* * * * *', ...)` every-minute pg_cron POSTs to the new EF.
+- New EF `sms-fastrack-prompt-cron` — scans `leads.submissions` joined to `crm.enrolments` + `crm.providers` for matched funded leads with `sent_to_provider_at` 10-60 min ago, no `fastracked_at`, no prior `call_reminder_fastrack_link` row, provider opt-in, phone present, status `open`. LIMIT 50 per run. Calls `fireFastrackLinkSms` per row.
+- `fireFastrackLinkSms` in `_shared/sms-utility.ts`. Lighter gate than B/C — body cites provider company name + URL, no rep phone needed. Inline `buildFastrackUrlForSms` (intentional copy of route-lead.ts `buildFastrackUrl` — when the shortener ships, only this callsite updates; email contexts keep the long URL).
+
+**Known shipping debt → cross-project push to Mable (switchable/site):**
+- Build a short URL resolver at `switchable.org.uk/f/{token}` that 301-redirects to the long fastrack URL. Token = first 8 chars of `leads.submissions.client_nonce` (per Wren spec line 99). The SMS body uses the full URL today, pushing every Trigger A send to ~240 chars / 2 segments / 2x cost. Acceptable at pilot volume. When Mable ships, update the single callsite `buildFastrackUrlForSms` in `_shared/sms-utility.ts:bottom` (route-lead.ts `buildFastrackUrl` for email keeps long URL).
+
+**Shadow mode currently ON.** All Trigger A/B/C fires write `crm.sms_log` rows but no SMS leaves Brevo. Owner action to flip live:
+```
+supabase secrets set BREVO_SMS_SHADOW_MODE=false --project-ref igvlngouxcirqhlsrhga
+```
+Recommend leaving shadow ON until the first cron run lands cleanly (next minute) and a real funded lead has been routed 10+ minutes ago. Live test scenario: route an EMS Tees Valley lead in the portal, wait 11 minutes, check `crm.sms_log` for a `call_reminder_fastrack_link` row.
+
+**Files changed (all uncommitted on this machine, per S56 commit boundary chosen by parallel agent):**
+- Migrations 0156 (Chunk 1), 0157 (Chunk 2 RPC), 0158 (Chunk 3 cron)
+- `_shared/brevo.ts` (`sendSms` + `SmsLogType` + dead-letter)
+- `_shared/route-lead.ts` (`resolveRepFirstName` + exported helpers + `SW_PROVIDER_REP_FIRST_NAME`)
+- `_shared/sms-utility.ts` (three helpers + body templates + phone normalisation)
+- `fastrack-receive/index.ts` (step 8.7)
+- `admin-test-sms/index.ts` (new)
+- `sms-chaser-attempt-1/index.ts` (new)
+- `sms-fastrack-prompt-cron/index.ts` (new)
+- `config.toml` (3 new `verify_jwt = false` entries)
+- `app/app/provider/leads/[id]/actions.ts` (Trigger C wire)
+- Docs: `platform/docs/data-architecture.md`, `platform/docs/changelog.md`, `switchable/email/CLAUDE.md`, `switchable/email/docs/current-handoff.md`, this handoff
+
+**Watch on first live run:**
+- First minute after deploy: `public.vw_cron_runs` should show a `sms-fastrack-prompt-cron` row landing. Empty candidate set is fine — most minutes nothing's eligible.
+- Within 24h of a fresh funded lead being routed: a `call_reminder_fastrack_link` row in `crm.sms_log` 10-60 min post-routing (assuming the lead doesn't self-fastrack within those 10 minutes).
+- First real Trigger B fire: any fastrack-form submit with `cohort_confirmed=true AND l3_reconfirmed=false` after deploy. `call_reminder_save_number` row in `crm.sms_log`.
+- First real Trigger C fire: any provider portal "1st no answer" click on a learner lead after deploy. `chaser_call_attempt` row in `crm.sms_log`.
+- All four still in shadow mode (no actual SMS sends) until owner flips `BREVO_SMS_SHADOW_MODE=false`.
+
+**Cross-project push owed:** Mable (`switchable/site/`) — build `/f/{token}` resolver (see above). Push to her handoff at session close.
+
+---
+
 ## Current state
 
 Sheet vocabulary split for per-attempt labels live, leads.partials cross-form merge bug fixed, reconcile-sheet-to-db whitelist+wrapper bugs fixed and three more audit-call sites hardened to use the public wrapper. Workspace audited for the same two bug classes, clean otherwise. Fastrack impact analysis delivered (8x active enrolment lift, 2.3x faster outcomes). SMS utility Chunk 1 + Chunk 2 prep done by a parallel agent session, fully shipped to prod but still uncommitted on this machine.

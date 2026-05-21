@@ -77,7 +77,7 @@ export default async function LeadDetailPage({
   const children = (childrenRes.data ?? []) as Array<{ id: number; submitted_at: string; primary_routed_to: string | null }>;
 
   // Parallel fetch: routing history, dead letter, partial captures on the same session_id, current enrolment outcome, email log, fastrack child.
-  const [routingRes, deadLetterRes, partialsRes, enrolmentRes, emailLogRes, fastrackRes] = await Promise.all([
+  const [routingRes, deadLetterRes, partialsRes, enrolmentRes, emailLogRes, smsLogRes, fastrackRes] = await Promise.all([
     supabase
       .schema("leads")
       .from("routing_log")
@@ -110,6 +110,12 @@ export default async function LeadDetailPage({
       .schema("crm")
       .from("email_log")
       .select("id, email_type, channel, template_id, status, brevo_message_id, error_text, metadata, triggered_at, sent_at")
+      .eq("submission_id", leadId)
+      .order("triggered_at", { ascending: false }),
+    supabase
+      .schema("crm")
+      .from("sms_log")
+      .select("id, comm_type, recipient_phone, status, brevo_message_id, body_rendered, error_text, metadata, triggered_at, sent_at")
       .eq("submission_id", leadId)
       .order("triggered_at", { ascending: false }),
     // Fastrack child row (lead-to-enrol uplift Phase 2). One per parent in the
@@ -245,6 +251,19 @@ export default async function LeadDetailPage({
     template_id: string;
     status: string;
     brevo_message_id: string | null;
+    error_text: string | null;
+    metadata: Record<string, unknown> | null;
+    triggered_at: string;
+    sent_at: string | null;
+  }>;
+
+  const smsLog = (smsLogRes.data ?? []) as Array<{
+    id: number;
+    comm_type: string;
+    recipient_phone: string;
+    status: string;
+    brevo_message_id: string | null;
+    body_rendered: string | null;
     error_text: string | null;
     metadata: Record<string, unknown> | null;
     triggered_at: string;
@@ -757,6 +776,78 @@ export default async function LeadDetailPage({
                             {forced && <Badge variant="outline" className="text-[10px] mr-1">forced</Badge>}
                             <span>template {e.template_id}</span>
                           </>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SMS log (Chunk 1+2+3 of SMS utility, 2026-05-21). Three comm_types:
+          call_reminder_fastrack_link (Trigger A cron),
+          call_reminder_save_number (Trigger B inside fastrack-receive),
+          chaser_call_attempt (Trigger C from markOutcomeAction).
+          While BREVO_SMS_SHADOW_MODE=true, rows land with metadata.shadow=true
+          and brevo_message_id NULL (no real SMS leaves Brevo). */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">SMS log ({smsLog.length})</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {smsLog.length === 0 ? (
+            <p className="text-xs text-[#5a6a72] p-4">No SMS sends recorded for this lead.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Triggered</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Recipient</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Sent</TableHead>
+                  <TableHead>Body</TableHead>
+                  <TableHead>Notes</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {smsLog.map((s) => {
+                  const isHealthy = s.status === "sent" || s.status === "delivered";
+                  const isError = s.status === "failed" || s.status === "undelivered";
+                  const meta = s.metadata as { shadow?: boolean; shadow_log_only?: boolean } | null;
+                  const shadow = meta?.shadow === true;
+                  return (
+                    <TableRow key={s.id}>
+                      <TableCell className="text-xs whitespace-nowrap">
+                        {formatDateTime(s.triggered_at)}
+                      </TableCell>
+                      <TableCell className="text-xs font-mono">{s.comm_type}</TableCell>
+                      <TableCell className="text-xs font-mono">{s.recipient_phone}</TableCell>
+                      <TableCell className="text-xs">
+                        {isHealthy ? (
+                          <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">{s.status}</Badge>
+                        ) : isError ? (
+                          <Badge variant="destructive" className="text-xs">{s.status}</Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-xs">{s.status}</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{formatDateTime(s.sent_at)}</TableCell>
+                      <TableCell className="text-xs text-[#5a6a72] max-w-[360px]">
+                        {s.body_rendered ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-xs text-[#5a6a72]">
+                        {s.error_text ? (
+                          <span className="text-[#b3412e]">{s.error_text}</span>
+                        ) : shadow ? (
+                          <Badge variant="outline" className="text-[10px]" title="Logged but not sent — BREVO_SMS_SHADOW_MODE=true">shadow</Badge>
+                        ) : s.brevo_message_id ? (
+                          <span className="font-mono text-[10px] text-[#5a6a72] break-all">{s.brevo_message_id}</span>
+                        ) : (
+                          "—"
                         )}
                       </TableCell>
                     </TableRow>

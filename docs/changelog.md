@@ -4,6 +4,96 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-21 — SMS utility Chunk 3: Trigger A (fastrack-link cron) — full SMS workstream complete
+
+**Scope.** Final chunk of the SMS utility build. Adds Trigger A — the every-minute pg_cron that fires the fastrack-link prompt SMS to matched funded leads 10 minutes after routing if they haven't fastracked yet. With this chunk shipped, all three triggers from `switchable/email/docs/sms-utility-design.md` are live.
+
+**What landed:**
+- **Migration 0158:** `cron.schedule('sms-fastrack-prompt-cron', '* * * * *', ...)` — every-minute pg_cron POSTing to the new EF with audit-key auth. Idempotent re-schedule pattern (unschedule first if present, then schedule).
+- **`sms-fastrack-prompt-cron` (new EF):** auth via `AUDIT_SHARED_SECRET`. Per minute, queries `leads.submissions` joined to `crm.enrolments` + `crm.providers` for candidates where: matched funded, `crm.enrolments.sent_to_provider_at` is 10-60 minutes ago, no `fastracked_at`, no prior `call_reminder_fastrack_link` row in `crm.sms_log`, provider has `sms_utility_enabled=true`, status `open`, has phone. LIMIT 50 per run (pilot volume nowhere near). Per-row loads full SubmissionRow + ProviderRow and calls `fireFastrackLinkSms`. Returns `{scanned, sent, skipped, failed, skipped_reasons}` summary for cron-runs visibility.
+- **`_shared/sms-utility.ts`:** new `fireFastrackLinkSms(args)` helper + new `FASTRACK_LINK_BODY_TEMPLATE`. Lighter gate than B/C — no regional-rep-phone requirement (this body cites only provider company name + URL, no rep phone). Inline `buildFastrackUrlForSms` mirrors the existing `buildFastrackUrl` in route-lead.ts (intentional copy — when the shortener ships, only this callsite updates; email contexts keep the long URL).
+- **`config.toml`:** `verify_jwt = false` for `sms-fastrack-prompt-cron`.
+
+**Known shipping debt (deferred to Mable):**
+- **Short URL `/f/{token}` on switchable.org.uk.** Body template uses the full fastrack URL (~150 chars) until Mable ships the shortener. Worst-case SMS render is currently ~240 chars (2 segments — 2x send cost during the interim). Acceptable for pilot volume; revisit when volume grows. Push to Mable's handoff for switchable/site work.
+
+**Impact assessment** (per `.claude/rules/data-infrastructure.md` §8): logged in migration 0158 header. One pg_cron schedule, no DDL, no schema_version bump, single new EF consumer of existing tables. Owner sign-off only.
+
+**Verification path:**
+- Apply migration, deploy `sms-fastrack-prompt-cron` EF.
+- First fire happens at the next clock-minute boundary. Within 60 seconds of deploy, a `cron.job_run_details` row should land for `sms-fastrack-prompt-cron` (visible via `public.vw_cron_runs`).
+- For empty candidate set (most minutes), response is `{scanned: 0, sent: 0, ...}` — no `crm.sms_log` row written.
+- Next real funded lead routed → 10 minutes later → SMS lands (shadow mode currently ON, so log row only). Verify `crm.sms_log` row with `comm_type='call_reminder_fastrack_link'` lands.
+- Flip `BREVO_SMS_SHADOW_MODE=false` to start real fastrack-link sends. Recommend leaving shadow ON for first 24h to confirm cron behavior on real lead flow before going live.
+
+**Diagnosed + specced:** Wren 2026-05-18 (deferred S17), locked 2026-05-21. **Built:** Sasha (Chunks 1 + 2 + 3 in single session). **Sign-off:** Owner 2026-05-21.
+
+---
+
+## 2026-05-21 — SMS utility Chunk 2: Triggers B + C wired, SW_PROVIDER_REP_FIRST_NAME live
+
+**Scope.** Chunk 2 of three for the SMS utility build (see Chunk 1 entry below for foundation context). Wires the two event-based triggers into existing code paths:
+- **Trigger B (save-number on qualify-PASS)** — fires from `fastrack-receive` at step 8.7, sister to the `u-fastrack-qualified` email at step 8.6. Same gate condition (`cohort_confirmed=true AND l3_reconfirmed=false`), independent idempotency on `(submission_id, 'call_reminder_save_number')`.
+- **Trigger C (chaser on attempt_1_no_answer)** — fires from the server action `markOutcomeAction` (provider portal) via new RPC `crm.fire_sms_chaser_attempt_1` → new EF `sms-chaser-attempt-1` → `fireChaserSms`. Fires ONCE per learner on attempt_1 only; attempt_2 / attempt_3 / cannot_reach still get the email chaser unchanged. Learner-funded only (not employer-apprenticeship).
+
+**What landed:**
+- **`_shared/route-lead.ts`:** new exported helper `resolveRepFirstName(provider, submission)` — dual fallback regional rep → provider contact_name first word → empty string. Added `SW_PROVIDER_REP_FIRST_NAME` to `buildLearnerBrevoAttributes` (23 attrs total now, up from 22). Exported `getMatrixContext` and `renderProviderContactValues` so the shared SMS module can call them.
+- **`_shared/sms-utility.ts` (new):** `fireSaveNumberSms(args)` + `fireChaserSms(args)`. Body templates inline (per spec — not Brevo-templated). Worst-case render lengths 134 (save-number) / 127 (chaser) chars, both well under 160 single-segment. Gates: funding_category in (gov, loan), submission phone present, matched provider, provider opt-out flag check, regional rep phone resolves. Idempotency handled inside `sendSms` via `crm.sms_log`. UK phone normalisation to E.164 (07xxx → +447xxx). Returns `{kind: "skipped", reason}` or `{kind: "sent", result}`.
+- **`fastrack-receive/index.ts`:** new step 8.7 inside the qualify-PASS branch. Loads full submission + provider rows, calls `fireSaveNumberSms`. Best-effort; failures land in `leads.dead_letter` via `sendSms`'s persist path. Email step 8.6 doesn't roll back if SMS fails.
+- **`sms-chaser-attempt-1` (new EF):** auth via `AUDIT_SHARED_SECRET`, takes `{submission_id}`, loads submission + provider, calls `fireChaserSms`. `verify_jwt = false` added to config.toml.
+- **Migration 0157:** `crm.fire_sms_chaser_attempt_1(BIGINT)` RPC. SECURITY DEFINER, mirrors `crm.fire_provider_chaser` (migration 0086) dispatch pattern — light gating + audit row + `net.http_post` to the EF using vault-stored audit secret. GRANT EXECUTE to authenticated.
+- **`app/app/provider/leads/[id]/actions.ts`:** `markOutcomeAction` calls the new RPC alongside the existing `fire_provider_chaser` email-chaser RPC, gated on `targetStatus === 'attempt_1_no_answer' && leadType !== 'employer_apprenticeship'`. Fire-and-forget pattern matches the sibling RPC call.
+
+**Voice / framing notes (S18 supersedes spec doc):**
+- Chaser body: "{{REP_FIRST_NAME}} tried calling about your {{COURSE_NAME}} place. They'll try again, keep an eye out." — "prime-the-pickup" framing per Wren S18 decision, NOT the call-back CTA the original spec doc body had. Providers retain control of calling cadence.
+- Save-number body: keeps "Save their number: {{PROVIDER_PHONE}}" CTA per spec — fires BEFORE first contact, sets the expectation.
+- Sign-off "Switchable" not "The Switchable team" — keeps every worst-case render single-segment.
+
+**What's intentionally untouched:**
+- Trigger A (fastrack-link cron) — Chunk 3.
+- Short URL `/f/{token}` infra — Chunk 3.
+- Brevo backfill of `SW_PROVIDER_REP_FIRST_NAME` for existing contacts — needed before any marketing template references the new attribute. Per `platform/CLAUDE.md` Brevo attribute wiring rule, the attribute is populated on next contact upsert (routing or `crm.sync_leads_to_brevo` call) but existing contacts hold a NULL until then. No template references it today (Wren uses split filter on `SW_PROVIDER_CONTACT_BEFORE` for the email chaser); Chunk 2 only feeds the SMS path, which renders the attribute live from the DB via `fireChaserSms` not from Brevo.
+
+**Impact assessment** (per `.claude/rules/data-infrastructure.md` §8): logged in migration 0157 header. Single new SECURITY DEFINER RPC, no table change. Schema_version unaffected. Owner sign-off only — no cross-brand impact.
+
+**Verification path:**
+- Migration applied + 2 new EFs deployed (admin-test-sms remains valid for unit testing the helper).
+- Trigger B: real fastrack submit via `/funded/thank-you/` with `cohort_confirmed=true AND l3_reconfirmed=false` on an EMS Tees Valley lead. Email lands AND SMS lands. `crm.sms_log` row with comm_type `call_reminder_save_number`, brevo_message_id populated.
+- Trigger C: provider portal user clicks "1st no answer" on an EMS Tees Valley lead. Email chaser fires (existing path) AND SMS chaser fires. `crm.sms_log` row with comm_type `chaser_call_attempt`.
+- Idempotency: repeat the trigger on the same submission, sendSms returns `skipped_duplicate` (sms_log row stays as-is, no new row).
+
+**Diagnosed + specced:** Wren 2026-05-18 (deferred S17), locked 2026-05-21. **Built:** Sasha. **Sign-off:** Owner 2026-05-21.
+
+---
+
+## 2026-05-21 — SMS utility Chunk 1: crm.sms_log + provider opt-out flags + sendSms helper + admin-test-sms
+
+**Scope.** Chunk 1 of three for the SMS utility build per `switchable/email/docs/sms-utility-design.md` (Wren, locked same day after Brevo sender went LIVE at 16:35 UK). Foundation only — no triggers wired in this chunk. Chunk 2 wires Triggers B (save-number on qualify) + C (chaser on attempt_1) into existing Edge Functions; Chunk 3 ships Trigger A (fastrack-link cron) + short URL infra.
+
+**What landed:**
+- **Migration 0156:** new `crm.sms_log` table (mirrors `crm.email_log` shape) with three comm_types (`call_reminder_fastrack_link`, `call_reminder_save_number`, `chaser_call_attempt`). Idempotency via partial UNIQUE on `(submission_id, comm_type)` filtered to non-terminal statuses — same posture as `crm.email_log`. Two new BOOLEAN columns on `crm.providers`: `sms_utility_enabled` (gates A + B) and `sms_chaser_enabled` (gates C), both NOT NULL DEFAULT true so live providers opt in automatically.
+- **`_shared/brevo.ts`:** new `sendSms(args)` helper. Mirrors `sendTransactional` discipline: idempotency check, queued-row-first insert, Brevo Transactional SMS API call with 250/1000/4000ms exponential backoff on 429/5xx, dead-letter on final failure, post-send status flip. Bodies are template-literal in calling code (not Brevo-templated) — rendered string is passed in and stored in `crm.sms_log.body_rendered`. Shadow mode via `BREVO_SMS_SHADOW_MODE` env (default `true`) — log-only until flipped.
+- **`admin-test-sms` Edge Function:** mirror of `admin-test-email`. Auth via `AUDIT_SHARED_SECRET` (vault). POST body: `{ submission_id, comm_type, phone? (override), body? (override) }`. Bypasses trigger gates so the helper itself can be verified without wiring. Returns `sms_log_id` + `brevo_message_id` + `shadow_mode` flag for verification.
+
+**What's intentionally untouched:**
+- Triggers (A, B, C) — Chunks 2 and 3.
+- `SW_PROVIDER_REP_OR_NAME` Brevo attribute — Chunk 2 (added alongside the Trigger B wiring inside `fastrack-receive`).
+- Short URL `/f/{token}` infra — Chunk 3 (Trigger A only).
+- Phone-number SMS-capability pre-flight — open question in the design doc, addressed once we have real send data.
+- Marketing SMS path (form-side `sms_opt_in`, `SW_CONSENT_SMS` attribute, channel-state mirror) — out of scope per S17 decision.
+
+**Impact assessment** (per `.claude/rules/data-infrastructure.md` §8): logged in migration 0156 header. Internal table (no external contract ingested), no schema_version bump, no data migration, single new writer (`sendSms` via `functions_writer`). Owner sign-off only — no cross-brand impact.
+
+**Verification before going live:**
+- Apply migration, deploy EF.
+- POST to `/functions/v1/admin-test-sms` with `x-audit-key: <secret>` and `{ submission_id: <any existing>, comm_type: "call_reminder_save_number" }`.
+- Confirm `crm.sms_log` row lands with `status='sent'` and `brevo_message_id IS NULL` (shadow mode on).
+- Flip `BREVO_SMS_SHADOW_MODE=false` via `supabase secrets set`, re-test against Charlotte's phone, confirm SMS arrives and `brevo_message_id` populates.
+
+**Diagnosed + specced:** Wren 2026-05-18 (deferred S17), locked 2026-05-21 after Brevo sender LIVE. **Built:** Sasha. **Sign-off:** Owner 2026-05-21.
+
+---
+
 ## 2026-05-21 — Sheet vocabulary split: "Calling" → per-attempt labels
 
 **Incident.** Owner reported "anomalies in DB after updating EMS sheet statuses". Diagnosis: sheet dropdown collapsed three DB enum states (`attempt_1_no_answer` / `attempt_2_no_answer` / `attempt_3_no_answer`) into a single "Calling" label. `_shared/sheet-status.ts:80` returned `null` for "Calling" on the reverse map (ambiguous), and `sheet-edit-mirror`'s STATUS_MAP didn't include "Calling" at all — so every sheet→DB edit setting status to "Calling" was outright rejected as `unmapped status value`. Owner then added raw `attempt_N_no_answer` (with trailing tab) directly to the EMS dropdown, which were also unmapped. 24h impact (EMS): 39 sheet edits → 9 mirrored OK, 7 "Calling" rejected, 5 raw-enum rejected, 18 null-cell rejected. 2 leads (subs 213, 262) left with sheet="Calling" but DB="open".

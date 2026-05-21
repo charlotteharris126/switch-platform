@@ -37,6 +37,12 @@
 
 import postgres from "npm:postgres@3";
 import { sendBrevoEmail, sendTransactional } from "../_shared/brevo.ts";
+import { fireSaveNumberSms } from "../_shared/sms-utility.ts";
+import {
+  SUBMISSION_FULL_COLUMNS,
+  type ProviderRow,
+  type SubmissionRow,
+} from "../_shared/route-lead.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -418,6 +424,50 @@ Deno.serve(async (req: Request): Promise<Response> => {
       } catch (err) {
         console.error(
           "fastrack: u-fastrack-qualified send failed (non-fatal):",
+          describeError(err),
+        );
+      }
+    }
+
+    // Step 8.7: SMS Trigger B (save-number on qualify-PASS). Sister to the
+    // email above — same gate condition, fires once per submission via the
+    // sendSms idempotency check on (submission_id, 'call_reminder_save_number').
+    // Gates inside fireSaveNumberSms: funding gov/loan, phone present,
+    // provider.sms_utility_enabled=true, regional rep phone resolves.
+    // Best-effort; failures land in leads.dead_letter via sendSms's persist
+    // path, the email above doesn't roll back.
+    if (parent.primary_routed_to) {
+      try {
+        const [fullSubmission] = await sql<SubmissionRow[]>`
+          SELECT ${sql.unsafe(SUBMISSION_FULL_COLUMNS)}
+            FROM leads.submissions
+           WHERE id = ${parent.id}
+           LIMIT 1
+        `;
+        const [providerRow] = await sql<ProviderRow[]>`
+          SELECT provider_id, company_name, contact_email, contact_name,
+                 sheet_id, sheet_webhook_url, crm_webhook_url, cc_emails,
+                 active, archived_at, auto_route_enabled,
+                 trust_line, regions, portal_enabled, regional_contacts
+            FROM crm.providers
+           WHERE provider_id = ${parent.primary_routed_to}
+           LIMIT 1
+        `;
+        if (fullSubmission && providerRow) {
+          const smsOutcome = await fireSaveNumberSms({
+            sql,
+            submission: fullSubmission,
+            provider: providerRow,
+          });
+          if (smsOutcome.kind === "skipped") {
+            console.log(
+              `fastrack: SMS save-number skipped for submission ${parent.id}: ${smsOutcome.reason}`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error(
+          "fastrack: SMS save-number send failed (non-fatal):",
           describeError(err),
         );
       }

@@ -918,6 +918,41 @@ CREATE INDEX email_log_brevo_message_id_idx   ON crm.email_log (brevo_message_id
 
 Idempotency rule: `sendTransactional()` checks `(submission_id, email_type)` for an existing row in status `(queued, sent, delivered, opened, clicked)` and skips the send if found, UNLESS the caller passes `forceResend: true`. Chaser is the only email type that uses `forceResend`.
 
+### `crm.sms_log` (migration 0156, 2026-05-21)
+
+One row per SMS send attempt. Utility SMS only (legal basis: contract). Mirrors `crm.email_log` shape and discipline, scoped to the three utility comm types from `switchable/email/docs/sms-utility-design.md` (Wren, locked 2026-05-21). Marketing SMS is out of scope until form-side consent capture (`sms_opt_in`) and a `SW_CONSENT_SMS` attribute land.
+
+```sql
+CREATE TABLE crm.sms_log (
+  id                BIGSERIAL PRIMARY KEY,
+  submission_id     BIGINT NOT NULL REFERENCES leads.submissions(id) ON DELETE RESTRICT,
+  comm_type         TEXT NOT NULL,  -- call_reminder_fastrack_link | call_reminder_save_number | chaser_call_attempt
+  recipient_phone   TEXT NOT NULL,
+  triggered_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at           TIMESTAMPTZ,
+  status            TEXT NOT NULL,  -- queued | sent | failed | delivered | undelivered
+  brevo_message_id  TEXT,
+  body_rendered     TEXT,           -- plain text body actually sent (template literals, not Brevo-templated)
+  error_text        TEXT,
+  metadata          JSONB
+);
+
+CREATE UNIQUE INDEX sms_log_submission_type_uniq
+  ON crm.sms_log (submission_id, comm_type)
+  WHERE status IN ('queued', 'sent', 'delivered');
+
+CREATE INDEX sms_log_status_triggered_idx ON crm.sms_log (status, triggered_at DESC);
+CREATE INDEX sms_log_brevo_message_id_idx ON crm.sms_log (brevo_message_id) WHERE brevo_message_id IS NOT NULL;
+```
+
+Idempotency rule: `sendSms()` checks `(submission_id, comm_type)` for an existing row in status `(queued, sent, delivered)` and skips the send if found. There is no `forceResend` path — every utility SMS is single-shot per learner per comm_type. The partial unique index enforces the rule at the schema level too: `failed` / `undelivered` rows do not block a re-send (a prior send error should not silently silence the next legitimate attempt — same posture as `crm.email_log`).
+
+**Bodies are template-literal in TS**, not Brevo-templated. `body_rendered` stores the post-merge string actually sent, so `crm.sms_log` is the only post-hoc record of what the learner received. Per the design doc: "less surface area to keep in sync, one fewer env var per variant."
+
+**Sender:** alphanumeric `Switchable` via Brevo UK aggregator. Verified LIVE 2026-05-21 16:35 UK (Charlotte API test send landed Accepted → Sent → Delivered). Overrideable via `BREVO_SMS_SENDER_SWITCHABLE` env var if needed.
+
+**Per-provider opt-out:** `crm.providers.sms_utility_enabled` (gates Triggers A + B, fastrack-link cron + save-number on qualify) and `sms_chaser_enabled` (gates Trigger C, chaser on attempt_1). Both BOOLEAN NOT NULL DEFAULT true — live providers opt in by default. Flip per provider if anyone asks out. Independent flags so a provider can opt out of one channel without affecting the other.
+
 ### `crm.consent_history` (migration 0074, 2026-05-05)
 
 Append-only audit log of every consent state change. Both Brevo-attribute changes (`SW_CONSENT_MARKETING`) and Brevo channel-subscription changes (Email campaigns vs Transactional) are tracked. Powers GDPR Article 7(1) ("controller shall be able to demonstrate that the data subject has consented") and the dashboard's per-lead consent timeline. Phase 1.

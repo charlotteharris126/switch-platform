@@ -292,6 +292,30 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
             );
           }
         });
+
+      // Trigger C — SMS chaser. Fires ONCE per learner on attempt_1
+      // only (learner-funded only, not employer apprenticeship; not on
+      // attempt_2/3/cannot_reach — those still get the email chaser via
+      // the RPC above). Full gates (funding_category gov/loan, provider
+      // sms_chaser_enabled, regional rep phone, sms_log idempotency) run
+      // inside the Edge Function via fireChaserSms. Fire-and-forget; the
+      // RPC itself does light gating then async-posts to the EF.
+      // Migration 0157, EF sms-chaser-attempt-1.
+      if (
+        targetStatus === "attempt_1_no_answer"
+        && leadType !== "employer_apprenticeship"
+      ) {
+        void supabase
+          .schema("crm")
+          .rpc("fire_sms_chaser_attempt_1", { p_submission_id: args.submissionId })
+          .then(({ error }) => {
+            if (error) {
+              console.warn(
+                `auto-chaser SMS fire failed for submission ${args.submissionId}: ${error.message}`,
+              );
+            }
+          });
+      }
     }
   }
 

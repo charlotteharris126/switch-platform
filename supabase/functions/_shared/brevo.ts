@@ -37,7 +37,19 @@
 import type { Sql } from "npm:postgres@3";
 
 const BREVO_TRANSACTIONAL_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
+const BREVO_TRANSACTIONAL_SMS_ENDPOINT = "https://api.brevo.com/v3/transactionalSMS/sms";
 const BREVO_CONTACTS_ENDPOINT = "https://api.brevo.com/v3/contacts";
+
+// SMS sender ID for the Switchable utility channel. Alphanumeric, registered
+// with Brevo's UK aggregator and verified LIVE 2026-05-21 16:35 UK (test send
+// landed Accepted → Sent → Delivered). Sender is brand-locked: switchleads has
+// no SMS channel today. Override via env if a future migration needs it.
+const SMS_SENDER_ENV = "BREVO_SMS_SENDER_SWITCHABLE";
+const SMS_SENDER_DEFAULT = "Switchable";
+
+function resolveSmsSender(): string {
+  return Deno.env.get(SMS_SENDER_ENV) ?? SMS_SENDER_DEFAULT;
+}
 
 // Defensive hard cap on any single Brevo call. Prior behaviour (no timeout) made
 // a slow Brevo response block the caller for the full Edge Function 25s budget.
@@ -642,4 +654,254 @@ function stripHtml(html: string): string {
              .replace(/&gt;/g, ">")
              .replace(/\n{3,}/g, "\n\n")
              .trim();
+}
+
+// =============================================================================
+// Transactional SMS send (Chunk 1 of SMS utility, 2026-05-21)
+// =============================================================================
+// sendSms is the canonical helper for utility SMS under the spec at
+// switchable/email/docs/sms-utility-design.md (Wren, locked 2026-05-21).
+// Three comm types: call_reminder_fastrack_link, call_reminder_save_number,
+// chaser_call_attempt. Each fires once per (submission_id, comm_type) — no
+// force-resend pattern, no chaser-style re-fire.
+//
+// Bodies are template-literal in the calling code (NOT Brevo-templated). The
+// rendered string is passed in and stored in crm.sms_log.body_rendered for
+// post-hoc visibility. This is intentional per the spec ("less surface area
+// to keep in sync, one fewer env var per variant").
+//
+// Shadow mode mirrors the email helper: BREVO_SMS_SHADOW_MODE=true (default)
+// inserts the sms_log row with status='sent' but does NOT actually call the
+// Brevo SMS API. Flip to "false" via env to go live.
+
+const BREVO_SMS_RETRY_DELAYS_MS = [250, 1000, 4000] as const;
+
+export type SmsLogType =
+  | "call_reminder_fastrack_link"
+  | "call_reminder_save_number"
+  | "chaser_call_attempt";
+
+export interface SendSmsArgs {
+  sql: Sql;
+  /** E.164-formatted phone (e.g. "+447123456789"). The helper does NOT validate
+   *  — caller is responsible for normalisation. */
+  recipientPhone: string;
+  /** Rendered SMS body. Merge fields must already be resolved. */
+  body: string;
+  submissionId: number;
+  commType: SmsLogType;
+  /** Free-form metadata recorded on the sms_log row. Provider_id, trigger
+   *  source, etc. Not for PII. */
+  metadata?: Record<string, unknown>;
+  /** Brevo "tag" field — surfaces in their dashboard for filtering. */
+  tag?: string;
+}
+
+export type SendSmsStatus =
+  | "sent"
+  | "failed"
+  | "skipped_duplicate"
+  | "skipped_missing_phone";
+
+export interface SendSmsResult {
+  ok: boolean;
+  status: SendSmsStatus;
+  smsLogId?: number;
+  brevoMessageId?: string;
+  error?: string;
+  shadowMode: boolean;
+}
+
+export async function sendSms(args: SendSmsArgs): Promise<SendSmsResult> {
+  const shadowMode = (Deno.env.get("BREVO_SMS_SHADOW_MODE") ?? "true").toLowerCase() !== "false";
+
+  if (!args.recipientPhone) {
+    return { ok: false, status: "skipped_missing_phone", error: "recipientPhone required", shadowMode };
+  }
+  if (!args.body || args.body.trim().length === 0) {
+    return { ok: false, status: "failed", error: "body required", shadowMode };
+  }
+
+  // Idempotency: skip if a non-failed row already exists for this
+  // (submission_id, comm_type). 'failed' / 'undelivered' rows do not block —
+  // a previous failure must not silently silence the next attempt. Matches
+  // the sendTransactional pattern. No force-resend path for SMS — every
+  // utility SMS is a single-shot per learner per comm_type.
+  try {
+    const existing = await args.sql<Array<{ id: number }>>`
+      SELECT id FROM crm.sms_log
+       WHERE submission_id = ${args.submissionId}
+         AND comm_type     = ${args.commType}
+         AND status IN ('queued','sent','delivered')
+       LIMIT 1
+    `;
+    if (existing.length > 0) {
+      return { ok: true, status: "skipped_duplicate", smsLogId: Number(existing[0].id), shadowMode };
+    }
+  } catch (err) {
+    console.error("sendSms idempotency check failed:", String(err));
+    return { ok: false, status: "failed", error: `idempotency check: ${describeFetchError(err)}`, shadowMode };
+  }
+
+  // Insert the queued row up front so post-mortem traces show the attempt
+  // even if the Brevo call hangs the function.
+  let smsLogId: number;
+  try {
+    smsLogId = await args.sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      const rows = await trx<Array<{ id: number }>>`
+        INSERT INTO crm.sms_log (
+          submission_id, comm_type, recipient_phone, status, body_rendered, metadata
+        ) VALUES (
+          ${args.submissionId},
+          ${args.commType},
+          ${args.recipientPhone},
+          'queued',
+          ${args.body},
+          ${trx.json({
+            shadow: shadowMode,
+            shadow_log_only: shadowMode,
+            ...(args.metadata ?? {}),
+          })}
+        )
+        RETURNING id
+      `;
+      return Number(rows[0].id);
+    });
+  } catch (err) {
+    console.error("sendSms sms_log insert failed:", String(err));
+    return { ok: false, status: "failed", error: `sms_log insert: ${describeFetchError(err)}`, shadowMode };
+  }
+
+  // Shadow mode: skip the actual Brevo call but flip the row to sent so the
+  // log shows what would have happened. brevo_message_id stays NULL — that's
+  // the unambiguous signal that the row didn't actually leave the API.
+  if (shadowMode) {
+    try {
+      await args.sql.begin(async (trx) => {
+        await trx`SET LOCAL ROLE functions_writer`;
+        await trx`
+          UPDATE crm.sms_log
+             SET status = 'sent',
+                 sent_at = now()
+           WHERE id = ${smsLogId}
+        `;
+      });
+    } catch (err) {
+      console.error("sendSms shadow log-only update failed:", String(err));
+    }
+    return { ok: true, status: "sent", smsLogId, shadowMode };
+  }
+
+  const apiKey = Deno.env.get("BREVO_API_KEY");
+  if (!apiKey) {
+    const reason = "BREVO_API_KEY not set";
+    await markSmsLogFailed(args.sql, smsLogId, reason);
+    await persistSmsDeadLetter(args.sql, args, smsLogId, reason);
+    return { ok: false, status: "failed", error: reason, smsLogId, shadowMode };
+  }
+
+  const sender = resolveSmsSender();
+  const body = {
+    sender,
+    recipient: args.recipientPhone,
+    content: args.body,
+    type: "transactional",
+    tag: args.tag,
+  };
+
+  const sendResult = await callSmsWithRetry(apiKey, body);
+  if (!sendResult.ok) {
+    const errMsg = sendResult.error ?? `brevo sms ${sendResult.status ?? "?"}`;
+    await markSmsLogFailed(args.sql, smsLogId, errMsg);
+    await persistSmsDeadLetter(args.sql, args, smsLogId, errMsg);
+    return { ok: false, status: "failed", error: errMsg, smsLogId, shadowMode };
+  }
+
+  let messageId: string | undefined;
+  try {
+    const data = await sendResult.response!.json() as { messageId?: string | number };
+    messageId = data.messageId != null ? String(data.messageId) : undefined;
+  } catch {
+    // 2xx with no parseable body. Send happened; just no id.
+  }
+
+  try {
+    await args.sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      await trx`
+        UPDATE crm.sms_log
+           SET status = 'sent',
+               sent_at = now(),
+               brevo_message_id = ${messageId ?? null}
+         WHERE id = ${smsLogId}
+      `;
+    });
+  } catch (err) {
+    console.error("sendSms sms_log update failed (sent path):", String(err));
+    // Send already happened; row is just stale, don't surface as failure.
+  }
+
+  return { ok: true, status: "sent", smsLogId, brevoMessageId: messageId, shadowMode };
+}
+
+async function callSmsWithRetry(apiKey: string, body: unknown): Promise<InternalResult> {
+  let lastResult: InternalResult = { ok: false };
+  const maxAttempts = BREVO_SMS_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      const delay = BREVO_SMS_RETRY_DELAYS_MS[attempt - 1];
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    lastResult = await fetchBrevo(BREVO_TRANSACTIONAL_SMS_ENDPOINT, "POST", apiKey, body);
+    if (lastResult.ok) return lastResult;
+    const status = lastResult.status ?? 0;
+    const isRetryable = !status || status === 429 || (status >= 500 && status < 600);
+    if (!isRetryable) return lastResult;
+  }
+  return lastResult;
+}
+
+async function markSmsLogFailed(sql: Sql, smsLogId: number, errorText: string): Promise<void> {
+  try {
+    await sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      await trx`
+        UPDATE crm.sms_log
+           SET status     = 'failed',
+               error_text = ${errorText.slice(0, 4000)}
+         WHERE id = ${smsLogId}
+      `;
+    });
+  } catch (err) {
+    console.error("markSmsLogFailed failed:", String(err));
+  }
+}
+
+async function persistSmsDeadLetter(
+  sql: Sql,
+  args: SendSmsArgs,
+  smsLogId: number,
+  errorContext: string,
+): Promise<void> {
+  try {
+    await sql.begin(async (trx) => {
+      await trx`SET LOCAL ROLE functions_writer`;
+      await trx`
+        INSERT INTO leads.dead_letter (source, raw_payload, error_context)
+        VALUES (
+          'brevo_transactional_sms',
+          ${trx.json({
+            submission_id: args.submissionId,
+            comm_type: args.commType,
+            recipient_phone: args.recipientPhone,
+            sms_log_id: smsLogId,
+          })},
+          ${errorContext.slice(0, 4000)}
+        )
+      `;
+    });
+  } catch (err) {
+    console.error("persistSmsDeadLetter failed:", String(err));
+  }
 }
