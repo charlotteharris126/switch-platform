@@ -1,91 +1,66 @@
-# Platform Handoff, Session 55, 2026-05-20
-
-## ⚡ PUSH FROM Mira 2026-05-21: Reconciliation + auto-flip cron + Field Guide infrastructure preview
-
-Operational + Q3 infrastructure asks from strategy session 14. Pickup by next platform session.
-
-**1. Provider reconciliation + auto-flip cron rollout.** Apply migration 0097 prospectively from **1 June 2026 cutoff**. Funded short courses: 14-day clock. Apprenticeship Learner Leads + Employer Leads: 60-day clock per PPA v2. Pre-1-June leads handled via one-time reconciliation message (Nell owns provider comms, deadline 31 May for status updates). Pre-conditions still owed: Mira's activity-gate framework (carried 12+ days).
-
-**2. Monday status nudge cadence.** Brevo automation: Monday morning nudge to each provider listing their open leads from prior week. Friday rejected (weekend signoff kills inbox attention). Escalation to Nell at 14 days silent.
-
-**3. Field Guide infrastructure preview (build June-July).** Landing page at `switchable.org.uk/field-guide`, email signup gates PDF download, Brevo drip sequence over 4 weeks, Skills Translator £5 Stripe checkout integration. Full spec: `strategy/docs/field-guide-outline.md` + `strategy/docs/skills-translator-spec.md`.
-
-**4. Switchable Members tier infrastructure preview (build Aug-Sept).** Stripe subscription + member portal + member-only content gate + sponsored recruiter listings management. Full spec: `strategy/docs/membership-discount-outreach.md`.
-
-**5. Affiliate revenue tracking (deferred but flagging).** Simple admin panel view of per-partner monthly payouts vs UTM source. Lazy version OK: monthly manual check on each platform's payout report.
-
-Reference: `strategy/docs/q3-revenue-plan.md` for the full 8-line revenue stack and sequencing.
-
----
-
+# Platform Handoff, Session 56, 2026-05-21
 
 ## Current state
 
-Big session — six discrete shipments. EMS provider notification routing now scopes by LA per user. Demo providers archived; Courses Direct + WYK Digital paused (active=false, still visible). Charlotte set up as `provider_admin` on EMS + Riverside via her own portal accounts. Employer routing now writes `audit.actions` rows in shape parity with the funded flow; 30 historical Riverside routings backfilled. Experiments page enrolment status buckets fixed to use the full migration-0151 enum, and 24 historical NULL `experiment_id` rows backfilled via 50/50 random so the page is now readable. `/admin/actions` rebuilt for an auto-chase world — three cron-handled sections out, four useful sections in.
+Sheet vocabulary split for per-attempt labels live, leads.partials cross-form merge bug fixed, reconcile-sheet-to-db whitelist+wrapper bugs fixed and three more audit-call sites hardened to use the public wrapper. Workspace audited for the same two bug classes, clean otherwise. Fastrack impact analysis delivered (8x active enrolment lift, 2.3x faster outcomes). SMS utility Chunk 1 + Chunk 2 prep done by a parallel agent session, fully shipped to prod but still uncommitted on this machine.
 
 ## What was done this session
 
-- **Migration 0154 — `notification_las TEXT[]` on `crm.provider_users`.** NULL/empty = catch-all, non-empty = scoped. Seed: George Taylor → Stockton + Hartlepool; Jake Balfour → Middlesbrough + Darlington; Nick Rodgers → Redcar. Andy + Daniel left NULL (catch-all).
-- **`_shared/route-lead.ts` updates.** `sendProviderNotification` now takes `sql`, fetches area-scoped CCs via new exported helper `fetchAreaScopedProviderUsers`, threads through `buildCcList` (also exported, dedup against TO). Greeting changed from `Hi ${provider.contact_name ?? "there"}` → `Hello,` in both new-enquiry and re-application templates.
-- **`admin-notify-callback` rewritten** to single-email pattern (matched provider_users in TO, owner + provider.cc_emails as CC, area-filtered by lead's `la`). Charlotte CC'd on callback emails (was missing).
-- **`admin-test-email` signature updated** to pass `sql` to `sendProviderNotification`.
-- **Data-ops 042 — archive demo providers.** `demo-b2c`, `demo-b2b`, `demo-provider-ltd` set `active=false`, `archived_at=now()`. Their 5 provider_users rows suspended. Hard delete blocked by FK ON DELETE RESTRICT on demo-provider-ltd (13 routing_log + 13 enrolments + 13 submissions).
-- **Admin providers page demo-strip filter.** Demo badge strip now filters `is_demo=true AND archived_at IS NULL`.
-- **Data-ops 043 — pause Courses Direct + WYK Digital.** Flipped `active=false` (pilot_status was already 'paused' but doesn't gate routing).
-- **Charlotte's per-provider portal accounts.** Self-invited as `provider_admin` on EMS (`support+ems@switchleads.co.uk`) and Riverside (`support+riverside@switchleads.co.uk`). Decision: per-provider accounts over impersonation at this scale.
-- **`crm.provider_users` documented** in `platform/docs/data-architecture.md` (had no entry).
-- **Riverside routing audit gap fixed.** `netlify-employer-lead-router` now writes `audit.actions` rows for routings (action=`auto_route_lead`, with sheet/email outcome flags). Shape parity with funded router via `writeAuditSystem`. Data-ops 044 backfills 30 historical Riverside routings with `created_at` backdated to `routed_at`.
-- **Experiments page bucket fix.** `BILLABLE_STATUSES`, `IN_FLIGHT_STATUSES`, `LOST_STATUSES` now cover all 14 enum values from migration 0151. Was silently dropping `attempt_1/2/3_no_answer`, `enrolment_meeting_booked`, `engaged`, `in_progress`, `signed`, `presumed_employer_signed`, `not_signed`.
-- **Experiment_id propagation gap surfaced + pushed to Mable.** 32/39 DQs + 20/100 qualified from the two Tees experiment pages landed without metadata. Mable fixed site-side (commit `574b2c5`), then asked for historical backfill.
-- **Data-ops 045 — experiment_id random backfill.** 13 counselling rows + 11 smm rows back-filled with 50/50 random `experiment_variant`. Audit row written via `audit.log_system_action` with per-experiment totals and `attribution_is_exact=false`. Aggregate DQ comparison now reads cleanly on `/admin/experiments`; individual rows are not row-attributable.
-- **`/admin/actions` reshaped.** Dropped three cron-handled sections (Approaching 14-day auto-flip, Needs another chase, Cannot reach no chaser sent). Added: U1 welcome email bounces (lead-level), Provider patterns parent card with three sub-tables (SLA breaches, cannot-reach hotspots, zero-confirmation providers). Tuning constants exposed at top of file (`SLA_OPEN_DAYS=7`, `RECENT_WINDOW_DAYS=7`, `CONFIRM_PATTERN_DAYS=30`, `MIN_ROUTINGS_FOR_CONFIRM_PATTERN=5`, `CANNOT_REACH_HOTSPOT_PCT=20`).
+- **Sheet vocab split.** "Calling" expanded into `Attempt 1 - no answer` / `Attempt 2 - no answer` / `Attempt 3 - no answer` in `_shared/sheet-status.ts` (forward + reverse maps), `sheet-edit-mirror` STATUS_MAP, and `app/lib/sheet-status-sync.ts`. Five EFs redeployed: sheet-edit-mirror, republish-provider-sheet, sheet-drift-reconcile-daily, reconcile-sheet-to-db, pending-update-confirm.
+- **EMS sheet republished + dropdown updated.** Owner replaced data validation values; 31 "Calling" cells overwritten via Push DB to sheet on /admin/errors.
+- **Reconcile panel patched.** Skipped (target_disallowed) IDs now render in the panel with sheet status, DB status, and a clickable admin link. EF response gained `drift_target_disallowed_submission_ids` + `drift_target_disallowed_details`. Action types + panel UI updated.
+- **ALLOWED_TARGET_STATUSES extended.** attempt_1/2/3_no_answer added to reconcile-sheet-to-db's allow-list so per-attempt sheet labels flow sheet to DB through that tool too (not just sheet-edit-mirror).
+- **BIGINT whitelist coercion bug fixed.** postgres@3 returns bigint as string; `whitelist.has(lead.submission_id)` was silently dropping every lead in apply mode (proposed=0, applied=0, errors=0). Fixed with `Number()` coerce at the .has() check.
+- **Audit call switched to public wrapper.** reconcile-sheet-to-db's direct `audit.log_system_action` call inside the `SET LOCAL ROLE functions_writer` transaction was failing silently on permission denied. Switched to `public.log_system_action_v1` (migration 0147 wrapper, callable by functions_writer).
+- **Hygiene pass on three more audit call sites.** route-lead.ts writeAuditSystem, netlify-employer-lead-router auto_route_lead, fastrack-receive mark_outcome_auto_dq all switched to the public wrapper. 10 EFs redeployed.
+- **Workspace audit (BIGINT + audit-permission classes).** All clear elsewhere. Class 1 (BIGINT): four candidate sites checked, all safe (either coerced or both sides strings). Class 2 (audit-via-functions_writer): only reconcile was actively broken; the other three were outside the functions_writer trx so worked but were swapped for hygiene.
+- **EMS unblock SQL.** 8 leads flipped from open to attempt_2_no_answer via Supabase SQL Editor (workaround before whitelist bug was diagnosed/fixed). Single bulk audit row written.
+- **Mable's partials work shipped.** Applied migration 0155 (composite UNIQUE on session_id + form_name) via Supabase SQL Editor; deployed netlify-partial-capture EF with updated ON CONFLICT clause. fastrack-funded-v1 and switchable-waitlist-enrichment partials will land as their own rows from now on.
+- **Fastrack impact analysis.** 13-day same-window comparison. Fastrackers: 0% DQ vs 23%, 56% reached an outcome vs 17%, 8x more active enrolment conversations, lost decisions 1.4d vs 2.5d, meeting bookings 4.2d vs 8.4d. Roughly half the lost outcomes were L3 mismatches (fastrack working as designed). Fastrack currently only fires on gov-funded; self-funded thank-you page never triggers it.
+- **Commits.** `a9ffcc3` (sheet vocab + panel patch). `e0418ec` (partials migration + reconcile fixes + audit-wrapper hygiene). Both pushed.
+- **SMS shadow mode flipped back to true.** Per Mable's S55 recommendation while SMS Chunks 2+3 are being built.
 
 ## Next steps
 
-1. **First-fire verification 06:00-06:30 UTC tomorrow (2026-05-21).** Carries from S54: watch the three reconciler crons land (06:00 sheet-drift → 06:15 brevo-attribute → 06:30 drift-digest). Digest email should arrive (or nothing on quiet days).
-2. **Watch first real EMS lead.** Live test of LA-scoped CC routing. Confirm CC list matches the LA rules (Middlesbrough → Jake; Stockton → George; Redcar → Nick). Greeting reads `Hello,`.
-3. **Auto-flip cron + day-12 warning email (carry from S51, reopened S54).** Migration 0097 still unapplied. EMS has 50 leads past 7-day SLA (visible on the new /admin/actions card) — auto-flip would mop those up at day 14. Pre-conditions: Brevo warning template, provider heads-up emails, Mira's activity-gate framework, optional `auto_flip_enabled` per-provider flag.
-4. **Counselling-tees experiment decision.** After backfill: A=27 qualified (18% DQ), B=34 qualified (28% DQ). B wins on volume, A wins on quality. Charlotte's call once she's weighed CPL vs CPE.
-5. **Remote Edge Function deletion (carry from S54).** `supabase functions delete backfill-referral-fastrack-urls --project-ref igvlngouxcirqhlsrhga`, then same for `backfill-client-nonce`.
-6. **Per-provider CPL / CPE / P/L scoreboard (carry from S49).** Still queued.
-7. **Brevo orphan deletion** once Wren confirms `u1-funded` template verified live (carry from S48-49).
-8. **Infrastructure-manifest update (carry from S54).** Add `brevo-attribute-reconcile-daily` + `drift-digest-daily` cron rows; remove `dead-letter-alert-hourly`.
-9. **Cannot-reach-no-chaser → /admin/errors.** This signal is system-reliability (chaser cron failed), not a task. Move it from /admin/actions (where it was dropped) to /admin/errors as a new pill / reconciler card.
-10. **Defer: portal UI for self-edit of `notification_las`.** DB-only edits via SQL for now. Build when a second provider asks for area routing.
+1. **Commit SMS Chunk 1 + Chunk 2 work from the parallel session.** Migration 0156, `_shared/brevo.ts` `sendSms` helper, `_shared/sms-utility.ts`, `admin-test-sms` EF, `config.toml` admin-test-sms registration. All shipped to prod, uncommitted on this machine. Belongs to whichever session is finishing Chunk 2 (file was actively being edited during this session close).
+2. **Diagnose Courses Direct's 0/12 outcome rate.** None of 12 routed CD leads have moved out of open/in-chase in the last 13 days. Not a fastrack issue (CD doesn't get fastracked leads in this window). Likely a service or sheet-wiring issue. Belongs in switchleads/clients with Nell rather than here.
+3. **Extend fastrack to self-funded.** Same form logic, same L3/funding/intake reconfirm. Currently only the /funded/thank-you/ page fires fastrack; the self-funded thank-you page never does. Point the same flow at it. Belongs in switchable/site.
+4. **Verify reconcile apply end-to-end on the next real drift case.** The whitelist + audit wrapper fix is deployed but only the SQL-bypass path was actually used today. First real apply through the panel will confirm.
+5. **Auto-flip cron + day-12 warning email (carry from S51 / reopened S54 / S55 strategy push).** Migration 0097 still unapplied. EMS has 50 leads past 7-day SLA. Pre-conditions still owed: Brevo warning template, provider heads-up emails, Mira's activity-gate framework. S55 push: apply prospectively from 1 June 2026 cutoff; pre-1-June leads handled via one-time reconciliation by Nell (deadline 31 May for status updates).
+6. **Remote Edge Function deletion (carry from S54).** `supabase functions delete backfill-referral-fastrack-urls --project-ref igvlngouxcirqhlsrhga`, then same for backfill-client-nonce.
+7. **Per-provider CPL / CPE / P/L scoreboard (carry from S49).** Still queued.
+8. **Infrastructure-manifest update (carry from S54).** Add brevo-attribute-reconcile-daily + drift-digest-daily cron rows; remove dead-letter-alert-hourly.
+9. **Cannot-reach-no-chaser to /admin/errors (carry from S55).** System-reliability signal, belongs on /admin/errors as a reconciler card rather than /admin/actions.
+10. **Brevo chaser "Contact already in list" dead_letter spam.** 14 errors today, all `invalid_parameter: Contact already in list and/or does not exist`. Fix: treat that error code as a no-op rather than a dead_letter row. Not blocking.
 
 ## Decisions and open questions
 
 **Decisions:**
 
-- **Per-user LA scoping via `notification_las` on `crm.provider_users`, not a separate table.** Why: everyone Charlotte mentioned is already a `provider_users` row. Single column, optional, NULL = pre-existing catch-all behaviour.
-- **`fetchAreaScopedProviderUsers` exported from `_shared/route-lead.ts`.** Used by both `sendProviderNotification` and `admin-notify-callback`. Single source of truth for the area-filter query.
-- **Callback notification model: matched provider_users in TO (multi-recipient), owner + cc_emails in CC.** Team visibility + matches the new-lead pattern.
-- **Archive (not delete) demo providers.** demo-provider-ltd's 13 routing_log + 13 enrolments rows would cascade-destroy audit chain on hard delete.
-- **Per-provider admin accounts over impersonation.** Impersonation needs auth-gate branching + RLS fanout + audit start/stop + view-as banner; pays off at 10+ providers, not 4.
-- **Pause CD + WYK via `active=false`.** `pilot_status='paused'` is metadata only; routing gates on `active`. Not archiving because paused is temporary.
-- **Andy stays `invited` status (no nudge to enrol).** Charlotte 2026-05-20: he doesn't call leads. New-lead emails still reach him via `provider.contact_email`. Callback emails skip him.
-- **Riverside audit backfill: random not exact.** `ads_switchable.page_views` has no `session_id`; variant cookie was never recorded against submission. View splits were within 0.5% of 50/50 so random is statistically valid for aggregate. Tagged `attribution_is_exact=false` in audit context.
-- **/admin/actions: drop everything the cron handles.** Auto-chase + auto-flip mean those sections are duplicating cron work. Replaced with provider-pattern cards (SLA breach, cannot-reach hotspot, zero-confirm) that surface the kind of signal where the cron can't act for you.
+- **Per-attempt sheet labels use human form** (`Attempt 1 - no answer`, not raw enum). Why: matches the rest of the sheet's vocabulary (`Cannot reach`, `Meeting booked`, `Presumed enrolled`); raw enum was a quick-fix dropdown the owner typed mid-session and is now retired.
+- **Chaser cron owns attempt-count auto-increment; sheet is a mirror, not the driver.** Why: ping-pong risk low (cron fires on real call windows, manual sheet edits infrequent); maintains existing automation; manual sheet edits override when needed.
+- **Reconcile whitelist coercion uses `Number()` at the `.has()` check, not at Set construction.** Why: defensive against postgres@3 returning bigint as string for any ID column, not just submission_id. Pattern reusable elsewhere.
+- **Hygiene pass extended to three audit-call sites even though only one was actively broken.** Why: same SET LOCAL ROLE + console.error catch pattern; fragile if role context shifts; cheap to fix, real risk reduction.
+- **Two scoped commits, not one big bundle.** Why: respect attribution (sheet vocab is mine, partials is Mable's, both signed off this session); avoid bundling parallel-session SMS work that's still being actively edited.
+- **SMS work left uncommitted on this machine.** Why: SMS Chunk 2 trigger wiring was actively in progress (fastrack-receive file changed mid-session, new `_shared/sms-utility.ts` file appeared); committing would risk an accidental merge collision.
 
 **Open questions:**
 
-- **Charlotte's portal alias landed as `support+ems@switchleads.co.uk`, not `hello+ems@switchleads.co.uk`** as originally proposed. Same inbox effect. Pick one prefix and stick to it as she onboards onto more providers.
-- **Should Andy be CC'd on callback notes** (even though `invited`)? Today filtered out by `status='active'`. If yes, widen to `status IN ('active','invited')`.
-- **Owner decides: counselling-tees experiment.** B wins volume (+26% qualified), A wins quality (lower DQ rate). Depends on CPL vs CPE focus. Bring decision to next session.
+- **Owner decides: extend fastrack form to self-funded leads?** Same form logic, same lift potential. Currently only fires on gov-funded thank-you page. Trivial to extend.
+- **Owner decides: Courses Direct dig — switchleads/clients with Nell, or here in platform as a routing/wiring check first?** Read: switchleads/clients first; come back here only if a wiring issue surfaces.
+- **Owner decides: SMS Chunk 1 + 2 commit ownership.** Stays with the SMS-session agent; flag here so it isn't forgotten.
 
 ## Watch items
 
-- **Tomorrow 06:00-06:30 UTC** — first natural fire of the three reconciler crons (S54 carry). Inbox should see one digest email or nothing.
-- **First real EMS lead** — live test of LA-scoped CC routing. Until that lands, the wiring is unverified in production.
-- **`audit.actions` for next Riverside routing** — should land as a live (non-backfilled) `auto_route_lead` row from the deployed employer router fix.
-- **`/admin/experiments` DQ rates post-backfill** — counselling-tees now reads A=18% / B=28% DQ. Verify the page renders these numbers when Charlotte loads it.
-- **`/admin/actions` SLA breach card** — EMS shows 50 leads past 7d SLA. That's the dominant signal on the new actions page until auto-flip ships.
-- **U1 bounces** — 2 entries today. Manual chase or mark lost.
-- **Carries from S52 still open** — crm.email_log rows 504-506 (employer chaser webhook events), first natural Riverside attempt transition by Freya without manual SQL, leads.dead_letter sources `channel_b_sheet_writeback` (S50) + `edge_function_brevo_chase_employer` (S52) should stay empty.
-- **Carries from S51 still open** — auto-flip cron + day-12 warning (migration 0097 unapplied), `u_fastrack_qualified` row in `crm.email_log`, invite-claim audit via `public.log_system_action_v1`, `TEST_MODE = false` re-verification before any B2B test submission.
+- **Tomorrow's 06:00 UTC sheet-drift-reconcile-daily.** Should emit zero EMS drift rows now that the vocabulary is aligned. Pre-fix counterfactual was one drift row per active EMS lead.
+- **Next real reconcile panel apply.** Verify whitelist + audit wrapper fix lands cleanly end-to-end (only the SQL-bypass path was exercised today).
+- **SMS shadow mode currently `true`.** Confirm next admin-test-sms call lands in `crm.sms_log` with `brevo_message_id IS NULL` and `metadata.shadow=true`; no real SMS arrives.
+- **SMS Chunk 2 commit + deploy from the parallel session.** Uncommitted files on this machine; not Sasha's responsibility but flag here so it isn't lost.
+- **Carries from S55 still open:** first-fire verification of three reconciler crons (06:00, 06:15, 06:30 UTC), first real EMS lead's LA-scoped CC routing, live Riverside `auto_route_lead` audit row, /admin/experiments DQ rates render correctly post-backfill, EMS SLA-breach card on /admin/actions, U1 bounces, crm.email_log rows 504-506, first natural Riverside attempt transition by Freya without manual SQL, leads.dead_letter sources `channel_b_sheet_writeback` (S50) + `edge_function_brevo_chase_employer` (S52) staying empty.
+- **Carries from S51 still open:** auto-flip cron + day-12 warning (migration 0097 unapplied), `u_fastrack_qualified` row in crm.email_log, invite-claim audit via public.log_system_action_v1, TEST_MODE=false re-verification before any B2B test submission.
 
 ## Next session
 
-- **Folder:** `platform`
-- **First task:** Confirm overnight 06:00-06:30 UTC cron loop fired cleanly, then verify the next real EMS lead's email CC list and the live (non-backfilled) Riverside routing audit row. If clean, proceed with the auto-flip cron + day-12 warning email reopened scope (migration 0097, biggest unblocker on Charlotte's billing path) or the deferred cannot-reach-no-chaser → /admin/errors move.
-- **Cross-project:** None. Mable's push (experiment_id site-side fix) closed in-session, no new push owed.
+- **Folder:** `switchleads/clients`
+- **First task:** Diagnose Courses Direct's stuck pipeline. 12 routed CD leads in the last 13 days, none moved out of open/in-chase. Verify Marty's sheet is receiving leads correctly, check Nell's outreach state, confirm the funded-provider angle is still live. Likely a service or wiring issue, not fastrack-related (CD doesn't get fastracked leads in this window).
+- **Cross-project:** Pushed to `switchleads/clients/docs/current-handoff.md` (Courses Direct dig) and `switchable/site/docs/current-handoff.md` (extend fastrack to self-funded).
