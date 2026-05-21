@@ -466,7 +466,9 @@ CREATE INDEX ON leads.gateway_captures (submission_id);
 
 ### `leads.partials`
 
-Progressive capture of multi-step form sessions. One row per `session_id` - upserted every time the learner advances a step. Contains answers to the non-PII steps only (preference/intent data: reason, interest, situation, qualification, start timing, budget, etc.). PII is never written here; it lives on `leads.submissions` after final submit.
+Progressive capture of multi-step form sessions. One row per `(session_id, form_name)` - upserted every time the learner advances a step. Contains answers to the non-PII steps only (preference/intent data: reason, interest, situation, qualification, start timing, budget, etc.). PII is never written here; it lives on `leads.submissions` after final submit.
+
+A single browser session can hold multiple rows when it crosses form contexts (e.g. funded funnel under `switchable-funded`, then post-submit fastrack on `/funded/thank-you/` under `fastrack-funded-v1`). Each context tracks its own step progression and abandonment independently. Composite uniqueness introduced in migration 0155 — see changelog 2026-05-21.
 
 **Purpose:** funnel drop-off analytics. Which step loses people, which answer patterns correlate with drop-off, which traffic sources convert through which steps. Powers Iris's ad optimisation and Mira's weekly KPI narrative.
 
@@ -477,7 +479,7 @@ Progressive capture of multi-step form sessions. One row per `session_id` - upse
 ```sql
 CREATE TABLE leads.partials (
   id              BIGSERIAL PRIMARY KEY,
-  session_id      UUID NOT NULL UNIQUE,
+  session_id      UUID NOT NULL,
   schema_version  TEXT NOT NULL DEFAULT '1.0',
 
   -- Form context
@@ -514,7 +516,13 @@ CREATE TABLE leads.partials (
   -- Timestamps
   first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- Composite uniqueness (migration 0155). Original session_id-only UNIQUE was dropped
+  -- because it merged cross-form-context writes into the parent row. Each form context
+  -- (e.g. switchable-funded, fastrack-funded-v1, switchable-waitlist-enrichment) tracks
+  -- its own step progression and abandonment independently.
+  CONSTRAINT leads_partials_session_form_uniq UNIQUE (session_id, form_name)
 );
 
 CREATE INDEX ON leads.partials (form_name, last_seen_at DESC);
@@ -523,7 +531,7 @@ CREATE INDEX ON leads.partials (utm_campaign, utm_content) WHERE utm_campaign IS
 CREATE INDEX ON leads.partials (step_reached, is_complete);
 ```
 
-**Upsert semantics** (enforced by the Edge Function, not the schema): `INSERT ... ON CONFLICT (session_id) DO UPDATE SET step_reached = GREATEST(partials.step_reached, EXCLUDED.step_reached), answers = partials.answers || EXCLUDED.answers, last_seen_at = now(), updated_at = now()`. `GREATEST` prevents out-of-order upserts from regressing the furthest-reached step.
+**Upsert semantics** (enforced by the Edge Function against the composite UNIQUE from migration 0155): `INSERT ... ON CONFLICT (session_id, form_name) DO UPDATE SET step_reached = GREATEST(partials.step_reached, EXCLUDED.step_reached), answers = partials.answers || EXCLUDED.answers, last_seen_at = now(), updated_at = now()`. `GREATEST` prevents out-of-order upserts from regressing the furthest-reached step. The per-session abuse cap (`MAX_UPSERTS_PER_SESSION = 50` in the EF) sums `upsert_count` across every form-name row for the session, so the cap stays per-session even when a session holds multiple form contexts.
 
 ### `leads.dead_letter`
 

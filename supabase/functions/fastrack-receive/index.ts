@@ -319,8 +319,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
       // failure here doesn't undo the UPDATE.
       if (beforeRow) {
         try {
+          // Public-schema wrapper (migration 0147) over audit.log_system_action.
+          // Works regardless of caller role context — future SET LOCAL ROLE
+          // additions inside this code path won't silently drop audit rows.
           await sql`
-            SELECT audit.log_system_action(
+            SELECT public.log_system_action_v1(
               'fastrack-receive',
               'mark_outcome_auto_dq',
               'crm.enrolments',
@@ -332,7 +335,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           `;
         } catch (err) {
           console.warn(
-            "fastrack: audit.log_system_action failed (non-fatal):",
+            "fastrack: public.log_system_action_v1 failed (non-fatal):",
             describeError(err),
           );
         }

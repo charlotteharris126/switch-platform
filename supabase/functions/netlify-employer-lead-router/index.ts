@@ -204,8 +204,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const employerAcked = results[1].status === "fulfilled";
     const providerNotified = results[2].status === "fulfilled";
     try {
+      // Public-schema wrapper (migration 0147) over audit.log_system_action.
+      // Works regardless of caller role context (functions_writer vs default),
+      // so future SET LOCAL ROLE additions won't silently start dropping
+      // audit rows. Sister sites: _shared/route-lead.ts writeAuditSystem,
+      // fastrack-receive mark_outcome_auto_dq.
       await sql`
-        SELECT audit.log_system_action(
+        SELECT public.log_system_action_v1(
           ${"system:auto_route:lead_router"},
           ${"auto_route_lead"},
           ${"leads.submissions"},

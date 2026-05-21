@@ -115,17 +115,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
       await trx`SET LOCAL ROLE functions_writer`;
 
       // Rate-limit check: reject if this session has already crossed the cap.
-      // Lock the row for the duration of the transaction to avoid the
+      // Sums upsert_count across every form context for the session — one
+      // session can now hold multiple rows (one per form_name, e.g. funded
+      // funnel + post-submit fastrack), so the cap must be per-session, not
+      // per-row, to preserve the original abuse-cap intent.
+      // Lock the rows for the duration of the transaction to avoid the
       // read-check-then-write race under concurrent requests.
-      const existing = await trx<Array<{ upsert_count: number }>>`
-        SELECT upsert_count
+      const existing = await trx<Array<{ total_upserts: number }>>`
+        SELECT COALESCE(SUM(upsert_count), 0)::int AS total_upserts
         FROM leads.partials
         WHERE session_id = ${p.session_id}
         FOR UPDATE
       `;
       if (
         existing.length > 0 &&
-        existing[0].upsert_count >= MAX_UPSERTS_PER_SESSION
+        existing[0].total_upserts >= MAX_UPSERTS_PER_SESSION
       ) {
         return { rateLimited: true };
       }
@@ -146,7 +150,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ${p.fbclid}, ${p.gclid}, ${p.referrer},
           ${p.user_agent}, ${p.device_type}
         )
-        ON CONFLICT (session_id) DO UPDATE SET
+        ON CONFLICT (session_id, form_name) DO UPDATE SET
           step_reached     = GREATEST(leads.partials.step_reached, EXCLUDED.step_reached),
           answers          = leads.partials.answers || EXCLUDED.answers,
           page_url         = COALESCE(EXCLUDED.page_url, leads.partials.page_url),

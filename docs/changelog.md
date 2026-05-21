@@ -4,6 +4,52 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-21 — Sheet vocabulary split: "Calling" → per-attempt labels
+
+**Incident.** Owner reported "anomalies in DB after updating EMS sheet statuses". Diagnosis: sheet dropdown collapsed three DB enum states (`attempt_1_no_answer` / `attempt_2_no_answer` / `attempt_3_no_answer`) into a single "Calling" label. `_shared/sheet-status.ts:80` returned `null` for "Calling" on the reverse map (ambiguous), and `sheet-edit-mirror`'s STATUS_MAP didn't include "Calling" at all — so every sheet→DB edit setting status to "Calling" was outright rejected as `unmapped status value`. Owner then added raw `attempt_N_no_answer` (with trailing tab) directly to the EMS dropdown, which were also unmapped. 24h impact (EMS): 39 sheet edits → 9 mirrored OK, 7 "Calling" rejected, 5 raw-enum rejected, 18 null-cell rejected. 2 leads (subs 213, 262) left with sheet="Calling" but DB="open".
+
+**Fix.** Split "Calling" into three per-attempt sheet labels: `Attempt 1 - no answer`, `Attempt 2 - no answer`, `Attempt 3 - no answer`.
+
+- `supabase/functions/_shared/sheet-status.ts`: forward (`statusToSheetLabel`) writes per-attempt label; reverse (`sheetLabelToStatus`) accepts both human form AND raw enum fallback (`attempt_N_no_answer`). Legacy "Calling" still returns `null` (skip) for any unrepublished sheet cells.
+- `supabase/functions/sheet-edit-mirror/index.ts` STATUS_MAP: added three human-label keys + three raw-enum fallback keys.
+- `app/lib/sheet-status-sync.ts` STATUS_TO_SHEET_LABEL (portal → sheet sync, duplicate map): mirrored the same split so portal-driven status changes push the right per-attempt label.
+
+**Workflow decision.** Chaser cron keeps owning attempt-count auto-increment; sheet is a mirror, not the driver. Owner can override from sheet (which now flows back cleanly via the per-attempt labels). Ping-pong risk: low — auto-increment fires on real call windows, manual sheet edits are infrequent.
+
+**Acceptance.**
+- Republish-provider-sheet on EMS overwrites every "Calling" cell with the right per-attempt label.
+- Owner updates EMS sheet's dropdown data validation: remove "Calling" + raw `attempt_N_no_answer\t` rows; add the three human labels.
+- Tomorrow 06:00 UTC sheet-drift-reconcile-daily emits zero EMS drift rows (vs. would-have-been one per active EMS lead without the fix).
+- Brevo chaser dead_letter "Contact already in list" spam (14 rows in 2.5h) is unrelated and flagged separately for next platform session.
+
+**Impact assessment** (per `.claude/rules/data-infrastructure.md` §8). Readers: `republish-provider-sheet`, `sheet-drift-reconcile-daily`, `reconcile-sheet-to-db`, `pending-update-confirm`, `app/lib/sheet-status-sync.ts`. Writers: `sheet-edit-mirror`. All 5 Edge Functions redeployed. No DB schema change, no schema_version bump, no policy/role changes. Rollback: revert two files, redeploy, re-republish. Sign-off: owner.
+
+**Authored + deployed:** Sasha 2026-05-21. **Sign-off:** Owner 2026-05-21.
+
+---
+
+## 2026-05-21 — leads.partials composite UNIQUE (session_id, form_name) — fix cross-form-context merge
+
+**Incident.** Mable surfaced 0-ever rows for `fastrack-funded-v1` and `switchable-waitlist-enrichment` despite confirmed site-side wiring on `/funded/thank-you/` and `/waitlist/`. Diagnosis: `netlify-partial-capture` upserts on `session_id` alone (column-level UNIQUE from migration 0004). When the same browser session crosses form contexts — funded course page mints `session_id` under `form_name='switchable-funded'`, then `/funded/thank-you/` fires the tracker under `form_name='fastrack-funded-v1'` with the same `session_id` (sessionStorage persists) — the second tracker hits the existing row and merges its answers in, preserving the original `form_name`. Result: per-form-name analytics on `/admin/partials` reads false zero for the post-submit form contexts even though the data is landing in the JSONB blob on the parent row.
+
+**Fix.** Migration 0155 drops the column-level UNIQUE on `leads.partials.session_id` and adds composite UNIQUE `(session_id, form_name)`. `netlify-partial-capture/index.ts`: `ON CONFLICT (session_id)` → `ON CONFLICT (session_id, form_name)`. Rate-limit check switched from "single-row upsert_count" to "SUM(upsert_count) across the session" so the 50-per-session abuse cap stays per-session, not per (session, form_name).
+
+**Acceptance** (Mable's, adopted):
+- New writes from `/funded/thank-you/` land under `fastrack-funded-v1`
+- New writes from `/waitlist/` land under `switchable-waitlist-enrichment`
+- No backfill of historical rows (age out via 90-day purge for incomplete sessions)
+- `/admin/partials` filter by form_name returns real per-form activity within hours of deploy
+
+**Untouched by design.**
+- `_shared/ingest.ts:339` `is_complete` flip is `WHERE session_id = $1` (form-name-agnostic). Post-fix, a session can have multiple rows; the final-submit flip marks every form context touched in that session as complete, which is correct semantically (each form's flow ended successfully). Abandoned subsequent contexts (e.g. user submits funded, lands on `/funded/thank-you/`, fills some fastrack, leaves) keep `is_complete=false` on the fastrack row and age out via the 90-day purge.
+- `vw_partials_to_submissions` join (migration 0005) is `s.session_id = p.session_id` — still works, may now return multiple `partials` rows per submission, which is correct for funnel-context analytics.
+
+**Impact assessment** (per `.claude/rules/data-infrastructure.md` §8): logged in migration 0155 header. No cross-brand impact; owner sign-off only.
+
+**Diagnosed:** Mable 2026-05-21. **Verified:** Sasha against source. **Migration + EF patch authored:** Sasha. **Sign-off:** Owner 2026-05-21.
+
+---
+
 ## 2026-05-21 — Owner-CC leak fix: chaser stopped CCing provider rep
 
 **Incident.** Charlotte spotted a learner chaser email (Stockton-on-Tees lead, EMS) had been CC'd to George Taylor, the EMS provider rep scoped to Stockton/Hartlepool. Her ask: "learner chaser emails dont need to have anyone else cc'd in".

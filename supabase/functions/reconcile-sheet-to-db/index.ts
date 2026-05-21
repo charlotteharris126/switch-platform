@@ -64,15 +64,19 @@ const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, prepare: false })
 
 const APPENDER_TIMEOUT_MS = 15000;
 
-// Terminal statuses we're willing to FLIP DB to via this tool. Excludes
-// `enrolled` and `presumed_enrolled` by design: marking a lead enrolled
-// has billing consequences, so we only allow that via the explicit admin
-// outcome path (which goes through the audit wrapper). This tool is for
-// catching lost / cannot_reach / meeting_booked drift only.
+// Statuses we're willing to FLIP DB to via this tool. Excludes `enrolled`,
+// `presumed_enrolled`, `signed`, `not_signed`, `presumed_employer_signed`
+// by design: those have billing consequences, so we only allow them via
+// the explicit admin outcome path (which goes through the audit wrapper).
+// attempt_N_no_answer are non-billing progressions (call attempts) and
+// safe to flip in bulk via this tool when sheet is fresher than DB.
 const ALLOWED_TARGET_STATUSES = new Set([
   "lost",
   "cannot_reach",
   "enrolment_meeting_booked",
+  "attempt_1_no_answer",
+  "attempt_2_no_answer",
+  "attempt_3_no_answer",
 ]);
 
 interface SheetRow {
@@ -249,7 +253,13 @@ async function run(
   const skipped: Skipped[] = [];
 
   for (const lead of dbLeads) {
-    if (whitelist && !whitelist.has(lead.submission_id)) continue;
+    // postgres.js returns BIGINT columns as JS strings by default, so
+    // lead.submission_id is a string at runtime even though the TS type
+    // says number. Coerce before the whitelist check, otherwise apply
+    // mode (which always passes a whitelist) silently filters every
+    // lead out and reports proposed=0 / applied=0 / errors=0. Bit
+    // Charlotte's EMS attempt_2 reconcile run 2026-05-21.
+    if (whitelist && !whitelist.has(Number(lead.submission_id))) continue;
 
     const sheetRow = sheetById.get(String(lead.submission_id));
     const sheetLabel = sheetRow?.status ?? null;
@@ -487,29 +497,32 @@ async function run(
             ? sql.json({ status: "lost", lost_reason: change.from_lost_reason })
             : sql.json({ status: change.from_status });
 
-        const [audit] = await trx<Array<{ id: number }>>`
-          SELECT audit.log_system_action(
-            p_actor        := 'system:reconcile-sheet-to-db',
-            p_action       := ${auditAction},
-            p_target_table := 'crm.enrolments',
-            p_target_id    := (
+        // Use the public wrapper (migration 0147) rather than calling
+        // audit.log_system_action directly. functions_writer (the role
+        // SET LOCAL'd above) doesn't have USAGE on the audit schema
+        // or EXECUTE on the underlying function — direct calls throw
+        // permission_denied, the trx rolls back, the catch block fires.
+        // Wrapper is in `public`, callable by functions_writer, and
+        // delegates to the SECURITY DEFINER audit function internally.
+        const [audit] = await trx<Array<{ id: bigint }>>`
+          SELECT public.log_system_action_v1(
+            'system:reconcile-sheet-to-db',
+            ${auditAction},
+            'crm.enrolments',
+            (
               SELECT id::text FROM crm.enrolments
                WHERE submission_id = ${change.submission_id}
                  AND provider_id = ${providerId}
             ),
-            p_before       := ${auditBefore},
-            p_after        := ${
-            sql.json({ status: change.to_status, lost_reason: change.lost_reason })
-          },
-            p_context      := ${
-            sql.json({
+            ${auditBefore},
+            ${sql.json({ status: change.to_status, lost_reason: change.lost_reason })},
+            ${sql.json({
               submission_id: change.submission_id,
               provider_id: providerId,
               reason: "sheet → DB reconcile via admin panel (live sheet read disagrees with DB)",
               data_ops_script: scriptTag,
               drift_kind: change.kind,
-            })
-          }
+            })}
           ) AS id
         `;
         if (audit?.id) auditEntries.push(audit.id);

@@ -412,7 +412,7 @@ let matrixCache: MatrixCache | null = null;
 // course-only slug, course title, region name, the matched intake, and the
 // course's interest tags so callers can compose Brevo attributes (or any
 // other downstream context) without re-deriving from page slugs.
-async function getMatrixContext(
+export async function getMatrixContext(
   pageSlug: string | null,
   preferredIntakeId: string | null,
 ): Promise<MatrixContext> {
@@ -805,6 +805,11 @@ export async function buildLearnerBrevoAttributes(
     SW_PROVIDER_CONTACT_BEFORE: contactValues.before,
     SW_PROVIDER_PHONE: contactValues.phone,
     SW_PROVIDER_CONTACT_AFTER: contactValues.after,
+    // First-name-only with dual fallback per Wren S18 (regional rep → provider
+    // contact first word). Powers SMS bodies in _shared/sms-utility.ts and is
+    // available to any future Brevo template that wants a personable rep name
+    // without the split-filter trick currently used by chaser_funded.
+    SW_PROVIDER_REP_FIRST_NAME: resolveRepFirstName(provider, submission),
   };
 }
 
@@ -875,7 +880,29 @@ export async function upsertLearnerInBrevo(
 //
 // Provider is nullable for the no_match / pending paths where no provider
 // exists yet — only the fallback branch fires.
-function renderProviderContactValues(
+// Resolve the named-rep first name for SMS bodies + Brevo attribute. Dual
+// fallback per Wren's S18 design:
+//   1. Regional rep first_name (provider.regional_contacts.by_la[submission.la])
+//   2. Provider's main contact_name first word
+//   3. Empty string (caller decides whether to skip the SMS)
+// Used by buildLearnerBrevoAttributes (pushes SW_PROVIDER_REP_FIRST_NAME) and
+// by _shared/sms-utility.ts (renders the {{REP_FIRST_NAME}} merge field).
+export function resolveRepFirstName(
+  provider: ProviderRow | null,
+  submission: SubmissionRow,
+): string {
+  if (!provider) return "";
+  const la = submission.la;
+  const regional = la ? provider.regional_contacts?.by_la?.[la] : undefined;
+  if (regional?.first_name) return regional.first_name;
+  if (provider.contact_name) {
+    const first = provider.contact_name.trim().split(/\s+/)[0];
+    if (first) return first;
+  }
+  return "";
+}
+
+export function renderProviderContactValues(
   provider: ProviderRow | null,
   submission: SubmissionRow,
 ): { before: string; phone: string; after: string } {
@@ -1615,8 +1642,11 @@ async function writeAuditSystem(
       : trigger === "re_application"
         ? "auto_route_lead_re_application"
         : "owner_confirm_route_lead";
+    // Public-schema wrapper (migration 0147) over audit.log_system_action.
+    // Works regardless of caller role context, so future SET LOCAL ROLE
+    // additions inside this code path won't silently drop audit rows.
     await sql`
-      SELECT audit.log_system_action(
+      SELECT public.log_system_action_v1(
         ${actor},
         ${action},
         ${"leads.submissions"},
