@@ -187,18 +187,95 @@ export type BrevoReconcileResult =
   | BrevoReconcileAsyncStarted
   | { ok: false; error: string };
 
-// Apply mode at 300+ drift × 250ms inter-write delay blows past Netlify's 26s
-// Server Action cap, so the panel passes asyncApply=true and the EF runs the
-// apply in the background via EdgeRuntime.waitUntil. Dry-run stays
-// synchronous — ~5-15s walk fits comfortably in the cap.
+// Both apply (300+ drift × 250ms write delay) and check (per-contact SQL
+// chain across paginated Brevo list) blow past Netlify's 26s Server Action
+// cap at production volumes. The panel passes asyncApply / asyncCheck so the
+// EF runs the work in the background via EdgeRuntime.waitUntil and returns
+// immediately. Result lands in leads.dead_letter and is polled by the panel.
 export async function brevoAttributeReconcileAction(args: {
   apply: boolean;
   asyncApply?: boolean;
+  asyncCheck?: boolean;
 }): Promise<BrevoReconcileResult> {
   return callEdgeFunction("brevo-attribute-reconcile", {
     apply: args.apply,
     ...(args.asyncApply ? { async_apply: true } : {}),
+    ...(args.asyncCheck ? { async_check: true } : {}),
   }) as Promise<BrevoReconcileResult>;
+}
+
+// Poll for the result of an async drift check or async re-sync. Reads the
+// most recent dead_letter row written by the background task whose
+// started_at >= the `since` timestamp the EF returned when it kicked off.
+// Used by the panel to display the result without holding the Server Action
+// open across the full background-task duration.
+export async function getBrevoAsyncResultAction(args: {
+  kind: "check" | "apply";
+  since: string;
+}): Promise<
+  | { ok: true; found: false }
+  | { ok: true; found: true; summary: BrevoReconcileSummary }
+  | { ok: true; found: true; error: string }
+  | { ok: false; error: string }
+> {
+  const supabase = await createClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user || !isAdmin(userData.user.email)) {
+    return { ok: false, error: "Not authorised" };
+  }
+  const source = args.kind === "apply"
+    ? "brevo_attribute_reconcile_async_result"
+    : "brevo_attribute_reconcile_async_check_result";
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .schema("leads")
+    .from("dead_letter")
+    .select("id, raw_payload, error_context, received_at")
+    .eq("source", source)
+    .order("id", { ascending: false })
+    .limit(5);
+  if (error) {
+    return { ok: false, error: `dead_letter read: ${error.message}` };
+  }
+  const since = new Date(args.since).getTime();
+  type Row = {
+    id: number;
+    raw_payload: Record<string, unknown> | null;
+    error_context: string | null;
+    received_at: string;
+  };
+  for (const row of (data ?? []) as Row[]) {
+    const rowStartedAt = typeof row.raw_payload?.started_at === "string"
+      ? new Date(row.raw_payload.started_at).getTime()
+      : new Date(row.received_at).getTime();
+    if (rowStartedAt >= since - 1000) {
+      const payload = row.raw_payload ?? {};
+      if (typeof payload.error === "string") {
+        return { ok: true, found: true, error: payload.error };
+      }
+      // Re-build a BrevoReconcileSummary-shape from the persisted payload.
+      const summary: BrevoReconcileSummary = {
+        ok: true,
+        mode: args.kind === "apply" ? "apply" : "dry_run",
+        audience_size: Number(payload.processed ?? 0),
+        processed: Number(payload.processed ?? 0),
+        contacts_with_drift: Number(payload.contacts_with_drift ?? 0),
+        contacts_aligned: Number(payload.contacts_aligned ?? 0),
+        skipped_no_submission: 0,
+        skipped_no_email: 0,
+        per_attribute_drift:
+          (payload.per_attribute_drift as Record<string, number> | undefined) ?? {},
+        drift_list: (payload.drift_list as BrevoDriftEntry[] | undefined) ?? [],
+        applied_count: Number(payload.applied_count ?? 0),
+        errors: Number(payload.errors ?? 0),
+        error_messages:
+          (payload.error_messages as string[] | undefined) ?? [],
+        ran_at: typeof payload.ran_at === "string" ? payload.ran_at : row.received_at,
+      };
+      return { ok: true, found: true, summary };
+    }
+  }
+  return { ok: true, found: false };
 }
 
 // =============================================================================

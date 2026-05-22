@@ -12,11 +12,12 @@
 //      canonical upsert for every drifted contact via the same code path
 //      that runs on live submission insert.
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   type BrevoReconcileResult,
   type BrevoReconcileSummary,
   brevoAttributeReconcileAction,
+  getBrevoAsyncResultAction,
 } from "./reconcile-actions";
 
 export function ReconcileBrevoPanel() {
@@ -26,12 +27,62 @@ export function ReconcileBrevoPanel() {
   const [applyResult, setApplyResult] = useState<BrevoReconcileResult | null>(null);
   const [confirmApply, setConfirmApply] = useState(false);
 
-  const TIMEOUT_HINT = " — the underlying job may still be running. Re-run Check drift in a minute to see current state.";
+  const [pollNote, setPollNote] = useState<string | null>(null);
+  const pollAbort = useRef<{ cancelled: boolean } | null>(null);
+
+  // Wall-clock cap on polling for a background result. Drift check usually
+  // lands in 30-60s; apply runs longer (75s+ for 300 drift). 180s covers both
+  // with headroom; if no row by then, surface and let the operator retry.
+  const POLL_MAX_MS = 180_000;
+  const POLL_INTERVAL_MS = 3000;
+
+  useEffect(() => {
+    return () => {
+      if (pollAbort.current) pollAbort.current.cancelled = true;
+    };
+  }, []);
 
   function resetResults() {
     setDryRunResult(null);
     setApplyResult(null);
     setConfirmApply(false);
+    setPollNote(null);
+  }
+
+  async function pollForResult(args: { kind: "check" | "apply"; since: string }) {
+    const abortHandle = { cancelled: false };
+    if (pollAbort.current) pollAbort.current.cancelled = true;
+    pollAbort.current = abortHandle;
+    const started = Date.now();
+    while (!abortHandle.cancelled && Date.now() - started < POLL_MAX_MS) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      if (abortHandle.cancelled) return;
+      let r;
+      try {
+        r = await getBrevoAsyncResultAction({ kind: args.kind, since: args.since });
+      } catch {
+        continue;
+      }
+      if (!r.ok) continue;
+      if (!r.found) continue;
+      if ("error" in r) {
+        if (args.kind === "check") setDryRunResult({ ok: false, error: r.error });
+        else setApplyResult({ ok: false, error: r.error });
+        setPollNote(null);
+        return;
+      }
+      if ("summary" in r) {
+        if (args.kind === "check") setDryRunResult(r.summary);
+        else setApplyResult(r.summary);
+        setPollNote(null);
+        return;
+      }
+    }
+    if (!abortHandle.cancelled) {
+      setPollNote(
+        `Still running after ${Math.round(POLL_MAX_MS / 1000)}s. Re-click Check drift to look again.`,
+      );
+    }
   }
 
   function fireDryRun() {
@@ -39,12 +90,19 @@ export function ReconcileBrevoPanel() {
     setPendingMode("dry_run");
     startTransition(async () => {
       try {
-        const r = await brevoAttributeReconcileAction({ apply: false });
-        setDryRunResult(r);
+        const r = await brevoAttributeReconcileAction({ apply: false, asyncCheck: true });
+        if (r.ok && "started" in r && r.started) {
+          setPollNote(
+            "Walking Brevo contacts and diffing attributes in the background — usually 30-60s for a few hundred contacts.",
+          );
+          void pollForResult({ kind: "check", since: r.started_at });
+        } else {
+          setDryRunResult(r);
+        }
       } catch (err) {
         setDryRunResult({
           ok: false,
-          error: (err instanceof Error ? err.message : String(err)) + TIMEOUT_HINT,
+          error: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setPendingMode(null);
@@ -57,18 +115,19 @@ export function ReconcileBrevoPanel() {
     setPendingMode("apply");
     startTransition(async () => {
       try {
-        // asyncApply=true: EF kicks the work into EdgeRuntime.waitUntil and
-        // returns immediately. Server Action stays under Netlify's 26s cap
-        // regardless of how many contacts need updating. The completion row
-        // lands in leads.dead_letter with source
-        // brevo_attribute_reconcile_async_result. UI tells the operator to
-        // re-check drift in ~2 minutes.
         const r = await brevoAttributeReconcileAction({ apply: true, asyncApply: true });
-        setApplyResult(r);
+        if (r.ok && "started" in r && r.started) {
+          setPollNote(
+            "Re-syncing drifted contacts in the background — usually 60-120s for a few hundred contacts.",
+          );
+          void pollForResult({ kind: "apply", since: r.started_at });
+        } else {
+          setApplyResult(r);
+        }
       } catch (err) {
         setApplyResult({
           ok: false,
-          error: (err instanceof Error ? err.message : String(err)) + TIMEOUT_HINT,
+          error: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setPendingMode(null);
@@ -93,10 +152,14 @@ export function ReconcileBrevoPanel() {
         </span>
       </div>
 
-      {pending && pendingMode === "dry_run" && (
-        <p className="text-xs text-slate-500">
-          Walking Brevo contacts and diffing attributes. ~30-60s for a few hundred contacts.
-        </p>
+      {pollNote && (
+        <div className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+          <svg className="animate-spin h-3 w-3 text-slate-500" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+          </svg>
+          <span>{pollNote}</span>
+        </div>
       )}
 
       {dryRunResult && !dryRunResult.ok && (
