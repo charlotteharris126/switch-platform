@@ -4,6 +4,27 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-22 — Hotfix: netlify-partial-capture FOR UPDATE + aggregate bug
+
+**Scope.** S56 commit `e0418ec` (partials composite UNIQUE on session_id + form_name) rewrote the rate-limit check from `SELECT upsert_count ... FOR UPDATE` to `SELECT SUM(upsert_count) ... FOR UPDATE`. Postgres rejects `SELECT aggregate ... FOR UPDATE` (no specific row to lock), so every partial-capture upsert failed for ~25 hours from 21 May 15:xx UTC to 22 May 18:30 UTC.
+
+**Impact:** 187 dead_letter rows (`edge_function_partial_capture`, error `FOR UPDATE is not allowed with aggregate functions`). Zero rows landed in `leads.partials` during the outage. No impact on `leads.submissions` (this path is non-blocking for completed submissions). Iris's funnel telemetry blind for the window. Lost partial-fill rows from that window are not recoverable — original sessions are gone.
+
+**Fix.** Lock as raw rows, sum in JS:
+```ts
+const existing = await trx`SELECT upsert_count FROM leads.partials WHERE session_id = ${p.session_id} FOR UPDATE`;
+const totalUpserts = existing.reduce((a, r) => a + r.upsert_count, 0);
+```
+Same lock semantics as pre-S56 (per-row `FOR UPDATE` on the matching rows), correct cross-form aggregation. No DDL, no schema_version bump.
+
+**Verification.** Two test calls on a fresh session_id `f47ac10b-58cc-4372-a567-0e02b2c3d479`: first INSERT, second UPDATE through the FOR UPDATE lock path. Row id 15920 landed with `upsert_count=2`. Zero new dead_letter rows in the 2 minutes post-deploy. One stale test row left in `leads.partials` (clearly marked `answers.sasha_test=true`) for owner cleanup.
+
+**Stale dead_letter rows.** 187 rows from the outage window remain unresolved. Recommend bulk-mark as written-off via /admin/errors — sessions are gone and replaying won't recover the partials.
+
+**Discovered:** 2026-05-22 daily digest (60 rows reported in fixed window, actual 187 in 24h). **Fixed:** Sasha 2026-05-22, deployed 18:30 UTC. **Sign-off:** Owner 2026-05-22.
+
+---
+
 ## 2026-05-21 — SMS utility Chunk 3: Trigger A (fastrack-link cron) — full SMS workstream complete
 
 **Scope.** Final chunk of the SMS utility build. Adds Trigger A — the every-minute pg_cron that fires the fastrack-link prompt SMS to matched funded leads 10 minutes after routing if they haven't fastracked yet. With this chunk shipped, all three triggers from `switchable/email/docs/sms-utility-design.md` are live.

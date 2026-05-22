@@ -115,22 +115,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
       await trx`SET LOCAL ROLE functions_writer`;
 
       // Rate-limit check: reject if this session has already crossed the cap.
-      // Sums upsert_count across every form context for the session — one
-      // session can now hold multiple rows (one per form_name, e.g. funded
-      // funnel + post-submit fastrack), so the cap must be per-session, not
-      // per-row, to preserve the original abuse-cap intent.
-      // Lock the rows for the duration of the transaction to avoid the
-      // read-check-then-write race under concurrent requests.
-      const existing = await trx<Array<{ total_upserts: number }>>`
-        SELECT COALESCE(SUM(upsert_count), 0)::int AS total_upserts
+      // A session can now hold multiple rows (one per form_name), so the cap is
+      // per-session, summed in JS. Postgres rejects SELECT aggregate ... FOR
+      // UPDATE, so the existing rows are locked as raw rows and summed here.
+      const existing = await trx<Array<{ upsert_count: number }>>`
+        SELECT upsert_count
         FROM leads.partials
         WHERE session_id = ${p.session_id}
         FOR UPDATE
       `;
-      if (
-        existing.length > 0 &&
-        existing[0].total_upserts >= MAX_UPSERTS_PER_SESSION
-      ) {
+      const totalUpserts = existing.reduce((a, r) => a + r.upsert_count, 0);
+      if (totalUpserts >= MAX_UPSERTS_PER_SESSION) {
         return { rateLimited: true };
       }
 
