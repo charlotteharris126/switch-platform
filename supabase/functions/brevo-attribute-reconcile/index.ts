@@ -193,14 +193,92 @@ function normaliseForCompare(v: unknown): string {
   return String(v);
 }
 
+// Brevo Category attributes are an asymmetric pain. GET /contacts (list)
+// returns Category values as the numeric position in the enumeration (1, 2,
+// 3...). GET /contacts/{email} (single) returns them as the label string
+// (e.g. "matched"). The canonical projection writes labels. Comparing the
+// list-endpoint number against the label string is always a false-positive
+// drift. Translate list-side numbers to labels using the attribute
+// definitions before comparing.
+//
+// Charlotte hit this 2026-05-22: SW_MATCH_STATUS drift count stuck at 304/304
+// despite contacts actually holding the correct label. The reconciler was
+// reading "1" / "2" / "3" and comparing against "matched" / "pending" /
+// "no_match".
+type CategoryAttrMap = Map<string, Map<number, string>>;
+
+async function loadCategoryAttrMap(): Promise<CategoryAttrMap> {
+  const map: CategoryAttrMap = new Map();
+  try {
+    const res = await fetch(`${BREVO_BASE}/contacts/attributes`, {
+      method: "GET",
+      headers: { "api-key": BREVO_API_KEY!, accept: "application/json" },
+    });
+    if (!res.ok) {
+      console.warn(`Brevo list attributes ${res.status}: ${await res.text()}`);
+      return map;
+    }
+    const data = await res.json() as {
+      attributes?: Array<{
+        name?: string;
+        type?: string;
+        category?: string;
+        enumeration?: Array<{ value?: unknown; label?: unknown }>;
+      }>;
+    };
+    for (const attr of data.attributes ?? []) {
+      const isCategory = (attr.type ?? "").toLowerCase() === "category"
+        || (attr.category ?? "").toLowerCase() === "category";
+      if (!isCategory) continue;
+      const name = attr.name;
+      if (typeof name !== "string") continue;
+      const enumeration = Array.isArray(attr.enumeration) ? attr.enumeration : [];
+      const positionToLabel = new Map<number, string>();
+      for (const item of enumeration) {
+        const pos = typeof item.value === "number"
+          ? item.value
+          : typeof item.value === "string" && /^\d+$/.test(item.value)
+          ? Number(item.value)
+          : NaN;
+        const label = typeof item.label === "string" ? item.label : null;
+        if (!Number.isFinite(pos) || !label) continue;
+        positionToLabel.set(pos, label);
+      }
+      if (positionToLabel.size > 0) map.set(name, positionToLabel);
+    }
+  } catch (err) {
+    console.warn("loadCategoryAttrMap failed:", err instanceof Error ? err.message : String(err));
+  }
+  return map;
+}
+
+function translateBrevoCategoryValue(
+  key: string,
+  raw: unknown,
+  categoryMap: CategoryAttrMap,
+): unknown {
+  const positions = categoryMap.get(key);
+  if (!positions) return raw;
+  const n = typeof raw === "number"
+    ? raw
+    : typeof raw === "string" && /^\d+$/.test(raw)
+    ? Number(raw)
+    : NaN;
+  if (!Number.isFinite(n)) return raw;
+  return positions.get(n) ?? raw;
+}
+
 function diffAttributes(
   desired: Record<string, unknown>,
   current: Record<string, unknown> | undefined,
+  categoryMap: CategoryAttrMap,
 ): string[] {
   const drifted: string[] = [];
   for (const key of Object.keys(desired)) {
     const want = normaliseForCompare(desired[key]);
-    const have = normaliseForCompare(current?.[key]);
+    const rawHave = current?.[key];
+    const translatedHave = translateBrevoCategoryValue(key, rawHave, categoryMap);
+    const have = normaliseForCompare(translatedHave);
     if (want !== have) drifted.push(key);
   }
   return drifted;
@@ -235,6 +313,11 @@ type Evaluation =
 
 async function run(apply: boolean): Promise<RunSummary> {
   const startedAt = new Date();
+
+  // Load Brevo Category attribute definitions once per run so we can
+  // translate list-endpoint numeric values to label strings during the diff.
+  // See loadCategoryAttrMap comment for the asymmetry this works around.
+  const categoryMap = await loadCategoryAttrMap();
 
   // Cache providers we've loaded this run; provider rows rarely change and
   // the pilot has <10 providers — reload-once-per-run keeps the SQL count
@@ -283,7 +366,7 @@ async function run(apply: boolean): Promise<RunSummary> {
       return { kind: "error", contact, message: `build desired attrs failed: ${msg}` };
     }
 
-    const drifted_attrs = diffAttributes(desired, contact.attributes);
+    const drifted_attrs = diffAttributes(desired, contact.attributes, categoryMap);
     if (drifted_attrs.length === 0) {
       return { kind: "aligned", contact, submission, mode };
     }
@@ -415,9 +498,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ ok: false, error: "Unauthorized" }, 401);
   }
 
-  let body: { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown };
+  let body: { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown; list_attributes?: unknown };
   try {
-    body = await req.json() as { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown };
+    body = await req.json() as { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown; list_attributes?: unknown };
   } catch {
     return json({ ok: false, error: "invalid JSON body" }, 400);
   }
@@ -425,6 +508,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const logDrift = body.log_drift === true;
   const asyncApply = body.async_apply === true;
   const asyncCheck = body.async_check === true;
+
+  // Diagnostic: list every attribute currently defined in the Brevo account
+  // so the reconciler can cross-check whether the canonical projection's
+  // attribute names exist. Brevo silently drops writes to undefined
+  // attributes — the symptom Charlotte hit 2026-05-22 where SW_MATCH_STATUS
+  // and SW_PROVIDER_REP_FIRST_NAME drift counts didn't move after apply.
+  if (body.list_attributes === true) {
+    try {
+      const res = await fetch(`${BREVO_BASE}/contacts/attributes`, {
+        method: "GET",
+        headers: { "api-key": BREVO_API_KEY!, accept: "application/json" },
+      });
+      if (!res.ok) {
+        return json({ ok: false, error: `Brevo GET attributes ${res.status}: ${await res.text()}` }, 500);
+      }
+      const data = await res.json() as { attributes?: Array<{ name?: string; category?: string; type?: string; enumeration?: unknown }> };
+      const attrs = (data.attributes ?? []).map((a) => ({
+        name: a.name,
+        category: a.category,
+        type: a.type,
+      }));
+      return json({ ok: true, count: attrs.length, attributes: attrs });
+    } catch (err) {
+      return json({ ok: false, error: `list_attributes failed: ${err instanceof Error ? err.message : String(err)}` }, 500);
+    }
+  }
 
   // Background runner: shared between async_apply (apply: true) and
   // async_check (apply: false). Both blow past Netlify's 26s Server Action
