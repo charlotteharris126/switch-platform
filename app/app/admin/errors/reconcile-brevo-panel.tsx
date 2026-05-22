@@ -15,6 +15,7 @@
 import { useState, useTransition } from "react";
 import {
   type BrevoReconcileResult,
+  type BrevoReconcileSummary,
   brevoAttributeReconcileAction,
 } from "./reconcile-actions";
 
@@ -56,16 +57,14 @@ export function ReconcileBrevoPanel() {
     setPendingMode("apply");
     startTransition(async () => {
       try {
-        const r = await brevoAttributeReconcileAction({ apply: true });
+        // asyncApply=true: EF kicks the work into EdgeRuntime.waitUntil and
+        // returns immediately. Server Action stays under Netlify's 26s cap
+        // regardless of how many contacts need updating. The completion row
+        // lands in leads.dead_letter with source
+        // brevo_attribute_reconcile_async_result. UI tells the operator to
+        // re-check drift in ~2 minutes.
+        const r = await brevoAttributeReconcileAction({ apply: true, asyncApply: true });
         setApplyResult(r);
-        if (r.ok) {
-          try {
-            const refreshed = await brevoAttributeReconcileAction({ apply: false });
-            setDryRunResult(refreshed);
-          } catch {
-            // Refresh failed — apply still succeeded; operator can hit Check drift again.
-          }
-        }
       } catch (err) {
         setApplyResult({
           ok: false,
@@ -104,7 +103,7 @@ export function ReconcileBrevoPanel() {
         <ErrorBox title="Check failed" message={dryRunResult.error} />
       )}
 
-      {dryRunResult && dryRunResult.ok && (
+      {dryRunResult && dryRunResult.ok && "contacts_with_drift" in dryRunResult && (
         <DriftReport
           summary={dryRunResult}
           confirmApply={confirmApply}
@@ -118,7 +117,14 @@ export function ReconcileBrevoPanel() {
       {applyResult && !applyResult.ok && (
         <ErrorBox title="Re-sync failed" message={applyResult.error} />
       )}
-      {applyResult && applyResult.ok && (
+      {applyResult && applyResult.ok && "started" in applyResult && applyResult.started && (
+        <SuccessBox
+          title="Re-sync started — running in the background"
+          summary="Each contact takes ~250ms to update so 300 contacts is ~75s. Click Check drift again in ~2 minutes to confirm the drift count has dropped."
+          errors={[]}
+        />
+      )}
+      {applyResult && applyResult.ok && "applied_count" in applyResult && (
         <SuccessBox
           title={`Re-sync complete: ${applyResult.applied_count} contact${applyResult.applied_count === 1 ? "" : "s"} updated`}
           summary={`${applyResult.errors} error${applyResult.errors === 1 ? "" : "s"} • canonical upsert path fired for each drifted contact`}
@@ -137,7 +143,7 @@ function DriftReport({
   pending,
   pendingMode,
 }: {
-  summary: Extract<BrevoReconcileResult, { ok: true }>;
+  summary: BrevoReconcileSummary;
   confirmApply: boolean;
   setConfirmApply: (v: boolean) => void;
   fireApply: () => void;

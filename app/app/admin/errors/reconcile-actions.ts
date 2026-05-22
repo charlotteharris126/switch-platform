@@ -174,13 +174,30 @@ export interface BrevoReconcileSummary {
   ran_at: string;
 }
 
-export type BrevoReconcileResult = BrevoReconcileSummary | { ok: false; error: string };
+export interface BrevoReconcileAsyncStarted {
+  ok: true;
+  started: true;
+  async: true;
+  started_at: string;
+  note?: string;
+}
 
+export type BrevoReconcileResult =
+  | BrevoReconcileSummary
+  | BrevoReconcileAsyncStarted
+  | { ok: false; error: string };
+
+// Apply mode at 300+ drift × 250ms inter-write delay blows past Netlify's 26s
+// Server Action cap, so the panel passes asyncApply=true and the EF runs the
+// apply in the background via EdgeRuntime.waitUntil. Dry-run stays
+// synchronous — ~5-15s walk fits comfortably in the cap.
 export async function brevoAttributeReconcileAction(args: {
   apply: boolean;
+  asyncApply?: boolean;
 }): Promise<BrevoReconcileResult> {
   return callEdgeFunction("brevo-attribute-reconcile", {
     apply: args.apply,
+    ...(args.asyncApply ? { async_apply: true } : {}),
   }) as Promise<BrevoReconcileResult>;
 }
 

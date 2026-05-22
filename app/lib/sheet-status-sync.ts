@@ -94,6 +94,12 @@ export async function pushSheetStatus(args: SyncArgs): Promise<void> {
     return;
   }
 
+  // Payload shape mirrors fastrack-receive's `update_by_submission_id` call:
+  // FIELD_MAP keys (`status`, `lost_reason`, …) at the top level, NOT wrapped
+  // in `fields:{}`. The Apps Script walks each sheet header, computes its
+  // FIELD_MAP key, and reads `body[key]` directly — a `fields:{}` wrapper
+  // makes every column check miss and the call returns HTTP 200 with
+  // updates=0 (silent no-op). Riverside drift Sasha 2026-05-22.
   try {
     const res = await fetch(provider.sheet_webhook_url, {
       method: "POST",
@@ -102,14 +108,28 @@ export async function pushSheetStatus(args: SyncArgs): Promise<void> {
         token,
         mode: "update_by_submission_id",
         submission_id: args.submissionId,
-        fields: {
-          Status: sheetLabel,
-        },
+        status: sheetLabel,
       }),
     });
     if (!res.ok) {
       console.warn(
         `portal→sheet sync failed: submission=${args.submissionId} status=${args.newStatus} sheet=${sheetLabel} http=${res.status}`,
+      );
+      return;
+    }
+    // 200 with ok:false (e.g. "no row found", "0 rows match") is still a
+    // failure even though the HTTP layer succeeded. Surface so daily
+    // reconcile-style drift gets visible noise.
+    const body = await res.json().catch(() => null) as
+      | { ok?: boolean; error?: string; updates?: number }
+      | null;
+    if (body?.ok === false) {
+      console.warn(
+        `portal→sheet sync ok=false: submission=${args.submissionId} status=${args.newStatus} reason=${body.error ?? "unknown"}`,
+      );
+    } else if (body?.updates === 0) {
+      console.warn(
+        `portal→sheet sync wrote 0 cells: submission=${args.submissionId} status=${args.newStatus} (payload shape mismatch?)`,
       );
     }
   } catch (err) {

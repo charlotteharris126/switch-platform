@@ -4,6 +4,34 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-22 — Data-health triage: 3 fixes (chaser no-op, Riverside sheet writeback, Brevo re-sync timeout)
+
+**Context.** /admin/errors carrying 200 unresolved rows post the morning digest. Three distinct root causes, three fixes.
+
+**1. `admin-brevo-chase` — "Contact already in list" no longer writes dead_letter.**
+- Brevo's contacts/list-add API returns `400 invalid_parameter "Contact already in list and/or does not exist"` when the contact is already on the list (or hard-deleted via GDPR erasure). Both cases are no-ops for the legacy list-add — the transactional chaser send below it is the real signal.
+- Detect the substring `already in list` (case-insensitive) on the error string, set the result status to `skipped` with reason `already_in_list`, skip the dead_letter insert.
+- Resolves S56 next step #10 ("Brevo chaser 'Contact already in list' dead_letter spam"). Going forward, only true list-add failures (auth, network, unknown 4xx/5xx) land in dead_letter.
+
+**2. `pushSheetStatus` payload shape — Riverside portal→sheet writeback fixed.**
+- The TS helper wrapped the status field as `body.fields.Status`, but the canonical Apps Script (`provider-sheet-appender-v2.gs` handleUpdateBySubmissionId_) walks each header column, computes the FIELD_MAP key (`status`, `lost_reason`, etc.) and reads `body[key]` at the TOP level. The wrapped payload returns HTTP 200 with `updates: 0` — silent no-op.
+- Fix: send `status: sheetLabel` at the top level, mirroring fastrack-receive's working `update_by_submission_id` call shape (sheetPayload.status / .lost_reason / .fastracked).
+- Added soft warnings when the Apps Script returns `ok: false` or `updates: 0` (visible signal in EF logs going forward).
+- Why this only surfaced for Riverside: EMS regional reps work in the sheet directly; sheet-edit-mirror Channel A handles their status changes (sheet → DB, no portal→sheet writeback fires). Riverside's Jane works in the portal only, so every status change has been silently failing to push. Daily reconcile cron caught it 2026-05-22 at 06:00 UTC.
+- 13 existing Riverside drift rows on /admin/errors do not self-heal — operator can either wait for next portal status change (now writes correctly) or fire `republish-provider-sheet` for Riverside to push DB → sheet in one shot.
+
+**3. `brevo-attribute-reconcile` — apply mode now runs in background (EdgeRuntime.waitUntil).**
+- Pre-existing problem: 300+ drifted contacts × 250ms inter-write delay = ~75s+ end-to-end. Netlify's 26s Server Action cap cuts the connection long before the EF finishes, so the operator saw the Re-sync button time out every time despite the work usually completing on Supabase.
+- New body field `async_apply: true`. When set with `apply: true`, EF wraps the run in `EdgeRuntime.waitUntil(...)` and returns immediately with `{ ok: true, started: true, async: true, started_at }`. Completion (success OR failure) writes one row to `leads.dead_letter` with source `brevo_attribute_reconcile_async_result`.
+- Server Action `brevoAttributeReconcileAction` gains optional `asyncApply` arg. /admin/errors panel now passes `asyncApply: true` for the Re-sync button. UI immediately shows "Re-sync started — running in the background. Re-check drift in ~2 minutes."
+- Dry-run path unchanged (synchronous, fits in the cap). Daily cron unchanged (server-to-server, no Netlify cap involved).
+
+**Verification (this session).** Fix 1: smoke-tested admin-brevo-chase fix in isolation via the file edit + deploy; no panel re-run yet (no fresh test data with a duplicate contact). Fix 2: confirmed via Apps Script source — the FIELD_MAP loop expects body keys at top level; fastrack-receive (the one working invocation) sends exactly that shape. Fix 3: deployed brevo-attribute-reconcile; ready for operator to test "Re-sync" button on /admin/errors.
+
+**Discovered + fixed:** Sasha 2026-05-22, all three fixes deployed in single session. **Sign-off:** Owner 2026-05-22.
+
+---
+
 ## 2026-05-22 — Hotfix: netlify-partial-capture FOR UPDATE + aggregate bug
 
 **Scope.** S56 commit `e0418ec` (partials composite UNIQUE on session_id + form_name) rewrote the rate-limit check from `SELECT upsert_count ... FOR UPDATE` to `SELECT SUM(upsert_count) ... FOR UPDATE`. Postgres rejects `SELECT aggregate ... FOR UPDATE` (no specific row to lock), so every partial-capture upsert failed for ~25 hours from 21 May 15:xx UTC to 22 May 18:30 UTC.

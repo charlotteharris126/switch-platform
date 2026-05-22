@@ -115,24 +115,36 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const submissionId = typeof submissionIds[i] === "number" ? (submissionIds[i] as number) : null;
 
     // 1. Legacy list-add (still runs while shadow mode is on).
+    // Brevo returns a 400 with code=invalid_parameter "Contact already in list
+    // and/or does not exist" when the contact is already on the list (or has
+    // been hard-deleted via GDPR erasure). Both cases are no-ops — the legacy
+    // list-add has nothing to do. Treat as skipped, not error; don't pollute
+    // dead_letter. The transactional send below is the real signal.
     const r = await addBrevoContactToList({ email, listId });
     let listAddStatus: ChaseResult["status"] = "ok";
     let listAddReason: string | undefined;
     if (!r.ok) {
-      listAddStatus = "error";
-      listAddReason = r.error ?? "unknown";
-      try {
-        await sql`
-          INSERT INTO leads.dead_letter (source, raw_payload, error_context, received_at)
-          VALUES (
-            'edge_function_brevo_chase',
-            ${sql.json({ email, submission_id: submissionId, list_id: listId })},
-            ${`Brevo chaser list-add failed: ${r.error ?? "unknown"}`},
-            now()
-          )
-        `;
-      } catch (dlErr) {
-        console.error("dead_letter write failed:", String(dlErr));
+      const errStr = r.error ?? "unknown";
+      const isAlreadyInList = /already in list/i.test(errStr);
+      if (isAlreadyInList) {
+        listAddStatus = "skipped";
+        listAddReason = "already_in_list";
+      } else {
+        listAddStatus = "error";
+        listAddReason = errStr;
+        try {
+          await sql`
+            INSERT INTO leads.dead_letter (source, raw_payload, error_context, received_at)
+            VALUES (
+              'edge_function_brevo_chase',
+              ${sql.json({ email, submission_id: submissionId, list_id: listId })},
+              ${`Brevo chaser list-add failed: ${errStr}`},
+              now()
+            )
+          `;
+        } catch (dlErr) {
+          console.error("dead_letter write failed:", String(dlErr));
+        }
       }
     }
 

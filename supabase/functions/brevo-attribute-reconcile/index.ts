@@ -415,14 +415,82 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ ok: false, error: "Unauthorized" }, 401);
   }
 
-  let body: { apply?: unknown; log_drift?: unknown };
+  let body: { apply?: unknown; log_drift?: unknown; async_apply?: unknown };
   try {
-    body = await req.json() as { apply?: unknown; log_drift?: unknown };
+    body = await req.json() as { apply?: unknown; log_drift?: unknown; async_apply?: unknown };
   } catch {
     return json({ ok: false, error: "invalid JSON body" }, 400);
   }
   const apply = body.apply === true;
   const logDrift = body.log_drift === true;
+  const asyncApply = body.async_apply === true;
+
+  // async_apply=true: kick the apply run off in the background, return
+  // immediately. Solves Netlify's 26s Server Action cap for /admin/errors —
+  // 300+ drifted contacts × 250ms per write = ~75s, well over the cap. EF
+  // keeps running on Supabase. UI re-checks drift after ~2 min to confirm.
+  // On completion (success OR failure), we log a single dead_letter row with
+  // source='brevo_attribute_reconcile_async_result' so there's an audit
+  // trail even after the connection has been closed.
+  if (apply && asyncApply) {
+    const startedAt = new Date().toISOString();
+    const task = (async () => {
+      try {
+        const summary = await run(true);
+        await sql.begin(async (trx) => {
+          await trx`SET LOCAL ROLE functions_writer`;
+          await trx`
+            INSERT INTO leads.dead_letter (source, raw_payload, error_context)
+            VALUES (
+              'brevo_attribute_reconcile_async_result',
+              ${sql.json({
+                started_at: startedAt,
+                ran_at: summary.ran_at,
+                applied_count: summary.applied_count,
+                errors: summary.errors,
+                contacts_with_drift_before: summary.contacts_with_drift,
+                processed: summary.processed,
+              })},
+              ${`Brevo async re-sync complete: ${summary.applied_count} contact${summary.applied_count === 1 ? "" : "s"} updated, ${summary.errors} error${summary.errors === 1 ? "" : "s"}.`}
+            )
+          `;
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[async_apply] run failed:", msg);
+        try {
+          await sql.begin(async (trx) => {
+            await trx`SET LOCAL ROLE functions_writer`;
+            await trx`
+              INSERT INTO leads.dead_letter (source, raw_payload, error_context)
+              VALUES (
+                'brevo_attribute_reconcile_async_result',
+                ${sql.json({ started_at: startedAt, error: msg })},
+                ${`Brevo async re-sync failed: ${msg}`}
+              )
+            `;
+          });
+        } catch (logErr) {
+          console.error("[async_apply] result log failed:", String(logErr));
+        }
+      }
+    })();
+    // @ts-ignore — EdgeRuntime.waitUntil is provided by Supabase Edge Runtime.
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+      // @ts-ignore — same.
+      EdgeRuntime.waitUntil(task);
+    } else {
+      // Local dev fallback — fire and forget.
+      task.catch((err) => console.error("[async_apply] task failed:", err));
+    }
+    return json({
+      ok: true,
+      started: true,
+      async: true,
+      started_at: startedAt,
+      note: "Re-sync running in background. Re-check drift in ~2 minutes.",
+    });
+  }
 
   try {
     const summary = await run(apply);
