@@ -4,6 +4,28 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-23 — /admin/experiments truncation fix + business form experiment metadata
+
+Two coupled fixes for a real attribution gap surfaced by today's construction A/B lead (Sycamore homes, leads.submissions id 521). `/admin/experiments` was showing 0 views for `construction-hero-deputy-2026-05` even though `ads_switchable.page_views` held 19 real rows for it; the lead itself landed with NULL `experiment_id`/`experiment_variant`. Two independent bugs, both root-caused and patched.
+
+### Bug 1: Business form template missing experiment hidden inputs
+
+`scripts/build-business-pages.js`'s `renderHeroForm()` never carried `experiment_id` + `experiment_variant` hidden inputs. Same regression pattern as the 2026-05-20 funded-form fix, but the business landing template forked from the funded template before that fix landed and never inherited it. Every B2B submission since the construction A/B launched 2026-05-22 has been losing variant attribution.
+
+Fixed in the same session by Mable (the only currently active business landing). Added `{{EXPERIMENT_ID}}` + `{{EXPERIMENT_VARIANT}}` placeholders next to the existing hidden inputs; threaded them through the token map (pageRaw.experiment ? id : ''); variant B build pass overrides `EXPERIMENT_VARIANT: 'b'`. Verified: variant A renders `value="a"`, variant B `value="b"`, non-experiment `/business/` renders empty strings. Sycamore homes' attribution is lost (form rendered without inputs at submit time); future submissions are clean.
+
+### Bug 2: /admin/experiments truncated by supabase-js default row cap (Migration 0159)
+
+`admin/experiments/page.tsx:180-183` ran `supabase.schema("ads_switchable").from("page_views").select("experiment_id, variant")` with no `.range()` or aggregation. supabase-js caps a single SELECT at 1000 rows. `ads_switchable.page_views` passed 9711 rows on 2026-05-23 (historical counselling-tees + smm-tees runs each accumulated ~4000-5000 views). Construction's 19 view rows sit far above the first 1000 by primary-key order so they never reached the aggregator. Greater Growth (1120 views) was also partially truncated.
+
+- **Migration 0159** Adds `ads_switchable.get_experiment_view_counts_v1()` — SECURITY DEFINER, gated by `admin.is_admin()` (raises 42501 for non-admins), returns `(experiment_id TEXT, variant TEXT, view_count BIGINT)`. Aggregation is one row per experiment+variant pair; output size is constant regardless of historical view volume. Index `ads_switchable_page_views_exp_idx` (from migration 0068) covers the `GROUP BY (experiment_id, variant)` path. EXECUTE granted to `authenticated` + `readonly_analytics`.
+- **`/admin/experiments/page.tsx`** swapped from raw SELECT to `.rpc("get_experiment_view_counts_v1")`. View counts now consumed via `Number(v.view_count)` because supabase-js returns BIGINT as JS string (per `feedback_postgres3_bigint_returns_string.md`).
+- Rejected the cheaper alternative of paginating the raw select (`.range(0, 999999)`): would scale linearly with view volume and hit the same wall again at 5x. Aggregating in Postgres is the right shape, not a workaround.
+
+Sequence applied this session: 0159 migration → admin page swap → Mable's business-form patch + Switchable site deploy → verification once Netlify deploy lands.
+
+Signed off: Owner (session 2026-05-23).
+
 ## 2026-05-22 — Data-health triage: 3 fixes (chaser no-op, Riverside sheet writeback, Brevo re-sync timeout)
 
 **Context.** /admin/errors carrying 200 unresolved rows post the morning digest. Three distinct root causes, three fixes.

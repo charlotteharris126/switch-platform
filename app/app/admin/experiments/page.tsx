@@ -45,9 +45,10 @@ interface EnrolmentRow {
   status: string | null;
 }
 
-interface PageViewRow {
+interface PageViewCountRow {
   experiment_id: string;
   variant: string;
+  view_count: number;
 }
 
 interface VariantStats {
@@ -175,14 +176,19 @@ export default async function ExperimentsPage() {
     enrolRows = (enrolQuery.data ?? []) as EnrolmentRow[];
   }
 
-  // 3. Pull page view counts per experiment+variant from ads_switchable.page_views.
-  //    Logged server-side by variant-router — no PII, pure aggregate counts.
+  // 3. Pull aggregated page view counts per experiment+variant via the
+  //    ads_switchable.get_experiment_view_counts_v1 RPC (migration 0159).
+  //    Raw-select on ads_switchable.page_views was capped at 1000 rows by
+  //    supabase-js, silently truncating experiments whose rows sat past the
+  //    cap (construction-hero-deputy-2026-05 lost all 19 rows when total
+  //    page_views passed ~8000 mid-May 2026). Aggregating in Postgres
+  //    returns at most 2 × num_experiments rows regardless of historical
+  //    volume. Index ads_switchable_page_views_exp_idx covers the GROUP BY.
   const viewsQuery = await supabase
     .schema("ads_switchable")
-    .from("page_views")
-    .select("experiment_id, variant");
+    .rpc("get_experiment_view_counts_v1");
 
-  const viewRows = (viewsQuery.data ?? []) as PageViewRow[];
+  const viewRows = (viewsQuery.data ?? []) as PageViewCountRow[];
 
   // 4. Fetch the live experiments manifest from the site.
   const { manifest, error: manifestError } = await fetchManifest();
@@ -199,7 +205,8 @@ export default async function ExperimentsPage() {
     enrolmentsBySubmission.set(e.submission_id, list);
   }
 
-  // View counts: { experimentId → { variant → count } }
+  // View counts: { experimentId → { variant → count } }. Rows come back
+  // pre-aggregated from the RPC (one row per experiment+variant pair).
   const viewsByExp = new Map<string, Map<string, number>>();
   for (const v of viewRows) {
     let byVariant = viewsByExp.get(v.experiment_id);
@@ -207,7 +214,7 @@ export default async function ExperimentsPage() {
       byVariant = new Map();
       viewsByExp.set(v.experiment_id, byVariant);
     }
-    byVariant.set(v.variant, (byVariant.get(v.variant) ?? 0) + 1);
+    byVariant.set(v.variant, Number(v.view_count));
   }
 
   // 6. Build per-experiment, per-variant aggregates.
