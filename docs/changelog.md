@@ -4,6 +4,28 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-23 — Per-session page-view dedup + owner-traffic exclusion (migration 0162)
+
+`/admin/experiments` CVR column was misleading: `ads_switchable.page_views` logs one row per page LOAD, so refreshes, back-button revisits, internal navigation, link-preview crawlers, and the owner's own QA testing were all inflating the denominator. SMM-tees showed ~4400 loads vs 1510 Meta link clicks vs 32 form submissions, making the view-to-lead CVR look like 0.7% when the real click-to-lead CVR was ~2.1%. The dashboard was actively misleading Charlotte's read of A/B performance.
+
+Right shape: per-session dedup at insert time + owner short-circuit at the edge. Generalises across paid + organic + direct + email (which matters because organic launch is imminent — Meta-clicks-as-denominator wouldn't have worked).
+
+- **Migration 0162** adds nullable `session_id TEXT` column on `ads_switchable.page_views` + partial UNIQUE index `(experiment_id, page_slug, variant, session_id) WHERE session_id IS NOT NULL`. New SECURITY DEFINER RPC `ads_switchable.get_experiment_view_counts_v2()` returns `(experiment_id, variant, total_loads, unique_sessions)` per pair; admin-gated, EXECUTE granted to authenticated + readonly_analytics. v1 from migration 0159 kept live (returns only total loads) for backward compat.
+- **`variant-router.ts`** (Netlify Edge Function on `switchable.org.uk`):
+  - Reads `sw_is_owner=true` cookie from the request. When present, skips the `log-page-view` POST entirely. Charlotte sets this cookie via a one-tap bookmarklet on each device she QAs from — her loads never reach `page_views`.
+  - Reads Cookiebot's `CookieConsent` cookie, looks for `statistics:true`. With consent: reuses existing `sw_session` UUID from cookie OR mints a fresh `crypto.randomUUID()` and sets the cookie on response (Path=/, Max-Age=1800 = 30-min idle session, SameSite=Lax, Secure). Without consent: session_id stays null, beacon still fires (raw load count preserved).
+  - Beacon payload now includes `session_id` (nullable). Variant cookie + cache directives unchanged.
+- **`log-page-view` Edge Function:** accepts `session_id` in payload, normalises null/undefined/"" → null, INSERT becomes `ON CONFLICT (experiment_id, page_slug, variant, session_id) WHERE session_id IS NOT NULL DO NOTHING`. Null session_ids fall through to plain INSERT (partial index doesn't engage). Smoke-tested: 2 POSTs with same UUID → 1 row; 2 POSTs without UUID → 2 rows.
+- **`/admin/experiments/page.tsx`** swapped from v1 to v2 RPC. New "Views" column renders `unique_sessions` (CVR denominator); cell `title` attribute shows `total_loads` for forensic hover. Type names: `viewCount` → `uniqueSessions` + `totalLoads`; `totalViews` → `totalUniqueSessions` + `totalLoads` on `ExperimentSummary`.
+- **GDPR posture:** dedup cookie is gated on `Cookiebot.consent.statistics` (parsed server-side from the inbound Cookie header). Without consent, no cookie is set and beacon fires with null session_id — visitor is still counted as a raw load (anonymous), just not deduped. Variant cookie + owner cookie both treated as functional/preferences and not consent-gated (variant cookie is required for the experiment to function; owner cookie is actively set by the owner herself).
+- **Historical rows (pre-0162):** their `session_id` stays NULL. They count toward `total_loads` but not `unique_sessions`. Cutover is forward-looking; the unique_sessions column grows meaningfully from the 0162 cutover date.
+
+Three smoke-test rows (`experiment_id LIKE 'smoke-test-0162%'`) left in `page_views` from deploy verification — invisible to /admin/experiments (no matching manifest entry). Safe to delete via `/admin/data-ops` if Charlotte wants the cleanup.
+
+Sequence applied this session: 0162 migration → log-page-view EF deploy → variant-router.ts deploy via Netlify push → admin/experiments swap deploy via platform push. EF + DB live; site + admin page deploy on next Netlify trigger.
+
+Signed off: Owner (session 2026-05-23, "do the right fix, and check its got proper cookie blocking embedded").
+
 ## 2026-05-23 — Strategy schema + roadmap_tasks table (migration 0160, schema only, NOT YET APPLIED)
 
 New `strategy` schema (first table) + `strategy.roadmap_tasks` for the /admin/roadmap MVP that Charlotte will use to track the 2026-05-23 audience-business pivot build sequence. Replaces the static HTML at `strategy/roadmap.html` with an interactive Supabase-backed task tracker. Mira reads via `readonly_analytics` MCP each weekly review; Charlotte writes via the admin dashboard (page TBD, Mable-owned, separate brief).

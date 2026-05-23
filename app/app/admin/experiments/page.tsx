@@ -48,7 +48,8 @@ interface EnrolmentRow {
 interface PageViewCountRow {
   experiment_id: string;
   variant: string;
-  view_count: number;
+  total_loads: number;     // every page load (raw row count)
+  unique_sessions: number; // COUNT DISTINCT session_id (excludes nulls)
 }
 
 interface VariantStats {
@@ -61,7 +62,8 @@ interface VariantStats {
   enrolmentBillable: number; // status in (enrolled, presumed_enrolled)
   enrolmentInFlight: number; // status in (open, cannot_reach)
   enrolmentLost: number;     // status = lost
-  viewCount: number;         // page views logged by variant-router
+  uniqueSessions: number;    // unique visitors per migration 0162 — CVR denominator
+  totalLoads: number;        // raw page loads (forensic only — includes refreshes, pre-consent loads, pre-0162 historical rows)
 }
 
 interface ExperimentSummary {
@@ -70,7 +72,8 @@ interface ExperimentSummary {
   variants: Map<string, VariantStats>;
   totalLeads: number;
   totalQualifiedLeads: number;
-  totalViews: number;
+  totalUniqueSessions: number;
+  totalLoads: number;
   earliest: string | null;
   latest: string | null;
 }
@@ -131,7 +134,8 @@ function emptyVariantStats(): VariantStats {
     enrolmentBillable: 0,
     enrolmentInFlight: 0,
     enrolmentLost: 0,
-    viewCount: 0,
+    uniqueSessions: 0,
+    totalLoads: 0,
   };
 }
 
@@ -177,16 +181,19 @@ export default async function ExperimentsPage() {
   }
 
   // 3. Pull aggregated page view counts per experiment+variant via the
-  //    ads_switchable.get_experiment_view_counts_v1 RPC (migration 0159).
-  //    Raw-select on ads_switchable.page_views was capped at 1000 rows by
-  //    supabase-js, silently truncating experiments whose rows sat past the
-  //    cap (construction-hero-deputy-2026-05 lost all 19 rows when total
-  //    page_views passed ~8000 mid-May 2026). Aggregating in Postgres
-  //    returns at most 2 × num_experiments rows regardless of historical
-  //    volume. Index ads_switchable_page_views_exp_idx covers the GROUP BY.
+  //    ads_switchable.get_experiment_view_counts_v2 RPC (migration 0162).
+  //    Returns both unique_sessions (the dedupable count — variant-router
+  //    mints a 30-minute session UUID per consenting visitor) and total_loads
+  //    (raw row count, useful for forensics). unique_sessions is the right
+  //    CVR denominator going forward: it dedupes refreshes / back-button
+  //    revisits, excludes the owner via the sw_is_owner cookie short-circuit
+  //    in variant-router, and counts a visitor once per session regardless
+  //    of traffic source (paid, organic, direct, email). v1 from migration
+  //    0159 remains live and returns only total loads — preserved for any
+  //    external caller.
   const viewsQuery = await supabase
     .schema("ads_switchable")
-    .rpc("get_experiment_view_counts_v1");
+    .rpc("get_experiment_view_counts_v2");
 
   const viewRows = (viewsQuery.data ?? []) as PageViewCountRow[];
 
@@ -205,16 +212,22 @@ export default async function ExperimentsPage() {
     enrolmentsBySubmission.set(e.submission_id, list);
   }
 
-  // View counts: { experimentId → { variant → count } }. Rows come back
-  // pre-aggregated from the RPC (one row per experiment+variant pair).
-  const viewsByExp = new Map<string, Map<string, number>>();
+  // View counts: { experimentId → { variant → { uniqueSessions, totalLoads } } }.
+  // Rows come back pre-aggregated from the v2 RPC (one row per
+  // experiment+variant pair) with both unique-session and total-load counts.
+  // BIGINT values come back from postgres as JS strings (per
+  // feedback_postgres3_bigint_returns_string.md) so Number() upfront.
+  const viewsByExp = new Map<string, Map<string, { uniqueSessions: number; totalLoads: number }>>();
   for (const v of viewRows) {
     let byVariant = viewsByExp.get(v.experiment_id);
     if (!byVariant) {
       byVariant = new Map();
       viewsByExp.set(v.experiment_id, byVariant);
     }
-    byVariant.set(v.variant, Number(v.view_count));
+    byVariant.set(v.variant, {
+      uniqueSessions: Number(v.unique_sessions),
+      totalLoads: Number(v.total_loads),
+    });
   }
 
   // 6. Build per-experiment, per-variant aggregates.
@@ -229,7 +242,8 @@ export default async function ExperimentsPage() {
         variants: new Map(),
         totalLeads: 0,
         totalQualifiedLeads: 0,
-        totalViews: 0,
+        totalUniqueSessions: 0,
+        totalLoads: 0,
         earliest: null,
         latest: null,
       };
@@ -274,14 +288,16 @@ export default async function ExperimentsPage() {
   //    experiments that have views but no leads yet).
   for (const [expId, byVariant] of viewsByExp) {
     const summary = getOrCreateSummary(expId);
-    for (const [variant, count] of byVariant) {
+    for (const [variant, counts] of byVariant) {
       let v = summary.variants.get(variant);
       if (!v) {
         v = emptyVariantStats();
         summary.variants.set(variant, v);
       }
-      v.viewCount = count;
-      summary.totalViews += count;
+      v.uniqueSessions = counts.uniqueSessions;
+      v.totalLoads = counts.totalLoads;
+      summary.totalUniqueSessions += counts.uniqueSessions;
+      summary.totalLoads += counts.totalLoads;
     }
   }
 
@@ -348,8 +364,12 @@ export default async function ExperimentsPage() {
         const variantB = exp.variants.get("b") ?? emptyVariantStats();
         const aQual = variantA.qualifiedCount;
         const bQual = variantB.qualifiedCount;
-        const aViews = variantA.viewCount;
-        const bViews = variantB.viewCount;
+        // "Views" here means unique sessions (1 visitor = 1 view, per migration
+        // 0162). totalLoads is kept for forensic display but isn't the CVR
+        // denominator any more — refreshes and back-button revisits no longer
+        // inflate it.
+        const aViews = variantA.uniqueSessions;
+        const bViews = variantB.uniqueSessions;
         const aBillable = variantA.enrolmentBillable;
         const bBillable = variantB.enrolmentBillable;
 
@@ -460,15 +480,20 @@ export default async function ExperimentsPage() {
                               ? "B (challenger)"
                               : variant}
                         </TableCell>
-                        <TableCell className="text-right font-semibold">
-                          {stats.viewCount > 0 ? stats.viewCount.toLocaleString() : "—"}
+                        <TableCell
+                          className="text-right font-semibold"
+                          title={stats.totalLoads > 0
+                            ? `${stats.totalLoads.toLocaleString()} raw load${stats.totalLoads === 1 ? "" : "s"} (includes refreshes, pre-consent + pre-2026-05-23 rows where session_id is NULL)`
+                            : undefined}
+                        >
+                          {stats.uniqueSessions > 0 ? stats.uniqueSessions.toLocaleString() : "—"}
                         </TableCell>
                         <TableCell className="text-right">{stats.count}</TableCell>
                         <TableCell className="text-right font-semibold">
                           {stats.qualifiedCount}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
-                          {pct(stats.qualifiedCount, stats.viewCount)}
+                          {pct(stats.qualifiedCount, stats.uniqueSessions)}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
                           {pct(stats.dqCount, stats.count)}
