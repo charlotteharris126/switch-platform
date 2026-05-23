@@ -32,6 +32,7 @@ const NAV_SECTIONS: Array<{
       { href: "/admin/roadmap", label: "Roadmap" },
       { href: "/analytics", label: "Analytics" },
       { href: "/experiments", label: "Experiments" },
+      { href: "/admin/blog", label: "Blog" },
       { href: "/automations", label: "Automations" },
       { href: "/social/drafts", label: "Social" },
       { href: "/profit", label: "Profit tracker" },
