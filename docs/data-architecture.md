@@ -38,6 +38,7 @@ Single source of truth for the structure of the Switchable Ltd business database
 | `crm` | Providers, enrolments, disputes, billing | Pilot |
 | `audit` | Workspace-wide change log for admin / provider / system writes | Pilot (live since migration 0013) |
 | `social` | Multi-brand organic social: drafts, engagement targets, post analytics, OAuth tokens | Pilot (Session G — migration 0029) |
+| `strategy` | Owner-facing strategic state: roadmap tasks, future strategic tracking surfaces. Read-only to Mira via MCP for weekly review continuity. | Pilot (migration 0160, 2026-05-23) |
 
 ## Schemas (deferred, design placeholders)
 
@@ -1314,6 +1315,75 @@ CREATE TABLE audit.access_requests (
 ```
 
 ---
+
+## Schema: `strategy`
+
+Owner-facing strategic state. Replaces the operational-task overload in ClickUp for tracking the strategic roadmap. Owner-only writes via the admin dashboard at `/admin/roadmap`. Mira reads via `readonly_analytics` MCP for weekly review continuity.
+
+### `strategy.roadmap_tasks`
+
+Interactive task tracker for the 2026 audience-business pivot build sequence. Replaces the static HTML at `strategy/roadmap.html` and the build-sequence detail in `strategy/docs/build-map.md`. Charlotte ticks tasks off as she completes them, adds notes per task as context, Mira reads programmatically each weekly review.
+
+```sql
+CREATE TABLE strategy.roadmap_tasks (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title           TEXT NOT NULL,
+  description     TEXT,
+  revenue_model   TEXT NOT NULL,        -- foundation / provider / apprenticeship / affiliate / ppl / app / newsletter-sponsorship / placements / report / whitelabel
+  phase           TEXT NOT NULL,        -- p1 / p2 / p3 / p4
+  agent_tags      TEXT[] NOT NULL DEFAULT '{}',  -- e.g. {sasha, mable, charlotte}
+  status          TEXT NOT NULL DEFAULT 'to_do', -- to_do / in_progress / blocked / review / complete
+  notes           TEXT,
+  sort_order      INTEGER NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at    TIMESTAMPTZ,
+  schema_version  TEXT NOT NULL DEFAULT '1.0'
+);
+```
+
+**Indexes:** `revenue_model`, `phase`, `status`.
+
+**RLS:** ALL operations gated by `admin.is_admin()` for the `authenticated` role (mirrors the admin-dashboard pattern used across `leads.*` / `crm.*` tables). `readonly_analytics` role gets `SELECT` only for Mira's MCP-driven weekly review reads.
+
+**Status state machine:**
+- `to_do` → default for new tasks; not yet started
+- `in_progress` → actively being worked on
+- `blocked` → waiting on an external dependency (named in notes)
+- `review` → completed, awaiting owner confirmation
+- `complete` → done; `completed_at` set automatically when status flips to `complete`
+
+**Revenue model taxonomy** (matches the 8 revenue lines in `strategy/docs/product-and-revenue-map.md` plus a `foundation` category for cross-cutting builds like aggregator signups and admin tools):
+
+| Model | Description |
+|---|---|
+| `foundation` | Cross-cutting infrastructure that enables every revenue model (signups, /admin/roadmap, blog template) |
+| `provider` | Provider per-enrolment (existing pilot model) |
+| `apprenticeship` | Apprenticeship Employer Signed (Riverside live) |
+| `affiliate` | PPL + affiliate stack (5 modules: Career & Work / Career-Change Financial / Self-Employed Transition / Life-Admin / Government-Funded Bridges) |
+| `ppl` | Dedicated PPL acquisition lane (paid ads independent of provider funnel) |
+| `app` | Switchable Career Change Pro freemium app |
+| `newsletter-sponsorship` | Newsletter sponsorship inventory at audience scale |
+| `placements` | Sponsored placements on site/email |
+| `report` | Consumer quarterly report (replaces Hidden Demand sponsorship lane) |
+| `whitelabel` | White-label B2B SaaS Phase 3+ |
+
+**Phase taxonomy** (matches the four phases in `strategy/docs/build-map.md`): `p1` Foundation (months 0-3), `p2` App + audience build (months 4-9), `p3` Scale + recurring (months 9-18), `p4` Mature (months 18-30+).
+
+**Agent tags** (matches active agents in `master-plan.md`): `charlotte`, `claude`, `mira`, `clara`, `sasha`, `wren`, `mable`, `iris`, `solis`, `nina`, `rosa`, `nell`, `paige`, `thea`, `cole`. Multi-tag rows where multiple agents collaborate.
+
+**Seed data:** ~60-70 roadmap tasks pre-categorised from `strategy/roadmap.html` and `strategy/docs/build-map.md`. Tasks already complete at seed time (TEES-VALLEY-SMM paused, Awin signup initiated, Skimlinks signup initiated, Coursera/Impact signup done, Amazon Associates dormant account reactivated, strategic docs shipped) start with `status='complete'` and `completed_at` set. Seed lives in `platform/supabase/migrations/0161_strategy_roadmap_tasks_seed.sql` (separate migration so the schema-only migration 0160 can be applied independently and the seed re-applied / extended in future).
+
+**Mira read pattern (weekly review):**
+
+```sql
+SELECT title, description, revenue_model, phase, status, notes, agent_tags, updated_at
+FROM strategy.roadmap_tasks
+WHERE status != 'complete'
+ORDER BY phase, sort_order;
+```
+
+Surface blocked tasks first, then in_progress, then to_do. Stale-task flag fires when `updated_at` is older than 14 days on a non-complete row.
 
 ## Views (derived / analytical)
 

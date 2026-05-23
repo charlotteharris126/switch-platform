@@ -4,6 +4,27 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-23 — Strategy schema + roadmap_tasks table (migration 0160, schema only, NOT YET APPLIED)
+
+New `strategy` schema (first table) + `strategy.roadmap_tasks` for the /admin/roadmap MVP that Charlotte will use to track the 2026-05-23 audience-business pivot build sequence. Replaces the static HTML at `strategy/roadmap.html` with an interactive Supabase-backed task tracker. Mira reads via `readonly_analytics` MCP each weekly review; Charlotte writes via the admin dashboard (page TBD, Mable-owned, separate brief).
+
+- Migration: `0160_strategy_roadmap_tasks.sql`
+- Change: new schema `strategy`; new table `strategy.roadmap_tasks` (id, title, description, revenue_model, phase, agent_tags, status, notes, sort_order, timestamps, schema_version 1.0); 3 indexes; 1 trigger (auto-touch updated_at + completed_at on status flip); 2 RLS policies (`roadmap_tasks_admin_all` ALL operations gated by `admin.is_admin()` on authenticated; `roadmap_tasks_readonly_select` SELECT only for readonly_analytics MCP); schema + table GRANTs to authenticated and readonly_analytics.
+- Constraints: CHECKs on `revenue_model` (10 values), `phase` (4 values), `status` (5 values). Constraint values match the strategy taxonomy in `strategy/docs/product-and-revenue-map.md` and `strategy/docs/build-map.md`.
+- Why: strategy session 2026-05-23 locked the /admin/roadmap MVP as Week 1-2 priority. ClickUp's operational task pipeline drowns strategic tracking; this lives separately so Charlotte sees only the pivot roadmap when she opens the page. Auto-save UX (debounced 500ms), status dropdown inline, notes textarea expands inline. Phase-2 design carries forward into the multi-tenant app build (same admin page pattern, same auth shape).
+- Impact: schema additions only; no existing consumer affected. New consumers: future /admin/roadmap page (Mable, TBD); Mira's MCP weekly-review query path (uses `readonly_analytics`, already provisioned).
+- Reversible via DOWN section in the migration (drops policies, table, schema CASCADE).
+- Status: full MVP code written this session. Components shipped:
+  1. Migration `0160_strategy_roadmap_tasks.sql` (schema + RLS + trigger)
+  2. Migration `0161_strategy_roadmap_tasks_seed.sql` (~99 tasks across 10 revenue models)
+  3. Edge Function `platform/supabase/functions/admin-roadmap/index.ts` (POST endpoint, action-discriminated list/update/create, x-audit-key auth)
+  4. `platform/supabase/config.toml` updated with `[functions.admin-roadmap] verify_jwt = false`
+  5. Server Actions `platform/app/app/admin/roadmap/actions.ts` (listRoadmapAction, updateRoadmapTaskAction, createRoadmapTaskAction)
+  6. Admin page `platform/app/app/admin/roadmap/page.tsx` + client component `roadmap-client.tsx` (filters by revenue_model + phase + status + hide-complete, grouped by revenue model, status dropdown inline, notes textarea with 500ms debounced auto-save, completion strikethrough, saving / saved feedback)
+- Remaining to ship to production: `supabase db push` (applies 0160 + 0161), `supabase functions deploy admin-roadmap --no-verify-jwt`, normal Next.js platform deploy for the admin page. All gated on owner review.
+- Sign-off: owner via strategy Session 16 (2026-05-23) decision lock. Spec at `platform/docs/admin-roadmap-spec.md`.
+- Related: `strategy/docs/audience-business-pivot.md`, `strategy/docs/product-and-revenue-map.md`, `strategy/docs/build-map.md`, `platform/docs/admin-roadmap-spec.md`, `platform/docs/data-architecture.md` (Schema: `strategy` section).
+
 ## 2026-05-23 — /admin/experiments truncation fix + business form experiment metadata
 
 Two coupled fixes for a real attribution gap surfaced by today's construction A/B lead (Sycamore homes, leads.submissions id 521). `/admin/experiments` was showing 0 views for `construction-hero-deputy-2026-05` even though `ads_switchable.page_views` held 19 real rows for it; the lead itself landed with NULL `experiment_id`/`experiment_variant`. Two independent bugs, both root-caused and patched.
