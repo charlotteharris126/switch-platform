@@ -4,7 +4,7 @@
 
 The shared data infrastructure of Switchable Ltd. The database (Supabase), schemas, migrations, data governance, Supabase Edge Function source (the serverless layer that handles webhooks and scheduled jobs), and eventually the custom dashboard and provider-facing systems that sit on top of it.
 
-Open this folder for: schema design and migrations, Edge Function work, data governance, dashboard build (Phase 2-3), provider-facing systems (Phase 4), anything that reads from or writes to the unified data layer.
+Open this folder for: schema design and migrations, Edge Function work, data governance, custom dashboard work, provider-facing systems, anything that reads from or writes to the unified data layer.
 
 Do not open this folder for: brand-specific public websites (`switchable/site/` or `switchleads/site/`), brand-specific ads (`switchable/ads/` or `switchleads/ads/`), CRM outreach logic (`switchleads/outreach/` or `switchleads/clients/`), email tooling (`switchable/email/`, `switchleads/email/`), course YAML data (`switchable/site/deploy/data/courses/`).
 
@@ -20,7 +20,7 @@ What Charlotte previously called "the CRM" lives inside this folder as one schem
 - `docs/impact-assessment-YYYY-MM-DD.md`, per-significant-change impact records
 - `docs/secrets-rotation.md`, rotation log Sasha cross-checks Monday
 - `docs/infrastructure-manifest.md`, critical-row verification list Sasha runs at session start
-- `docs/admin-dashboard-scoping.md`, scoping doc for in-dashboard analytics and Phase 4 provider build
+- `docs/admin-dashboard-scoping.md`, scoping doc for in-dashboard analytics and the provider-facing dashboard
 - `docs/provider-onboarding-playbook.md`, repeatable provider setup steps
 - `weekly-notes.md`, Sasha's Monday output (replaced each week)
 - `supabase/README.md`, how to connect, run migrations, manage keys
@@ -37,10 +37,10 @@ What Charlotte previously called "the CRM" lives inside this folder as one schem
 ### Stack
 
 - **Database:** Supabase (managed Postgres). Free tier during pilot, ~£20/month after volume growth.
-- **Dashboards (interim):** Metabase cloud (~£15/month). Absorbed into the custom dashboard over Phase 2-3.
+- **Dashboards:** Metabase cloud (~£15/month). Retires when the custom dashboard covers its chart surface.
 - **Serverless functions:** Supabase Edge Functions (Deno/TypeScript, deployed via `supabase functions deploy`, live in `supabase/functions/`). Used for Netlify form webhook handling, scheduled ingestion, and any other automation that needs to read or write the DB. Chosen over n8n to keep the stack in one tool, avoid a ~£240/year subscription, and keep workflow code version-controlled alongside migrations.
 - **MCP for agents:** Postgres MCP (user scope). Gives Iris, Mira, Sasha, and other agents read access via the `readonly_analytics` Postgres role.
-- **Custom dashboard (Phase 2-3):** built on a SwitchLeads subdomain (e.g. `app.switchleads.co.uk`). Reads the same Supabase. Gradually absorbs Metabase's role until Metabase can be retired.
+- **Custom dashboard:** at `app.switchleads.co.uk`, reads the same Supabase. Absorbs Metabase's surfaces as they're rebuilt in-dashboard.
 
 ### Governance
 
@@ -57,7 +57,7 @@ All work in this folder is bound by:
 - Secrets never checked into iCloud-synced files in plaintext.
 - Every new consumer of the DB gets its own scoped Postgres role (`readonly_analytics` / `n8n_writer` / `ads_ingest` / owner).
 - `docs/data-architecture.md` is the design source of truth. Migrations implement what the doc says, not the other way round.
-- **Brevo attribute wiring changes require a same-session backfill plan.** Any change to a function in `_shared/route-lead.ts` that produces a Brevo contact attribute value (e.g. `buildReferralUrl`, `buildFastrackUrl`, the `SW_COURSE_*` resolution path, the enrol-status lookup) leaves existing Brevo contacts holding the old value until they happen to be re-upserted. That stale value gets rendered verbatim in any marketing broadcast that references the attribute. **Before merging the wiring change, queue a Brevo backfill ticket for Sasha** and flag the affected attribute(s) in `platform/docs/changelog.md`. The next marketing broadcast referencing the attribute is gated on that backfill being run (see `switchable/email/CLAUDE.md` Pre-broadcast gate). Bit Wren 2026-05-10 with `SW_REFERRAL_URL`.
+- **Brevo attribute wiring changes require a same-session backfill plan.** Any change to a function in `_shared/route-lead.ts` that produces a Brevo contact attribute value (e.g. `buildReferralUrl`, `buildFastrackUrl`, the `SW_COURSE_*` resolution path, the enrol-status lookup) leaves existing Brevo contacts holding the old value until they happen to be re-upserted. That stale value gets rendered verbatim in any marketing broadcast that references the attribute. **Before merging the wiring change, queue a Brevo backfill ticket for Sasha** and flag the affected attribute(s) in `platform/docs/changelog.md`. The next marketing broadcast referencing the attribute is gated on that backfill being run (see `switchable/email/CLAUDE.md` Pre-broadcast gate).
 
 ### Key reference files
 
@@ -81,5 +81,5 @@ All work in this folder is bound by:
 | Strategy or budget decisions | `strategy/` (Mira), she queries Supabase via MCP for KPI data |
 | New schema or new table | Here, update `docs/data-architecture.md`, write migration, log in `docs/changelog.md` |
 | New dashboard chart | Build in Metabase, save view to `docs/changelog.md` if important enough to document |
-| Custom dashboard feature (Phase 2-3) | Here, first confirm Metabase cannot serve the need, then spec the feature |
+| Custom dashboard feature | Here, first confirm Metabase cannot serve the need, then spec the feature |
 | Legal page changed in Notion that affects platform-served surfaces | Flag to the relevant site agent's `docs/current-handoff.md` (Paige or Mable) |
