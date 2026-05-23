@@ -29,6 +29,7 @@ const NAV_SECTIONS: Array<{
   {
     label: "Tools",
     items: [
+      { href: "/admin/roadmap", label: "Roadmap" },
       { href: "/analytics", label: "Analytics" },
       { href: "/experiments", label: "Experiments" },
       { href: "/automations", label: "Automations" },
