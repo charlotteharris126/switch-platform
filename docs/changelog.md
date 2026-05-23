@@ -24,6 +24,12 @@ Fixed in the same session by Mable (the only currently active business landing).
 
 Sequence applied this session: 0159 migration → admin page swap → Mable's business-form patch + Switchable site deploy → verification once Netlify deploy lands.
 
+### Data-ops 046 — Sycamore homes (submission 521) attribution backfill
+
+Sycamore homes hit `/business/construction/` from paid Meta at 14:56:45.765 UTC, submitted with NULL `experiment_id` / `experiment_variant`. Inferred variant B from `ads_switchable.page_views` evidence: nearest view to her submission was variant B at 14:53:51 (2:54 before), the only other view in the window was also B at 14:34:45, last A view was 2h 20min earlier. Today's overall split skewed B (11 B vs 4 A) too. Confidence high but not measured — variant-router beacon carries no session id so attribution is timing-inference, not join.
+
+Audit row 831 records `attribution_method=timing_window_inference` + `attribution_is_exact=false` so the dataset never reads this as ground truth. One-row backfill, idempotent (UPDATE gated on `experiment_id IS NULL`). Future construction submissions land with metadata directly post the 39807c6 site deploy.
+
 Signed off: Owner (session 2026-05-23).
 
 ## 2026-05-22 — Data-health triage: 3 fixes (chaser no-op, Riverside sheet writeback, Brevo re-sync timeout)
