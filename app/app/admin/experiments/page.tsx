@@ -73,7 +73,7 @@ interface ExperimentSummary {
   totalLeads: number;
   totalQualifiedLeads: number;
   totalUniqueSessions: number;
-  totalLoads: number;
+  totalLoadsAll: number;
   earliest: string | null;
   latest: string | null;
 }
@@ -243,7 +243,7 @@ export default async function ExperimentsPage() {
         totalLeads: 0,
         totalQualifiedLeads: 0,
         totalUniqueSessions: 0,
-        totalLoads: 0,
+        totalLoadsAll: 0,
         earliest: null,
         latest: null,
       };
@@ -297,7 +297,7 @@ export default async function ExperimentsPage() {
       v.uniqueSessions = counts.uniqueSessions;
       v.totalLoads = counts.totalLoads;
       summary.totalUniqueSessions += counts.uniqueSessions;
-      summary.totalLoads += counts.totalLoads;
+      summary.totalLoadsAll += counts.totalLoads;
     }
   }
 
@@ -364,12 +364,15 @@ export default async function ExperimentsPage() {
         const variantB = exp.variants.get("b") ?? emptyVariantStats();
         const aQual = variantA.qualifiedCount;
         const bQual = variantB.qualifiedCount;
-        // "Views" here means unique sessions (1 visitor = 1 view, per migration
-        // 0162). totalLoads is kept for forensic display but isn't the CVR
-        // denominator any more — refreshes and back-button revisits no longer
-        // inflate it.
-        const aViews = variantA.uniqueSessions;
-        const bViews = variantB.uniqueSessions;
+        // Display + rate calculation: prefer uniqueSessions (per migration
+        // 0162) but fall back to totalLoads when unique sessions is zero.
+        // Reality is that consent-gated session_id stays NULL on first-visit
+        // paid social (no CookieConsent cookie yet on the request that mints
+        // the variant), so unique_sessions reads ~0 in practice today and
+        // total_loads is the only meaningful denominator until either consent
+        // rate climbs or the session_id gate is removed.
+        const aViews = variantA.uniqueSessions > 0 ? variantA.uniqueSessions : variantA.totalLoads;
+        const bViews = variantB.uniqueSessions > 0 ? variantB.uniqueSessions : variantB.totalLoads;
         const aBillable = variantA.enrolmentBillable;
         const bBillable = variantB.enrolmentBillable;
 
@@ -456,7 +459,8 @@ export default async function ExperimentsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Variant</TableHead>
-                  <TableHead className="text-right">Views</TableHead>
+                  <TableHead className="text-right">Unique sessions</TableHead>
+                  <TableHead className="text-right">Total loads</TableHead>
                   <TableHead className="text-right">Submissions</TableHead>
                   <TableHead className="text-right">Qualified</TableHead>
                   <TableHead className="text-right">View → lead</TableHead>
@@ -482,18 +486,22 @@ export default async function ExperimentsPage() {
                         </TableCell>
                         <TableCell
                           className="text-right font-semibold"
-                          title={stats.totalLoads > 0
-                            ? `${stats.totalLoads.toLocaleString()} raw load${stats.totalLoads === 1 ? "" : "s"} (includes refreshes, pre-consent + pre-2026-05-23 rows where session_id is NULL)`
-                            : undefined}
+                          title="Unique sessions = visitors who'd previously granted Cookiebot statistics consent. Reads ~zero on first-visit paid social because no consent cookie exists yet when variant-router fires."
                         >
                           {stats.uniqueSessions > 0 ? stats.uniqueSessions.toLocaleString() : "—"}
+                        </TableCell>
+                        <TableCell
+                          className="text-right font-semibold"
+                          title="Total raw page loads — every row in ads_switchable.page_views including refreshes, pre-consent loads, and pre-2026-05-23 rows."
+                        >
+                          {stats.totalLoads > 0 ? stats.totalLoads.toLocaleString() : "—"}
                         </TableCell>
                         <TableCell className="text-right">{stats.count}</TableCell>
                         <TableCell className="text-right font-semibold">
                           {stats.qualifiedCount}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
-                          {pct(stats.qualifiedCount, stats.uniqueSessions)}
+                          {pct(stats.qualifiedCount, stats.uniqueSessions > 0 ? stats.uniqueSessions : stats.totalLoads)}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
                           {pct(stats.dqCount, stats.count)}
