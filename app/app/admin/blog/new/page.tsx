@@ -5,7 +5,18 @@ import { PostForm } from "../post-form";
 
 export const dynamic = "force-dynamic";
 
-export default async function NewBlogPostPage() {
+type SearchParams = Promise<{ date?: string }>;
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export default async function NewBlogPostPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const sp = await searchParams;
+  const initialPublishDate = sp.date && DATE_RE.test(sp.date) ? sp.date : undefined;
+
   const [catsResult, tagsResult] = await Promise.all([
     listCategoriesAction(),
     listTagsAction(),
@@ -38,6 +49,7 @@ export default async function NewBlogPostPage() {
         mode="create"
         categories={catsResult.data}
         allTags={tagsResult.data}
+        initialPublishDate={initialPublishDate}
       />
     </div>
   );

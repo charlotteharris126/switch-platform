@@ -4,6 +4,20 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-24 — Auto-publish cron (migration 0166) + content calendar + editor UX pass
+
+**1. Migration 0166 — auto-publish scheduled posts.** `editorial.auto_publish_due_scheduled_posts()` SECURITY DEFINER function flips `status='scheduled'` posts to `'published'` when `publish_date <= CURRENT_DATE`. Scheduled via pg_cron at `0 6 * * *` UTC (07:00 BST / 06:00 GMT — before commute reading hours). Daily cadence chosen because blog publish granularity is dates not times; per-run candidate count is tiny.
+
+- **What this does NOT do:** trigger a Netlify rebuild. Until the build-script flip (S58 next-step #3) reads from `editorial.posts` and a build hook fires on publish (S58 next-step #6), flipping the DB status doesn't change the live site. The cron is plumbing for the wider auto-publish workflow — when those two pieces land, scheduled posts go live automatically. Logged in `infrastructure-manifest.md` follow-up needed.
+- **Apply:** `supabase db push --linked` from `platform/supabase/` OR paste the migration file contents into Supabase Studio SQL editor.
+- **Sign-off:** Owner (2026-05-24).
+
+**2. Content calendar (`/admin/blog/calendar/`).** Month-grid view of every post with a `publish_date`. Status-colour-coded chips (draft amber / scheduled blue / published green / archived grey). Default view jumps to earliest future scheduled month; click any chip to edit. Overdue scheduled posts (publish_date < today AND status='scheduled') flagged red — visual safety net in case the cron is paused. Empty days expose a "+ Schedule" hover link that opens `/admin/blog/new?date=YYYY-MM-DD` with publish_date pre-filled + status defaulted to `scheduled`.
+
+**3. Editor UX pass (S58 follow-up).** Already shipped earlier today in the same session: tabs (Content / SEO + social), sticky save bar (Save / Save & preview / Preview / Delete), right-rail live SEO checklist with grouped pass/warn/fail, character meters with Google + Facebook truncation limits baked in, and a new in-admin preview page at `/admin/blog/[slug]/preview/` with SERP and OG share mocks. Build script must implement default fallbacks on rendered HTML (meta_title → title, og_image → cover, etc.) — full list in `seo-checks.ts` header.
+
+---
+
 ## 2026-05-24 — `editorial` schema exposed to PostgREST + one-shot YAML port panel
 
 Two changes shipped together to unblock `/admin/blog`.

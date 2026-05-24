@@ -25,6 +25,9 @@ export type PostFormProps = {
   categories: Category[];
   allTags: TagOption[];
   initial?: { post: Post; tagSlugs: string[] };
+  // Pre-fill publish_date when arriving from "+ Schedule" on the calendar.
+  // Only honoured in create mode; edit mode reads from the post itself.
+  initialPublishDate?: string;
 };
 
 type TabId = "content" | "seo";
@@ -79,13 +82,19 @@ function fromPost(post: Post, tagSlugs: string[]): PostFormInput {
   };
 }
 
-export function PostForm({ mode, categories, allTags, initial }: PostFormProps) {
+export function PostForm({ mode, categories, allTags, initial, initialPublishDate }: PostFormProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [tab, setTab] = useState<TabId>("content");
-  const [input, setInput] = useState<PostFormInput>(
-    initial ? fromPost(initial.post, initial.tagSlugs) : emptyInput(),
-  );
+  const [input, setInput] = useState<PostFormInput>(() => {
+    if (initial) return fromPost(initial.post, initial.tagSlugs);
+    const base = emptyInput();
+    if (initialPublishDate) {
+      base.publish_date = initialPublishDate;
+      base.status = "scheduled";
+    }
+    return base;
+  });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 

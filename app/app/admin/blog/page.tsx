@@ -97,6 +97,9 @@ export default async function BlogAdminPage() {
         }
         actions={
           <div className="flex gap-2">
+            <Link href="/admin/blog/calendar">
+              <Button variant="outline">Calendar</Button>
+            </Link>
             <Link href="/admin/blog/tags">
               <Button variant="outline">Tags</Button>
             </Link>
