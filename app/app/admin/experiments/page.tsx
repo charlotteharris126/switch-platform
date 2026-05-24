@@ -48,8 +48,10 @@ interface EnrolmentRow {
 interface PageViewCountRow {
   experiment_id: string;
   variant: string;
-  total_loads: number;     // every page load (raw row count)
-  unique_sessions: number; // COUNT DISTINCT session_id (excludes nulls)
+  total_loads: number;       // every page load including bots + null-session
+  unique_sessions: number;   // humans only, deduped (the rate denominator)
+  bot_sessions: number;      // bots filtered out (forensic transparency)
+  null_session_loads: number; // human loads with no session cookie (pre-0162 / cookie-blocked)
 }
 
 interface VariantStats {
@@ -62,8 +64,10 @@ interface VariantStats {
   enrolmentBillable: number; // status in (enrolled, presumed_enrolled)
   enrolmentInFlight: number; // status in (open, cannot_reach)
   enrolmentLost: number;     // status = lost
-  uniqueSessions: number;    // unique visitors per migration 0162 — CVR denominator
-  totalLoads: number;        // raw page loads (forensic only — includes refreshes, pre-consent loads, pre-0162 historical rows)
+  uniqueSessions: number;    // humans only, deduped per migration 0164 — CVR denominator
+  botSessions: number;       // crawlers/previewers/scanners filtered out at log time
+  nullSessionLoads: number;  // pre-0162 historic loads (no session cookie) — counted only when no clean data exists
+  totalLoads: number;        // raw page loads including bots + null-session (forensic only)
 }
 
 interface ExperimentSummary {
@@ -135,6 +139,8 @@ function emptyVariantStats(): VariantStats {
     enrolmentInFlight: 0,
     enrolmentLost: 0,
     uniqueSessions: 0,
+    botSessions: 0,
+    nullSessionLoads: 0,
     totalLoads: 0,
   };
 }
@@ -181,19 +187,19 @@ export default async function ExperimentsPage() {
   }
 
   // 3. Pull aggregated page view counts per experiment+variant via the
-  //    ads_switchable.get_experiment_view_counts_v2 RPC (migration 0162).
-  //    Returns both unique_sessions (the dedupable count — variant-router
-  //    mints a 30-minute session UUID per consenting visitor) and total_loads
-  //    (raw row count, useful for forensics). unique_sessions is the right
-  //    CVR denominator going forward: it dedupes refreshes / back-button
-  //    revisits, excludes the owner via the sw_is_owner cookie short-circuit
-  //    in variant-router, and counts a visitor once per session regardless
-  //    of traffic source (paid, organic, direct, email). v1 from migration
-  //    0159 remains live and returns only total loads — preserved for any
-  //    external caller.
+  //    ads_switchable.get_experiment_view_counts_v3 RPC (migration 0164).
+  //    Returns unique_sessions (humans only, deduped — the rate denominator),
+  //    bot_sessions (crawlers/previewers/scanners filtered at log time, kept
+  //    for forensic transparency), null_session_loads (real loads from
+  //    pre-0162 historicals or visitors who blocked the session cookie), and
+  //    total_loads (everything including bots, kept as forensic upper bound).
+  //    unique_sessions is the right denominator: it excludes bots, owner QA,
+  //    refreshes, back-button revisits, and link-preview fetchers; it counts
+  //    a real human visitor once per 30-minute session regardless of source.
+  //    v2 (migration 0162) stays live for unfiltered callers.
   const viewsQuery = await supabase
     .schema("ads_switchable")
-    .rpc("get_experiment_view_counts_v2");
+    .rpc("get_experiment_view_counts_v3");
 
   const viewRows = (viewsQuery.data ?? []) as PageViewCountRow[];
 
@@ -212,12 +218,17 @@ export default async function ExperimentsPage() {
     enrolmentsBySubmission.set(e.submission_id, list);
   }
 
-  // View counts: { experimentId → { variant → { uniqueSessions, totalLoads } } }.
-  // Rows come back pre-aggregated from the v2 RPC (one row per
-  // experiment+variant pair) with both unique-session and total-load counts.
-  // BIGINT values come back from postgres as JS strings (per
-  // feedback_postgres3_bigint_returns_string.md) so Number() upfront.
-  const viewsByExp = new Map<string, Map<string, { uniqueSessions: number; totalLoads: number }>>();
+  // View counts come back pre-aggregated from the v3 RPC (one row per
+  // experiment+variant pair) with humans-only unique_sessions plus three
+  // forensic columns. BIGINT values come back from postgres as JS strings
+  // (per feedback_postgres3_bigint_returns_string.md) so Number() upfront.
+  const viewsByExp = new Map<
+    string,
+    Map<
+      string,
+      { uniqueSessions: number; botSessions: number; nullSessionLoads: number; totalLoads: number }
+    >
+  >();
   for (const v of viewRows) {
     let byVariant = viewsByExp.get(v.experiment_id);
     if (!byVariant) {
@@ -226,6 +237,8 @@ export default async function ExperimentsPage() {
     }
     byVariant.set(v.variant, {
       uniqueSessions: Number(v.unique_sessions),
+      botSessions: Number(v.bot_sessions),
+      nullSessionLoads: Number(v.null_session_loads),
       totalLoads: Number(v.total_loads),
     });
   }
@@ -295,6 +308,8 @@ export default async function ExperimentsPage() {
         summary.variants.set(variant, v);
       }
       v.uniqueSessions = counts.uniqueSessions;
+      v.botSessions = counts.botSessions;
+      v.nullSessionLoads = counts.nullSessionLoads;
       v.totalLoads = counts.totalLoads;
       summary.totalUniqueSessions += counts.uniqueSessions;
       summary.totalLoadsAll += counts.totalLoads;
@@ -492,8 +507,8 @@ export default async function ExperimentsPage() {
                           className="text-right font-semibold"
                           title={
                             stats.uniqueSessions > 0
-                              ? `Unique deduplicated sessions per migration 0162 (sw_session UUID, 30-min idle, set unconditionally as strictly-necessary functional). Owner QA traffic excluded via sw_is_owner cookie short-circuit. Forensic raw page-load count: ${stats.totalLoads.toLocaleString()} (includes refreshes, bot hits, and pre-0162 rows where session_id was NULL).`
-                              : `No session_id data — this experiment ran entirely before migration 0162 landed on 2026-05-23. Showing raw load count instead (every row in ads_switchable.page_views, including refreshes and bot hits). Treat as a forensic upper bound on traffic, not a clean visitor count.`
+                              ? `Unique human sessions per migration 0164. Bots filtered server-side from user_agent (${stats.botSessions.toLocaleString()} bot session${stats.botSessions === 1 ? "" : "s"} excluded). Owner QA excluded via sw_is_owner cookie. Refreshes / back-button deduped via sw_session UUID. Forensic upper bound (everything including bots + null-session loads): ${stats.totalLoads.toLocaleString()}.`
+                              : `No clean session data — this experiment ran entirely before migration 0162 landed on 2026-05-23. Showing raw load count (includes refreshes, bot hits, pre-cookie loads). Treat as a forensic upper bound, not a clean visitor count.`
                           }
                         >
                           {stats.uniqueSessions > 0

@@ -11,24 +11,28 @@
 // edge runtime, making a shared-secret check impractical without using
 // Netlify-specific APIs.
 //
-// Payload: { experiment_id: string, page_slug: string, variant: "a" | "b",
-//            session_id?: string | null }
-// session_id is the per-browser-session UUID minted by variant-router.ts when
-// the visitor has granted Cookiebot statistics consent. Optional —
-// non-consenting visitors don't supply it; in that case a fresh row is
-// inserted unconditionally (counts as a raw load, contributes 0 to
-// unique-session totals on /admin/experiments). When supplied, the INSERT
-// becomes an UPSERT via ON CONFLICT DO NOTHING against the partial unique
-// index added by migration 0162 (UNIQUE on (experiment_id, page_slug,
-// variant, session_id) WHERE session_id IS NOT NULL), so refreshes and
-// back-button revisits within the same 30-minute session don't multiply
-// the row count.
+// Payload (migration 0164):
+//   {
+//     experiment_id: string,
+//     page_slug:     string,
+//     variant:       "a" | "b",
+//     session_id?:   string | null,
+//     user_agent?:   string | null,
+//     referrer?:     string | null,
+//     utm_source?:   string | null,
+//     utm_medium?:   string | null,
+//     utm_campaign?: string | null
+//   }
+//
+// session_id is the per-browser-session UUID minted by variant-router.ts.
+// When supplied, the INSERT becomes an UPSERT via ON CONFLICT DO NOTHING
+// against the partial unique index added by migration 0162. When NULL, a
+// fresh row is inserted unconditionally (raw load count contribution only).
+//
+// is_bot is computed server-side from user_agent (regex) and stored on the
+// row. The dashboard uses RPC v3 which filters is_bot=true out of unique_sessions.
 //
 // Response: always 200 (caller ignores the response body anyway).
-//
-// Always returns 200 even on insert failure so the caller (variant-router)
-// never retries or blocks on a transient DB hiccup. Errors are logged to
-// the Supabase Edge Function log stream for monitoring.
 
 import postgres from "npm:postgres@3";
 
@@ -45,6 +49,49 @@ const sql = postgres(DATABASE_URL, {
   prepare: false,
 });
 
+// Bot / crawler / link-previewer detection.
+//
+// Anything matching this regex on its user_agent gets is_bot=true and is
+// excluded from /admin/experiments unique_sessions. The categories covered:
+//
+// - Search-engine crawlers: googlebot, bingbot, yandex, baidu, duckduckbot,
+//   slurp (Yahoo), applebot
+// - SEO/marketing scanners: ahrefs, semrush, mj12bot, dotbot, moz, blexbot
+// - Social link previewers: facebookexternalhit, twitterbot, linkedinbot,
+//   slackbot, discordbot, telegrambot, whatsapp, skypeurlpreview, pinterest
+// - Uptime / monitoring: pingdom, statuscake, uptimerobot, site24x7, newrelic
+// - HTTP clients commonly used by scrapers: curl, wget, python-requests,
+//   node-fetch, axios, java/, go-http-client, okhttp, libwww, postman
+// - Generic catchalls: anything containing "bot", "crawl", "spider",
+//   "scrape", "preview", "monitor", "fetch", "checker", "scan", "headless"
+//
+// False positive risk: a real human running a browser identifying as
+// "headless Chrome" or with "fetch" in their UA string gets filtered.
+// Acceptable: those are extremely rare in real traffic and the dashboard
+// surfaces bot_sessions separately so the count is auditable.
+//
+// False negative risk: a sophisticated scraper spoofing a real browser UA
+// slips through. Acceptable: their volume is low and they'd dedupe by
+// session_id if they accept cookies (which most do; cookie-rejecting
+// scrapers naturally limit themselves).
+const BOT_REGEX =
+  /(bot|crawl|spider|scrape|preview|monitor|fetch|checker|scan|headless|curl|wget|python-requests|node-fetch|axios|java\/|go-http-client|okhttp|libwww|postman|googlebot|bingbot|yandex|baidu|duckduckbot|slurp|applebot|ahrefs|semrush|mj12bot|dotbot|moz\.com|blexbot|facebookexternalhit|twitterbot|linkedinbot|slackbot|discordbot|telegrambot|whatsapp|skypeurlpreview|pinterest|pingdom|statuscake|uptimerobot|site24x7|newrelic)/i;
+
+function detectBot(userAgent: string | null | undefined): boolean {
+  if (!userAgent || typeof userAgent !== "string") {
+    // No user-agent at all is suspicious — humans always have one. Default
+    // to is_bot=true so we don't inflate denominators with anonymous clients.
+    return true;
+  }
+  return BOT_REGEX.test(userAgent);
+}
+
+function trimOrNull(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t.length > 0 ? t : null;
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -57,11 +104,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return new Response("Bad request — invalid JSON", { status: 400 });
   }
 
-  const { experiment_id, page_slug, variant, session_id } = body as {
+  const {
+    experiment_id,
+    page_slug,
+    variant,
+    session_id,
+    user_agent,
+    referrer,
+    utm_source,
+    utm_medium,
+    utm_campaign,
+  } = body as {
     experiment_id?: string;
     page_slug?: string;
     variant?: string;
     session_id?: string | null;
+    user_agent?: string | null;
+    referrer?: string | null;
+    utm_source?: string | null;
+    utm_medium?: string | null;
+    utm_campaign?: string | null;
   };
 
   if (
@@ -73,19 +135,27 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // session_id is optional. Normalise: accept null, undefined, "", and any
-  // non-string as "no session". Otherwise keep the trimmed UUID. The partial
-  // unique index in migration 0162 only kicks in when session_id IS NOT NULL,
-  // so passing null falls through to a plain INSERT (raw load count) while
-  // passing a UUID upserts (one row per session per experiment+page+variant).
+  // non-string as "no session". Otherwise keep the trimmed UUID.
   const normalisedSessionId =
     typeof session_id === "string" && session_id.trim() ? session_id.trim() : null;
+
+  const normalisedUserAgent  = trimOrNull(user_agent);
+  const normalisedReferrer   = trimOrNull(referrer);
+  const normalisedUtmSource  = trimOrNull(utm_source);
+  const normalisedUtmMedium  = trimOrNull(utm_medium);
+  const normalisedUtmCampaign = trimOrNull(utm_campaign);
+  const isBot = detectBot(normalisedUserAgent);
 
   try {
     await sql`
       INSERT INTO ads_switchable.page_views
-        (experiment_id, page_slug, variant, session_id)
+        (experiment_id, page_slug, variant, session_id,
+         user_agent, referrer, utm_source, utm_medium, utm_campaign, is_bot)
       VALUES
-        (${experiment_id.trim()}, ${page_slug.trim()}, ${variant}, ${normalisedSessionId})
+        (${experiment_id.trim()}, ${page_slug.trim()}, ${variant}, ${normalisedSessionId},
+         ${normalisedUserAgent}, ${normalisedReferrer},
+         ${normalisedUtmSource}, ${normalisedUtmMedium}, ${normalisedUtmCampaign},
+         ${isBot})
       ON CONFLICT (experiment_id, page_slug, variant, session_id)
         WHERE session_id IS NOT NULL
       DO NOTHING
