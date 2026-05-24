@@ -22,7 +22,7 @@ Hotfix session. `/admin/experiments` Construction row had been missing 3 of 4 le
 5. **Design the async_apply chunking + checkpoint pattern** so result rows reliably land (S57 next-step #5). Current behaviour: apply task gets killed by Edge Runtime wall-time before the result-row INSERT runs.
 6. **Filter inactive providers** out of `brevo-attribute-reconcile` (S57 next-step #6). 60 errors per Check drift on Courses Direct + WYK paused providers.
 7. **Bulk-clean stale dead_letter rows** on `/admin/errors` (S57 next-step #4): 179 partials (pre-hotfix), 9 brevo_chase (pre-no-op-fix), 11 Riverside sheet_drift (cleared by step 4), 1 daily brevo_attribute_drift.
-8. **PUSH from Mira (Week 1-2) — `/admin/roadmap` MVP.** Migration 0160 written but NOT YET APPLIED. Spec at `platform/docs/admin-roadmap-spec.md`. Apply migration, ship the 2-3 CRUD Edge Functions, then Mable lands the admin page.
+8. ~~PUSH from Mira (Week 1-2) — `/admin/roadmap` MVP.~~ **DONE.** Migrations 0160 + 0161 applied, `strategy.roadmap_tasks` live with 101 seeded tasks, admin page + actions + client shipped at `platform/app/app/admin/roadmap/`. S57 handoff text said "NOT YET APPLIED" but the work landed in S57 itself. Stale carry. Cleared.
 9. **PUSH from Mira (Week 2-3) — DQ-to-affiliate landing pages backend.** Route disqualified leads to affiliate partners via existing form routing. Mable owns landing pages.
 10. **PUSH from Mira (Week 5-6) — post-course affiliate burst sequence SMS trigger logic.** Brevo automation handoff. Wren owns content.
 11. **PUSH from Wren — `lead_call_phone TEXT` on `crm.providers`** as the universal SW_PROVIDER_PHONE fallback. Gate on next non-regional business-audience course or any Switchable template referencing SW_PROVIDER_PHONE on a non-regional provider.
@@ -54,5 +54,5 @@ Hotfix session. `/admin/experiments` Construction row had been missing 3 of 4 le
 ## Next session
 
 - **Folder:** `platform`
-- **First task:** Confirm the next Construction lead lands with `experiment_id` + `experiment_variant` populated at INSERT (not via backfill). Then either close the platform-side audit gap (next-step #3) or apply migration 0160 + ship the `/admin/roadmap` CRUD endpoints (next-step #8) — Mira's PUSH is the higher-leverage path.
+- **First task:** Confirm the next Construction lead lands with `experiment_id` + `experiment_variant` populated at INSERT (not via backfill). Then close the platform-side audit gap (next-step #3) with a Deno test against both routers' `normalise()` functions.
 - **Cross-project:** No new cross-project work pushed this session. The Construction A/B integrity affects Iris (ads), but her S69 handoff already carries first-day-live monitoring against `/admin/experiments` — she'll now see the real per-variant counts when she next reads it. No handoff edit required.

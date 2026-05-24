@@ -364,15 +364,14 @@ export default async function ExperimentsPage() {
         const variantB = exp.variants.get("b") ?? emptyVariantStats();
         const aQual = variantA.qualifiedCount;
         const bQual = variantB.qualifiedCount;
-        // Display + rate calculation: prefer uniqueSessions (per migration
-        // 0162) but fall back to totalLoads when unique sessions is zero.
-        // Reality is that consent-gated session_id stays NULL on first-visit
-        // paid social (no CookieConsent cookie yet on the request that mints
-        // the variant), so unique_sessions reads ~0 in practice today and
-        // total_loads is the only meaningful denominator until either consent
-        // rate climbs or the session_id gate is removed.
-        const aViews = variantA.uniqueSessions > 0 ? variantA.uniqueSessions : variantA.totalLoads;
-        const bViews = variantB.uniqueSessions > 0 ? variantB.uniqueSessions : variantB.totalLoads;
+        // Unique sessions is the canonical denominator post-migration 0162
+        // (sw_session is strictly-necessary functional, set unconditionally).
+        // No fallback to total_loads: that field mixes pre-0162 NULL-session
+        // rows + bot hits + refreshes and inflates rates misleadingly. The
+        // hover tooltip on the Unique sessions cell still surfaces total_loads
+        // for forensic comparison when needed.
+        const aViews = variantA.uniqueSessions;
+        const bViews = variantB.uniqueSessions;
         const aBillable = variantA.enrolmentBillable;
         const bBillable = variantB.enrolmentBillable;
 
@@ -460,7 +459,6 @@ export default async function ExperimentsPage() {
                 <TableRow>
                   <TableHead>Variant</TableHead>
                   <TableHead className="text-right">Unique sessions</TableHead>
-                  <TableHead className="text-right">Total loads</TableHead>
                   <TableHead className="text-right">Submissions</TableHead>
                   <TableHead className="text-right">Qualified</TableHead>
                   <TableHead className="text-right">View → lead</TableHead>
@@ -486,22 +484,16 @@ export default async function ExperimentsPage() {
                         </TableCell>
                         <TableCell
                           className="text-right font-semibold"
-                          title="Unique sessions = visitors who'd previously granted Cookiebot statistics consent. Reads ~zero on first-visit paid social because no consent cookie exists yet when variant-router fires."
+                          title={`Unique deduplicated sessions per migration 0162 (sw_session UUID, 30-min idle, set unconditionally as strictly-necessary functional). Owner traffic excluded via sw_is_owner cookie short-circuit. Forensic raw page-load count: ${stats.totalLoads.toLocaleString()} (includes refreshes, bot hits, and pre-0162 rows where session_id was NULL).`}
                         >
                           {stats.uniqueSessions > 0 ? stats.uniqueSessions.toLocaleString() : "—"}
-                        </TableCell>
-                        <TableCell
-                          className="text-right font-semibold"
-                          title="Total raw page loads — every row in ads_switchable.page_views including refreshes, pre-consent loads, and pre-2026-05-23 rows."
-                        >
-                          {stats.totalLoads > 0 ? stats.totalLoads.toLocaleString() : "—"}
                         </TableCell>
                         <TableCell className="text-right">{stats.count}</TableCell>
                         <TableCell className="text-right font-semibold">
                           {stats.qualifiedCount}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
-                          {pct(stats.qualifiedCount, stats.uniqueSessions > 0 ? stats.uniqueSessions : stats.totalLoads)}
+                          {pct(stats.qualifiedCount, stats.uniqueSessions)}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
                           {pct(stats.dqCount, stats.count)}
