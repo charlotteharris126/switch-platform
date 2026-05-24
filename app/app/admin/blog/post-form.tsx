@@ -1,14 +1,18 @@
 "use client";
 
-// Shared form for /admin/blog/new and /admin/blog/[slug]/edit. The parent
-// server component fetches initial data (categories, tags, optional
-// existing post) and passes them in. This component owns all field state
-// and dispatches the appropriate server action.
+// Shared form for /admin/blog/new and /admin/blog/[slug]/edit.
+//
+// Layout: 2-column on desktop. Left = tabbed form (Content / SEO + Social).
+// Right = sticky live SEO checklist rail. Sticky footer with Save / Preview /
+// Delete so long-body edits never lose the action bar.
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createPostAction, updatePostAction, deletePostAction } from "./actions";
 import type { Post, PostFormInput, PostStatus } from "./actions";
+import { checkSeo } from "./seo-checks";
+import { SeoChecklist } from "./seo-checklist";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +26,8 @@ export type PostFormProps = {
   allTags: TagOption[];
   initial?: { post: Post; tagSlugs: string[] };
 };
+
+type TabId = "content" | "seo";
 
 function emptyInput(): PostFormInput {
   return {
@@ -76,6 +82,7 @@ function fromPost(post: Post, tagSlugs: string[]): PostFormInput {
 export function PostForm({ mode, categories, allTags, initial }: PostFormProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [tab, setTab] = useState<TabId>("content");
   const [input, setInput] = useState<PostFormInput>(
     initial ? fromPost(initial.post, initial.tagSlugs) : emptyInput(),
   );
@@ -86,38 +93,64 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
     setInput((prev) => ({ ...prev, [key]: value }));
   }
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  const knownTagSlugs = useMemo(() => new Set(allTags.map((t) => t.slug)), [allTags]);
+  const checks = useMemo(() => checkSeo(input, knownTagSlugs), [input, knownTagSlugs]);
+
+  async function persist(): Promise<{ ok: true; slug: string } | { ok: false; error: string }> {
+    const result =
+      mode === "create"
+        ? await createPostAction(input)
+        : await updatePostAction(initial!.post.slug, input);
+    if (!result.ok) return result;
+    return { ok: true, slug: result.data.slug };
+  }
+
+  function handleSave(then?: "stay" | "preview") {
     setError(null);
     setSuccess(null);
-
     startTransition(async () => {
-      const result =
-        mode === "create"
-          ? await createPostAction(input)
-          : await updatePostAction(initial!.post.slug, input);
-
+      const result = await persist();
       if (!result.ok) {
         setError(result.error);
         return;
       }
-
       setSuccess(mode === "create" ? "Post created" : "Saved");
+
+      if (then === "preview") {
+        // Use the persisted slug — it may have changed from initial.
+        window.open(`/admin/blog/${result.slug}/preview`, "_blank", "noopener");
+      }
+
       if (mode === "create") {
-        router.push(`/admin/blog/${result.data.slug}/edit`);
-      } else if (result.data.slug !== initial!.post.slug) {
-        // Slug changed; navigate to the new URL.
-        router.push(`/admin/blog/${result.data.slug}/edit`);
+        router.push(`/admin/blog/${result.slug}/edit`);
+      } else if (result.slug !== initial!.post.slug) {
+        router.push(`/admin/blog/${result.slug}/edit`);
       } else {
         router.refresh();
       }
     });
   }
 
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    handleSave("stay");
+  }
+
+  function onSaveAndPreview() {
+    handleSave("preview");
+  }
+
+  function onPreviewOnly() {
+    if (!initial) {
+      setError("Save the draft first to preview it.");
+      return;
+    }
+    window.open(`/admin/blog/${initial.post.slug}/preview`, "_blank", "noopener");
+  }
+
   function onDelete() {
     if (!initial) return;
     if (!confirm(`Delete draft "${initial.post.title}"? This is permanent.`)) return;
-
     startTransition(async () => {
       const result = await deletePostAction(initial.post.slug);
       if (!result.ok) {
@@ -128,15 +161,11 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
     });
   }
 
-  const known = new Set(allTags.map((t) => t.slug));
-  const enteredTagSlugs = input.tags
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const unknownTags = enteredTagSlugs.filter((s) => !known.has(s));
+  const wordCount = input.body.trim().split(/\s+/).filter(Boolean).length;
+  const readingTime = Math.max(1, Math.round(wordCount / 220));
 
   return (
-    <form onSubmit={onSubmit} className="space-y-8 max-w-4xl">
+    <form onSubmit={onSubmit} className="space-y-6 pb-28">
       {error && (
         <div className="rounded-lg border border-[#e9b3a4] bg-[#f7d8d0] text-[#8a2e1a] px-4 py-3 text-sm">
           {error}
@@ -148,6 +177,90 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
         </div>
       )}
 
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+        <div className="space-y-6 min-w-0">
+          <TabBar tab={tab} setTab={setTab} />
+
+          {tab === "content" && (
+            <ContentTab
+              input={input}
+              update={update}
+              pending={pending}
+              categories={categories}
+              allTags={allTags}
+              wordCount={wordCount}
+              readingTime={readingTime}
+            />
+          )}
+
+          {tab === "seo" && (
+            <SeoTab input={input} update={update} pending={pending} />
+          )}
+        </div>
+
+        <SeoChecklist checks={checks} />
+      </div>
+
+      <StickyFooter
+        mode={mode}
+        pending={pending}
+        canDelete={mode === "edit" && initial?.post.status === "draft"}
+        onSave={() => handleSave("stay")}
+        onSaveAndPreview={onSaveAndPreview}
+        onPreview={onPreviewOnly}
+        onDelete={onDelete}
+        previewDisabled={!initial}
+      />
+    </form>
+  );
+}
+
+function TabBar({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) {
+  const tabs: Array<{ id: TabId; label: string }> = [
+    { id: "content", label: "Content" },
+    { id: "seo", label: "SEO + social" },
+  ];
+  return (
+    <div className="border-b border-[#e5dfd8]">
+      <nav className="-mb-px flex gap-6">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`pb-3 text-sm font-bold border-b-2 transition-colors ${
+              tab === t.id
+                ? "border-[#287271] text-[#11242e]"
+                : "border-transparent text-[#5a6a72] hover:text-[#11242e]"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+function ContentTab({
+  input,
+  update,
+  pending,
+  categories,
+  allTags,
+  wordCount,
+  readingTime,
+}: {
+  input: PostFormInput;
+  update: <K extends keyof PostFormInput>(key: K, value: PostFormInput[K]) => void;
+  pending: boolean;
+  categories: Category[];
+  allTags: TagOption[];
+  wordCount: number;
+  readingTime: number;
+}) {
+  return (
+    <div className="space-y-8">
       <section className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -191,6 +304,7 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
             required
             disabled={pending}
           />
+          <CharMeter value={input.title} ideal={[40, 60]} max={70} hint="Google truncates past ~60 chars in search results." />
         </div>
 
         <div>
@@ -215,25 +329,27 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
             disabled={pending}
             className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
           />
+          <CharMeter value={input.excerpt} ideal={[140, 200]} max={300} hint="Doubles as the meta-description fallback when that field is blank." />
         </div>
       </section>
 
-      <section className="space-y-4">
-        <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Body</h3>
+      <section className="space-y-3">
+        <div className="flex items-baseline justify-between">
+          <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Body (markdown)</h3>
+          <span className="text-[11px] text-[#5a6a72]">
+            {wordCount} words · ~{readingTime} min read
+          </span>
+        </div>
         <textarea
           id="body"
           value={input.body}
           onChange={(e) => update("body", e.target.value)}
-          placeholder="Markdown. Shortcodes supported: {{pull-quote: text}} and {{recommended-next}}."
+          placeholder="Markdown. Use ## for section headings (the title is already H1). Shortcodes: {{pull-quote: text}} and {{recommended-next}}."
           rows={28}
           required
           disabled={pending}
           className="w-full px-3 py-3 rounded-md border border-input bg-background font-mono text-sm"
         />
-        <p className="text-[11px] text-[#5a6a72]">
-          Words: {input.body.trim().split(/\s+/).filter(Boolean).length} · est. reading time{" "}
-          {Math.max(1, Math.round(input.body.trim().split(/\s+/).filter(Boolean).length / 220))} min
-        </p>
       </section>
 
       <section className="space-y-4">
@@ -265,24 +381,11 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
               placeholder="skills-bootcamps, eligibility, mid-life-career"
               disabled={pending}
             />
-            {unknownTags.length > 0 && (
-              <p className="text-[11px] text-[#b3412e] mt-1">
-                Unknown tag slugs (will be ignored): {unknownTags.join(", ")}. Add via /admin/blog/tags (next session) or use one of:{" "}
-                {allTags.slice(0, 6).map((t) => t.slug).join(", ")}…
-              </p>
-            )}
+            <p className="text-[11px] text-[#5a6a72] mt-1">
+              Known tags: {allTags.slice(0, 8).map((t) => t.slug).join(", ")}
+              {allTags.length > 8 ? "…" : ""} · manage at <Link href="/admin/blog/tags" className="underline">/admin/blog/tags</Link>.
+            </p>
           </div>
-        </div>
-
-        <div>
-          <Label htmlFor="target_keywords">Target keywords (comma-separated)</Label>
-          <Input
-            id="target_keywords"
-            value={input.target_keywords}
-            onChange={(e) => update("target_keywords", e.target.value)}
-            placeholder="change career uk, career change at 40"
-            disabled={pending}
-          />
         </div>
       </section>
 
@@ -299,7 +402,7 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
               disabled={pending}
             />
             <p className="text-[11px] text-[#5a6a72] mt-1">
-              Required for scheduled or published. Scheduled posts auto-flip on this date.
+              Required for scheduled / published. Scheduled posts auto-flip on this date.
             </p>
           </div>
           <div className="space-y-2 pt-6">
@@ -324,9 +427,84 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function SeoTab({
+  input,
+  update,
+  pending,
+}: {
+  input: PostFormInput;
+  update: <K extends keyof PostFormInput>(key: K, value: PostFormInput[K]) => void;
+  pending: boolean;
+}) {
+  return (
+    <div className="space-y-8">
+      <section className="space-y-4">
+        <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Search engine</h3>
+        <p className="text-[12px] text-[#5a6a72]">
+          Leave blank to use the default. The checklist on the right shows the effective value that will render.
+        </p>
+
+        <div>
+          <Label htmlFor="meta_title">Meta title (Google tab)</Label>
+          <Input
+            id="meta_title"
+            value={input.meta_title}
+            onChange={(e) => update("meta_title", e.target.value)}
+            placeholder="Defaults to the post title"
+            disabled={pending}
+          />
+          <CharMeter value={input.meta_title} ideal={[40, 60]} max={70} hint="Defaults to title if blank. Truncated past ~60 chars in Google." />
+        </div>
+
+        <div>
+          <Label htmlFor="meta_description">Meta description (Google snippet)</Label>
+          <textarea
+            id="meta_description"
+            value={input.meta_description}
+            onChange={(e) => update("meta_description", e.target.value)}
+            placeholder="Defaults to the excerpt. 140-160 chars is the sweet spot."
+            rows={2}
+            disabled={pending}
+            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+          />
+          <CharMeter value={input.meta_description} ideal={[140, 160]} max={170} hint="Defaults to excerpt if blank. Google truncates past ~160 chars." />
+        </div>
+
+        <div>
+          <Label htmlFor="target_keywords">Target keywords (comma-separated)</Label>
+          <Input
+            id="target_keywords"
+            value={input.target_keywords}
+            onChange={(e) => update("target_keywords", e.target.value)}
+            placeholder="change career uk, career change at 40"
+            disabled={pending}
+          />
+          <p className="text-[11px] text-[#5a6a72] mt-1">
+            Stored for rank-tracking + audit later. Aim for 1-3 primaries; more dilutes intent.
+          </p>
+        </div>
+
+        <div>
+          <Label htmlFor="canonical_url">Canonical URL (override)</Label>
+          <Input
+            id="canonical_url"
+            value={input.canonical_url}
+            onChange={(e) => update("canonical_url", e.target.value)}
+            placeholder={input.slug ? `Defaults to /blog/${input.slug}/` : "Defaults to /blog/<slug>/"}
+            disabled={pending}
+          />
+          <p className="text-[11px] text-[#5a6a72] mt-1">
+            Only set this if this post is a republish of content that lives elsewhere. Leave blank otherwise.
+          </p>
+        </div>
+      </section>
 
       <section className="space-y-4">
-        <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Cover image</h3>
+        <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Cover image (also used for OG)</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <Label htmlFor="cover_image_url">URL</Label>
@@ -338,7 +516,7 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
               disabled={pending}
             />
             <p className="text-[11px] text-[#5a6a72] mt-1">
-              Storage upload UI lands next session. For now, drop the file at <code className="font-mono">deploy/brand/blog/&lt;slug&gt;.jpg</code> and reference here.
+              1200×630 minimum for clean OG share cards. Storage upload UI lands next session.
             </p>
           </div>
           <div>
@@ -347,7 +525,7 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
               id="cover_image_alt"
               value={input.cover_image_alt}
               onChange={(e) => update("cover_image_alt", e.target.value)}
-              placeholder="Descriptive alt — needed for accessibility + SEO"
+              placeholder="Descriptive alt — required for accessibility + image SEO"
               disabled={pending}
             />
           </div>
@@ -355,51 +533,22 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
       </section>
 
       <section className="space-y-4">
-        <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">SEO + social</h3>
+        <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Social share overrides</h3>
+        <p className="text-[12px] text-[#5a6a72]">
+          Optional. By default the OG card uses the meta title, meta description, and cover image. Set here only when the social cut needs to differ.
+        </p>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <Label htmlFor="meta_title">Meta title (Google tab)</Label>
-            <Input
-              id="meta_title"
-              value={input.meta_title}
-              onChange={(e) => update("meta_title", e.target.value)}
-              placeholder="Defaults to title if blank"
-              disabled={pending}
-            />
-          </div>
-          <div>
-            <Label htmlFor="canonical_url">Canonical URL</Label>
-            <Input
-              id="canonical_url"
-              value={input.canonical_url}
-              onChange={(e) => update("canonical_url", e.target.value)}
-              placeholder="Defaults to /blog/<slug>/"
-              disabled={pending}
-            />
-          </div>
-        </div>
-        <div>
-          <Label htmlFor="meta_description">Meta description (Google snippet)</Label>
-          <textarea
-            id="meta_description"
-            value={input.meta_description}
-            onChange={(e) => update("meta_description", e.target.value)}
-            placeholder="155-160 chars max. Defaults to excerpt if blank."
-            rows={2}
-            disabled={pending}
-            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-          />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Label htmlFor="og_title">OG title (social share card)</Label>
+            <Label htmlFor="og_title">OG title</Label>
             <Input
               id="og_title"
               value={input.og_title}
               onChange={(e) => update("og_title", e.target.value)}
-              placeholder="Defaults to title"
+              placeholder="Defaults to meta title"
               disabled={pending}
             />
+            <CharMeter value={input.og_title} ideal={[40, 60]} max={88} hint="Facebook truncates past ~88 chars on cards." />
           </div>
           <div>
             <Label htmlFor="og_image_url">OG image URL</Label>
@@ -407,13 +556,16 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
               id="og_image_url"
               value={input.og_image_url}
               onChange={(e) => update("og_image_url", e.target.value)}
-              placeholder="Defaults to cover image"
+              placeholder="Defaults to the cover image"
               disabled={pending}
             />
+            <p className="text-[11px] text-[#5a6a72] mt-1">
+              1200×630 ideal for Facebook / LinkedIn / Twitter.
+            </p>
           </div>
         </div>
         <div>
-          <Label htmlFor="og_description">OG description (social share)</Label>
+          <Label htmlFor="og_description">OG description</Label>
           <textarea
             id="og_description"
             value={input.og_description}
@@ -423,14 +575,88 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
             disabled={pending}
             className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
           />
+          <CharMeter value={input.og_description} ideal={[100, 200]} max={300} hint="Facebook trims past ~200 chars in some surfaces." />
         </div>
       </section>
+    </div>
+  );
+}
 
-      <section className="flex items-center justify-between gap-4 pt-6 border-t border-[#e5dfd8]">
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : mode === "create" ? "Create draft" : "Save"}
-        </Button>
-        {mode === "edit" && initial?.post.status === "draft" && (
+function CharMeter({
+  value,
+  ideal,
+  max,
+  hint,
+}: {
+  value: string;
+  ideal: [number, number];
+  max: number;
+  hint: string;
+}) {
+  const len = value.length;
+  let tone: "ok" | "warn" | "fail" = "ok";
+  if (len === 0) tone = "ok";
+  else if (len < ideal[0] || len > ideal[1]) tone = "warn";
+  if (len > max) tone = "fail";
+  const palette = {
+    ok: "text-[#5a6a72]",
+    warn: "text-[#92651c]",
+    fail: "text-[#8a2e1a]",
+  } as const;
+  return (
+    <p className={`text-[11px] mt-1 ${palette[tone]}`}>
+      {len} chars · ideal {ideal[0]}-{ideal[1]} · {hint}
+    </p>
+  );
+}
+
+function StickyFooter({
+  mode,
+  pending,
+  canDelete,
+  previewDisabled,
+  onSave,
+  onSaveAndPreview,
+  onPreview,
+  onDelete,
+}: {
+  mode: "create" | "edit";
+  pending: boolean;
+  canDelete: boolean;
+  previewDisabled: boolean;
+  onSave: () => void;
+  onSaveAndPreview: () => void;
+  onPreview: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-[#e5dfd8] bg-white/95 backdrop-blur-sm shadow-[0_-4px_12px_rgba(17,36,46,0.04)]">
+      <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <Button type="submit" disabled={pending} onClick={onSave}>
+            {pending ? "Saving…" : mode === "create" ? "Create draft" : "Save"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={onSaveAndPreview}
+          >
+            Save &amp; preview
+          </Button>
+          {mode === "edit" && (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={pending || previewDisabled}
+              onClick={onPreview}
+              title={previewDisabled ? "Save the draft first" : "Open current saved version in a new tab"}
+            >
+              Preview (saved)
+            </Button>
+          )}
+        </div>
+        {canDelete && (
           <Button
             type="button"
             variant="destructive"
@@ -440,7 +666,7 @@ export function PostForm({ mode, categories, allTags, initial }: PostFormProps) 
             Delete draft
           </Button>
         )}
-      </section>
-    </form>
+      </div>
+    </div>
   );
 }

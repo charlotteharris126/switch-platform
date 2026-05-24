@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { listPostsAction } from "./actions";
+import { listPostsAction, type Post } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +27,21 @@ function formatDate(iso: string | null): string {
 }
 
 const CADENCE_TARGET_DAYS = 7;
+
+function viewUrl(post: Pick<Post, "status" | "slug">): { href: string; label: string; external: boolean } {
+  if (post.status === "published") {
+    return {
+      href: `https://switchable.org.uk/blog/${post.slug}/`,
+      label: "View live",
+      external: true,
+    };
+  }
+  return {
+    href: `/admin/blog/${post.slug}/preview`,
+    label: "Preview",
+    external: false,
+  };
+}
 
 export default async function BlogAdminPage() {
   const result = await listPostsAction();
@@ -77,8 +92,7 @@ export default async function BlogAdminPage() {
         title="Blog"
         subtitle={
           <>
-            {posts.length} post{posts.length === 1 ? "" : "s"} in the CMS. Live at{" "}
-            <code className="font-mono text-xs">/blog/&lt;slug&gt;/</code> on the next build after publish.
+            {posts.length} post{posts.length === 1 ? "" : "s"} in the CMS. Click any row to edit; use the right-side button to preview or open live.
           </>
         }
         actions={
@@ -151,95 +165,19 @@ export default async function BlogAdminPage() {
       )}
 
       {drafts.length > 0 && (
-        <section className="space-y-2">
-          <h2 className="text-lg font-extrabold text-[#11242e]">Drafts</h2>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead className="text-right">Reading</TableHead>
-                <TableHead>Updated</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {drafts.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="font-semibold">
-                    <Link
-                      href={`/admin/blog/${p.slug}/edit`}
-                      className="hover:text-[#287271]"
-                    >
-                      {p.title || <em className="text-[#5a6a72]">Untitled</em>}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="text-xs">{p.category_id ?? "—"}</TableCell>
-                  <TableCell className="text-right text-xs">
-                    {p.reading_time_minutes ? `${p.reading_time_minutes} min` : "—"}
-                  </TableCell>
-                  <TableCell className="text-xs text-[#5a6a72]">
-                    {formatDate(p.updated_at)}
-                  </TableCell>
-                  <TableCell>
-                    <Link
-                      href={`/admin/blog/${p.slug}/edit`}
-                      className="text-[#287271] font-semibold text-xs underline"
-                    >
-                      Edit
-                    </Link>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </section>
+        <PostSection
+          heading="Drafts"
+          posts={drafts}
+          columns={["category", "reading", "updated", "view"]}
+        />
       )}
 
       {scheduled.length > 0 && (
-        <section className="space-y-2">
-          <h2 className="text-lg font-extrabold text-[#11242e]">Scheduled</h2>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Publish date</TableHead>
-                <TableHead className="text-right">Reading</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {scheduled.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="font-semibold">
-                    <Link
-                      href={`/admin/blog/${p.slug}/edit`}
-                      className="hover:text-[#287271]"
-                    >
-                      {p.title}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="text-xs">{p.category_id ?? "—"}</TableCell>
-                  <TableCell className="text-xs text-[#5a6a72]">
-                    {formatDate(p.publish_date)}
-                  </TableCell>
-                  <TableCell className="text-right text-xs">
-                    {p.reading_time_minutes ? `${p.reading_time_minutes} min` : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Link
-                      href={`/admin/blog/${p.slug}/edit`}
-                      className="text-[#287271] font-semibold text-xs underline"
-                    >
-                      Edit
-                    </Link>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </section>
+        <PostSection
+          heading="Scheduled"
+          posts={scheduled}
+          columns={["category", "publish_date", "reading", "view"]}
+        />
       )}
 
       <section className="space-y-2">
@@ -249,92 +187,127 @@ export default async function BlogAdminPage() {
             No published posts yet. Once the first post lands, cadence health will start tracking.
           </p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Published</TableHead>
-                <TableHead className="text-right">Reading</TableHead>
-                <TableHead>Live</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {published.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="font-semibold">
+          <PostSection
+            heading={null}
+            posts={published}
+            columns={["category", "publish_date", "reading", "view"]}
+          />
+        )}
+      </section>
+
+      {archived.length > 0 && (
+        <PostSection
+          heading="Archived"
+          posts={archived}
+          columns={["publish_date", "view"]}
+        />
+      )}
+    </div>
+  );
+}
+
+type Column = "category" | "publish_date" | "reading" | "updated" | "view";
+
+function PostSection({
+  heading,
+  posts,
+  columns,
+}: {
+  heading: string | null;
+  posts: Post[];
+  columns: Column[];
+}) {
+  return (
+    <section className="space-y-2">
+      {heading && <h2 className="text-lg font-extrabold text-[#11242e]">{heading}</h2>}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Title</TableHead>
+            {columns.includes("category") && <TableHead>Category</TableHead>}
+            {columns.includes("publish_date") && <TableHead>Published</TableHead>}
+            {columns.includes("reading") && <TableHead className="text-right">Reading</TableHead>}
+            {columns.includes("updated") && <TableHead>Updated</TableHead>}
+            {columns.includes("view") && <TableHead className="text-right">Action</TableHead>}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {posts.map((p) => {
+            const v = viewUrl(p);
+            return (
+              <TableRow
+                key={p.id}
+                className="cursor-pointer hover:bg-[#f5f2eb] transition-colors"
+              >
+                <TableCell className="font-semibold">
+                  <Link
+                    href={`/admin/blog/${p.slug}/edit`}
+                    className="block hover:text-[#287271]"
+                  >
                     {p.featured && (
                       <span className="inline-block text-[9px] font-bold uppercase tracking-wider bg-[#E9C46A] text-[#11242e] px-1.5 py-0.5 rounded mr-2">
                         Featured
                       </span>
                     )}
-                    {p.title}
+                    {p.title || <em className="text-[#5a6a72]">Untitled</em>}
+                  </Link>
+                </TableCell>
+                {columns.includes("category") && (
+                  <TableCell className="text-xs">
+                    <Link href={`/admin/blog/${p.slug}/edit`} className="block">
+                      {p.category_id ?? "—"}
+                    </Link>
                   </TableCell>
-                  <TableCell className="text-xs">{p.category_id ?? "—"}</TableCell>
+                )}
+                {columns.includes("publish_date") && (
                   <TableCell className="text-xs text-[#5a6a72]">
-                    {formatDate(p.publish_date)}
+                    <Link href={`/admin/blog/${p.slug}/edit`} className="block">
+                      {formatDate(p.publish_date)}
+                    </Link>
                   </TableCell>
+                )}
+                {columns.includes("reading") && (
                   <TableCell className="text-right text-xs">
-                    {p.reading_time_minutes ? `${p.reading_time_minutes} min` : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <a
-                      href={`https://switchable.org.uk/blog/${p.slug}/`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[#287271] font-semibold text-xs underline"
-                    >
-                      Open
-                    </a>
-                  </TableCell>
-                  <TableCell>
-                    <Link
-                      href={`/admin/blog/${p.slug}/edit`}
-                      className="text-[#287271] font-semibold text-xs underline"
-                    >
-                      Edit
+                    <Link href={`/admin/blog/${p.slug}/edit`} className="block">
+                      {p.reading_time_minutes ? `${p.reading_time_minutes} min` : "—"}
                     </Link>
                   </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </section>
-
-      {archived.length > 0 && (
-        <section className="space-y-2">
-          <h2 className="text-lg font-extrabold text-[#11242e]">Archived</h2>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Was published</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {archived.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="font-semibold">{p.title}</TableCell>
+                )}
+                {columns.includes("updated") && (
                   <TableCell className="text-xs text-[#5a6a72]">
-                    {formatDate(p.publish_date)}
-                  </TableCell>
-                  <TableCell>
-                    <Link
-                      href={`/admin/blog/${p.slug}/edit`}
-                      className="text-[#287271] font-semibold text-xs underline"
-                    >
-                      Edit
+                    <Link href={`/admin/blog/${p.slug}/edit`} className="block">
+                      {formatDate(p.updated_at)}
                     </Link>
                   </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </section>
-      )}
-    </div>
+                )}
+                {columns.includes("view") && (
+                  <TableCell className="text-right">
+                    {v.external ? (
+                      <a
+                        href={v.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block text-[#287271] font-semibold text-xs underline"
+                      >
+                        {v.label} ↗
+                      </a>
+                    ) : (
+                      <Link
+                        href={v.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block text-[#287271] font-semibold text-xs underline"
+                      >
+                        {v.label}
+                      </Link>
+                    )}
+                  </TableCell>
+                )}
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </section>
   );
 }
