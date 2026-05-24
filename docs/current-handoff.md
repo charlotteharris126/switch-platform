@@ -12,8 +12,21 @@ Hotfix session. `/admin/experiments` Construction row had been missing 3 of 4 le
 - **Deployed.** `supabase functions deploy netlify-employer-lead-router --project-ref igvlngouxcirqhlsrhga` ran clean 2026-05-24.
 - **Backfilled 3 rows** (522 = a, 528 = a, 529 = b) via Charlotte-run SQL in the Supabase editor pulling from `raw_payload->'data'->>'experiment_id'` / `experiment_variant`. Construction now reads 2 A / 2 B from the launch onwards.
 - **Changelog entry** added under 2026-05-24 in `platform/docs/changelog.md` documenting the fix + backfill + audit gap (audit script checks the hidden inputs exist in HTML but no platform-side test confirms the router actually persists them).
+- **Cross-project inbound (Mable, switchable/site Session 72, 2026-05-24):** migration 0163 `editorial` schema for blog CMS applied + seeded (5 categories, 16 tags from YAML mirrors). Posts table empty awaiting Sasha's Phase 2 admin pages. Build script still reads YAML; flip to DB-read is part of Phase 2. Full scope added to Next steps below.
 
 ## Next steps
+
+**PUSH from Mable (switchable/site Session 72, 2026-05-24): Phase 2 CMS admin pages for blog (NEW TOP PRIORITY)**
+
+Migration 0163 applied 2026-05-24 by Mable. `editorial` schema live (posts, tags, categories, post_tags, media), seeded with 5 categories + 16 tags from the YAML mirrors. Posts table empty awaiting admin. Build script still reads YAML for now — flip is part of this work. ClickUp ticket: `869ddyj3b`. Full scope in `platform/docs/changelog.md` 2026-05-24 entry + Mable's handoff at `switchable/site/docs/current-handoff.md` Session 72. Estimated 6-10 hrs across 2-3 sessions:
+
+  1. CMS admin pages: `/admin/blog` upgrade (badge for drafts-awaiting-proof) + `/admin/blog/new` + `/admin/blog/[slug]/edit` + `/admin/blog/tags` (with retroactive-apply UI per Charlotte spec) + `/admin/blog/media` (Supabase Storage upload) + `/admin/blog/content-plan` (pipeline view).
+  2. New migration: `editorial.post_ideas` table for the topic queue (seeded by Mable's `/blog-content-plan` skill).
+  3. Build script flip: `scripts/build-blog-posts.js` reads `editorial.posts` not YAML. Scheduled-publish auto-flip in same pass.
+  4. Data-ops port 4 draft YAMLs into `editorial.posts`. Delete YAML files after.
+  5. Supabase Storage `blog-media` bucket with admin-only RLS upload, public read.
+  6. Netlify deploy-hook on publish action.
+  7. Draft-ready notification: Postgres trigger on INSERT to `editorial.posts WHERE status='draft'` → pg_net.http_post → `notify-draft-ready` Edge Function → Brevo transactional email to Charlotte.
 
 1. **Watch the first new Construction lead post-fix.** Confirm column population at insert (not via backfill). One row landing with both columns set proves the deploy took.
 2. **Decide whether to chase the `switchable-waitlist` experiment-attribution gap.** Submission 523 (GGTV DQ via waitlist) landed with NULL `experiment_id` even though the page was on the live experiment. Either the waitlist sub-form on funded pages is missing the hidden input, or the `_shared/ingest.ts` waitlist branch overrides it. Low priority — DQ leads only — but worth a 15-minute audit before the next waitlist-affecting experiment launches.
@@ -54,5 +67,8 @@ Hotfix session. `/admin/experiments` Construction row had been missing 3 of 4 le
 ## Next session
 
 - **Folder:** `platform`
-- **First task:** Confirm the next Construction lead lands with `experiment_id` + `experiment_variant` populated at INSERT (not via backfill). Then close the platform-side audit gap (next-step #3) with a Deno test against both routers' `normalise()` functions.
-- **Cross-project:** No new cross-project work pushed this session. The Construction A/B integrity affects Iris (ads), but her S69 handoff already carries first-day-live monitoring against `/admin/experiments` — she'll now see the real per-variant counts when she next reads it. No handoff edit required.
+- **First task:** **Phase 2 CMS admin pages for blog** (NEW, pushed from Mable S72). Schema is live (migration 0163, seeded). Build /admin/blog admin set + `editorial.post_ideas` migration + YAML→DB build-script flip + Netlify deploy hook + draft-ready notification. Full scope in Next steps section above + `platform/docs/changelog.md` 2026-05-24 entry. Estimated 6-10 hrs over 2-3 sessions. ClickUp ticket: `869ddyj3b`.
+- **Cross-project:**
+  - **Mable (switchable/site):** Phase 2 CMS unblocks her ongoing blog drafting rhythm. Once admin pages + DB-read build are live + the 4 YAML drafts are ported, Charlotte stops touching YAML.
+  - **Iris (ads):** Construction A/B integrity restored this session (S58 hotfix). She'll see real per-variant counts on `/admin/experiments` next read. No handoff edit required.
+  - **Carried platform-side:** Construction-lead INSERT-time verification (next-step #1), waitlist-form attribution gap audit (#2), router unit-test (#3), and the four S57 carried items (Re-sync drift, async_apply chunking, inactive-provider filter, dead_letter cleanup).
