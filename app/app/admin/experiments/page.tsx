@@ -366,12 +366,13 @@ export default async function ExperimentsPage() {
         const bQual = variantB.qualifiedCount;
         // Unique sessions is the canonical denominator post-migration 0162
         // (sw_session is strictly-necessary functional, set unconditionally).
-        // No fallback to total_loads: that field mixes pre-0162 NULL-session
-        // rows + bot hits + refreshes and inflates rates misleadingly. The
-        // hover tooltip on the Unique sessions cell still surfaces total_loads
-        // for forensic comparison when needed.
-        const aViews = variantA.uniqueSessions;
-        const bViews = variantB.uniqueSessions;
+        // Pre-0162 experiments (counselling, smm) have NULL session_id on
+        // every row, so uniqueSessions reads zero and we fall back to
+        // totalLoads to preserve the historical view. Active experiments
+        // post-0162 will never hit the fallback. The variant cell flags the
+        // fallback case visually with an asterisk + tooltip.
+        const aViews = variantA.uniqueSessions > 0 ? variantA.uniqueSessions : variantA.totalLoads;
+        const bViews = variantB.uniqueSessions > 0 ? variantB.uniqueSessions : variantB.totalLoads;
         const aBillable = variantA.enrolmentBillable;
         const bBillable = variantB.enrolmentBillable;
 
@@ -458,7 +459,12 @@ export default async function ExperimentsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Variant</TableHead>
-                  <TableHead className="text-right">Unique sessions</TableHead>
+                  <TableHead
+                    className="text-right"
+                    title="Unique sessions per migration 0162 (post-2026-05-23). For experiments that ran entirely before 0162, this falls back to raw page loads marked with an asterisk — treat those as forensic upper bound, not clean visitor counts."
+                  >
+                    Unique sessions
+                  </TableHead>
                   <TableHead className="text-right">Submissions</TableHead>
                   <TableHead className="text-right">Qualified</TableHead>
                   <TableHead className="text-right">View → lead</TableHead>
@@ -484,16 +490,24 @@ export default async function ExperimentsPage() {
                         </TableCell>
                         <TableCell
                           className="text-right font-semibold"
-                          title={`Unique deduplicated sessions per migration 0162 (sw_session UUID, 30-min idle, set unconditionally as strictly-necessary functional). Owner traffic excluded via sw_is_owner cookie short-circuit. Forensic raw page-load count: ${stats.totalLoads.toLocaleString()} (includes refreshes, bot hits, and pre-0162 rows where session_id was NULL).`}
+                          title={
+                            stats.uniqueSessions > 0
+                              ? `Unique deduplicated sessions per migration 0162 (sw_session UUID, 30-min idle, set unconditionally as strictly-necessary functional). Owner QA traffic excluded via sw_is_owner cookie short-circuit. Forensic raw page-load count: ${stats.totalLoads.toLocaleString()} (includes refreshes, bot hits, and pre-0162 rows where session_id was NULL).`
+                              : `No session_id data — this experiment ran entirely before migration 0162 landed on 2026-05-23. Showing raw load count instead (every row in ads_switchable.page_views, including refreshes and bot hits). Treat as a forensic upper bound on traffic, not a clean visitor count.`
+                          }
                         >
-                          {stats.uniqueSessions > 0 ? stats.uniqueSessions.toLocaleString() : "—"}
+                          {stats.uniqueSessions > 0
+                            ? stats.uniqueSessions.toLocaleString()
+                            : stats.totalLoads > 0
+                              ? `${stats.totalLoads.toLocaleString()}*`
+                              : "—"}
                         </TableCell>
                         <TableCell className="text-right">{stats.count}</TableCell>
                         <TableCell className="text-right font-semibold">
                           {stats.qualifiedCount}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
-                          {pct(stats.qualifiedCount, stats.uniqueSessions)}
+                          {pct(stats.qualifiedCount, stats.uniqueSessions > 0 ? stats.uniqueSessions : stats.totalLoads)}
                         </TableCell>
                         <TableCell className="text-right text-xs text-[#5a6a72]">
                           {pct(stats.dqCount, stats.count)}
