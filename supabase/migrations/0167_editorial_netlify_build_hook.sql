@@ -137,9 +137,16 @@ GRANT EXECUTE ON FUNCTION editorial.fire_netlify_blog_build(TEXT) TO postgres, a
 
 -- ---------------------------------------------------------------------------
 -- 3. Update auto_publish to fire the build after a non-empty flip.
+--    DROP required (not CREATE OR REPLACE) because we're widening the
+--    OUT-parameter list from 0166's (count, slugs) to (count, slugs,
+--    request_id). Postgres rejects return-type changes via CREATE OR REPLACE.
+--    The pg_cron schedule from 0166 stores its command as text and resolves
+--    the function by name at run-time, so dropping doesn't break the schedule.
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION editorial.auto_publish_due_scheduled_posts()
+DROP FUNCTION IF EXISTS editorial.auto_publish_due_scheduled_posts();
+
+CREATE FUNCTION editorial.auto_publish_due_scheduled_posts()
 RETURNS TABLE (flipped_count INTEGER, flipped_slugs TEXT[], build_request_id BIGINT)
 LANGUAGE plpgsql
 SECURITY DEFINER
