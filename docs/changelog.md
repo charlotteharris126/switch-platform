@@ -4,6 +4,17 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-24 — Employer-lead router now persists experiment_id / experiment_variant
+
+`/admin/experiments` was missing 3 of 4 Construction (`construction-hero-deputy-2026-05`) leads since the experiment launched on 2026-05-22. Root cause: `netlify-employer-lead-router/index.ts`'s `normalise()` never read the `experiment_id` / `experiment_variant` hidden inputs from the `s4b-employer-lead-v1` form payload. The columns weren't in `EmployerSubmissionRow` and weren't in the INSERT. Hidden inputs arrived intact (`raw_payload->'data'->>'experiment_id'` populated on every row); the router was throwing the attribution away. `_shared/ingest.ts` (funded path) was unaffected — GGTV was capturing correctly.
+
+- **Code fix:** `EmployerSubmissionRow` gains `experiment_id` + `experiment_variant` (both `string | null`). `normalise()` reads `trimOrNull(strOrNull(data.experiment_id))` / same for variant. INSERT column list + VALUES extended in lockstep.
+- **Deployed:** `supabase functions deploy netlify-employer-lead-router --project-ref igvlngouxcirqhlsrhga` 2026-05-24.
+- **Backfill:** 3 rows (522, 528, 529) updated via SQL editor pulling from `raw_payload->'data'->>'experiment_id'` / `experiment_variant`. Construction split now reads: variant a × 2 (522, 528), variant b × 2 (521, 529). One historical row (521) had column set but data null — separate path, not in this fix's scope.
+- **Why missed:** B2B form was forked from the funded form deliberately (different shape, single provider, no DQ tree) but the experiment-attribution wiring on the canonical funded path didn't carry across. Audit gap: `scripts/audit-site.js` checks hidden inputs exist in HTML but no platform-side test confirms the router actually reads + persists them.
+- **Impact:** /admin/experiments Construction row was reading 1 sub / 1 variant since 2026-05-22 launch — A/B integrity blind. Now reads cleanly going forward.
+- **Signed off:** Owner (session 2026-05-24).
+
 ## 2026-05-23 — Per-session page-view dedup + owner-traffic exclusion (migration 0162)
 
 `/admin/experiments` CVR column was misleading: `ads_switchable.page_views` logs one row per page LOAD, so refreshes, back-button revisits, internal navigation, link-preview crawlers, and the owner's own QA testing were all inflating the denominator. SMM-tees showed ~4400 loads vs 1510 Meta link clicks vs 32 form submissions, making the view-to-lead CVR look like 0.7% when the real click-to-lead CVR was ~2.1%. The dashboard was actively misleading Charlotte's read of A/B performance.

@@ -111,6 +111,11 @@ interface EmployerSubmissionRow {
   fbclid: string | null;
   gclid: string | null;
   referrer: string | null;
+  // A/B experiment attribution (migration 0061). Hidden inputs baked into
+  // /business/<page>/ + /_v/b/ at site build time. NULL when the page isn't
+  // running an experiment OR when the hidden input came through as "".
+  experiment_id: string | null;
+  experiment_variant: string | null;
   // Raw payload — entire body archived for audit
   raw_payload: JsonValue;
 }
@@ -294,6 +299,8 @@ function normalise(data: Record<string, JsonValue>, rawBody: JsonValue): Employe
     fbclid: strOrNull(data.fbclid),
     gclid: strOrNull(data.gclid),
     referrer: strOrNull(data.referrer_url) ?? strOrNull(data.referrer),
+    experiment_id: trimOrNull(strOrNull(data.experiment_id)),
+    experiment_variant: trimOrNull(strOrNull(data.experiment_variant)),
     raw_payload: rawBody,
   };
 }
@@ -332,7 +339,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         headcount_estimate, standards_interested, additional_notes, ern,
         terms_accepted, terms_accepted_at, marketing_opt_in,
         page_url, utm_source, utm_medium, utm_campaign, utm_content,
-        fbclid, gclid, referrer, raw_payload, is_dq
+        fbclid, gclid, referrer, experiment_id, experiment_variant, raw_payload, is_dq
       ) VALUES (
         ${row.schema_version}, ${nowIso}, ${row.lead_type}, ${row.source_form}, ${row.primary_routed_to}, ${row.routing_outcome},
         ${row.routing_outcome_hint}, ${row.routed_at}, ${providerIds},
@@ -342,7 +349,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         ${row.headcount_estimate}, ${row.standards_interested}, ${row.additional_notes}, ${row.ern},
         ${row.terms_accepted}, ${row.terms_accepted_at}, ${row.marketing_opt_in},
         ${row.page_url}, ${row.utm_source}, ${row.utm_medium}, ${row.utm_campaign}, ${row.utm_content},
-        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"}
+        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.experiment_id}, ${row.experiment_variant}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"}
       )
       RETURNING id
     `;
