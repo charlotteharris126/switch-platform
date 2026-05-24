@@ -370,3 +370,212 @@ export async function listTagsAction(): Promise<ActionResult<Array<{ slug: strin
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: (data ?? []) as Array<{ slug: string; name: string }> };
 }
+
+// ── Tag CRUD + retroactive-apply ────────────────────────────────────────────
+// Tag operations write to editorial.tags + editorial.post_tags. Same RLS gate
+// as posts (admin_write_tags / admin_write_post_tags policies from 0163).
+
+export type TagWithUsage = {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  usage_count: number;
+};
+
+export async function listTagsWithUsageAction(): Promise<ActionResult<TagWithUsage[]>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  // Two reads: tags + post_tags counts. Could be one with a join via RPC but
+  // at our scale (16 tags × ~50 posts max) the round-trip is negligible.
+  const { data: tagRows, error: tagErr } = await gate.supabase
+    .schema("editorial")
+    .from("tags")
+    .select("id, slug, name, description")
+    .order("name", { ascending: true });
+
+  if (tagErr) return { ok: false, error: tagErr.message };
+
+  const { data: ptRows, error: ptErr } = await gate.supabase
+    .schema("editorial")
+    .from("post_tags")
+    .select("tag_id");
+
+  if (ptErr) return { ok: false, error: ptErr.message };
+
+  const usageByTag = new Map<number, number>();
+  for (const row of (ptRows ?? []) as Array<{ tag_id: number }>) {
+    usageByTag.set(row.tag_id, (usageByTag.get(row.tag_id) ?? 0) + 1);
+  }
+
+  const tags: TagWithUsage[] = ((tagRows ?? []) as Array<{ id: number; slug: string; name: string; description: string | null }>).map((t) => ({
+    id: t.id,
+    slug: t.slug,
+    name: t.name,
+    description: t.description,
+    usage_count: usageByTag.get(t.id) ?? 0,
+  }));
+
+  return { ok: true, data: tags };
+}
+
+const TAG_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export async function createTagAction(input: {
+  slug: string;
+  name: string;
+  description: string;
+}): Promise<ActionResult<{ id: number; slug: string }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  const slug = input.slug.trim();
+  const name = input.name.trim();
+  if (!slug) return { ok: false, error: "Slug is required" };
+  if (!TAG_SLUG_RE.test(slug)) {
+    return { ok: false, error: "Slug must be lowercase letters / numbers / hyphens" };
+  }
+  if (!name) return { ok: false, error: "Name is required" };
+
+  const { data, error } = await gate.supabase
+    .schema("editorial")
+    .from("tags")
+    .insert({ slug, name, description: input.description.trim() || null })
+    .select("id, slug")
+    .single();
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/admin/blog/tags");
+  return { ok: true, data: { id: data.id as number, slug: data.slug as string } };
+}
+
+export async function updateTagAction(input: {
+  id: number;
+  slug: string;
+  name: string;
+  description: string;
+}): Promise<ActionResult<{ id: number; slug: string }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  const slug = input.slug.trim();
+  const name = input.name.trim();
+  if (!slug) return { ok: false, error: "Slug is required" };
+  if (!TAG_SLUG_RE.test(slug)) {
+    return { ok: false, error: "Slug must be lowercase letters / numbers / hyphens" };
+  }
+  if (!name) return { ok: false, error: "Name is required" };
+
+  const { error } = await gate.supabase
+    .schema("editorial")
+    .from("tags")
+    .update({ slug, name, description: input.description.trim() || null })
+    .eq("id", input.id);
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/admin/blog/tags");
+  return { ok: true, data: { id: input.id, slug } };
+}
+
+export async function deleteTagAction(id: number): Promise<ActionResult<{ id: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  // ON DELETE CASCADE on post_tags removes the relations automatically.
+  // No need to deny if used — Charlotte may intentionally retire a tag.
+  const { error } = await gate.supabase
+    .schema("editorial")
+    .from("tags")
+    .delete()
+    .eq("id", id);
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/admin/blog/tags");
+  return { ok: true, data: { id } };
+}
+
+export async function listPostsForRetroactiveTagAction(
+  tagId: number,
+): Promise<ActionResult<Array<{ id: number; slug: string; title: string; status: string; hasTag: boolean }>>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  const { data: posts, error: postsErr } = await gate.supabase
+    .schema("editorial")
+    .from("posts")
+    .select("id, slug, title, status")
+    .neq("status", "archived")
+    .order("status", { ascending: true })
+    .order("publish_date", { ascending: false, nullsFirst: false });
+
+  if (postsErr) return { ok: false, error: postsErr.message };
+
+  const { data: ptRows, error: ptErr } = await gate.supabase
+    .schema("editorial")
+    .from("post_tags")
+    .select("post_id")
+    .eq("tag_id", tagId);
+
+  if (ptErr) return { ok: false, error: ptErr.message };
+
+  const taggedPostIds = new Set((ptRows ?? []).map((r) => (r as { post_id: number }).post_id));
+
+  const out = (posts ?? []).map((p) => {
+    const post = p as { id: number; slug: string; title: string; status: string };
+    return {
+      ...post,
+      hasTag: taggedPostIds.has(post.id),
+    };
+  });
+
+  return { ok: true, data: out };
+}
+
+export async function applyTagToPostsAction(
+  tagId: number,
+  postIds: number[],
+): Promise<ActionResult<{ applied: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  if (postIds.length === 0) return { ok: true, data: { applied: 0 } };
+
+  const { error } = await gate.supabase
+    .schema("editorial")
+    .from("post_tags")
+    .upsert(
+      postIds.map((postId) => ({ post_id: postId, tag_id: tagId })),
+      { onConflict: "post_id,tag_id", ignoreDuplicates: true },
+    );
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/admin/blog/tags");
+  return { ok: true, data: { applied: postIds.length } };
+}
+
+export async function removeTagFromPostsAction(
+  tagId: number,
+  postIds: number[],
+): Promise<ActionResult<{ removed: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  if (postIds.length === 0) return { ok: true, data: { removed: 0 } };
+
+  const { error } = await gate.supabase
+    .schema("editorial")
+    .from("post_tags")
+    .delete()
+    .eq("tag_id", tagId)
+    .in("post_id", postIds);
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/admin/blog/tags");
+  return { ok: true, data: { removed: postIds.length } };
+}
