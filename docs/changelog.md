@@ -4,6 +4,40 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-24 — End-to-end auto-publish: DB fetcher + Netlify Build Hook (migration 0167)
+
+Closes the loop on the editorial.posts → live switchable.org.uk pipeline.
+
+**1. switchable-site fetcher (cross-project, Mable's repo).** `scripts/fetch-blog-posts-from-db.js` runs before `build:blog` in the Netlify build chain. Queries `editorial.posts` (published + scheduled-and-due) plus their tags, materialises one synthetic YAML per post into `data/posts/_db/` (gitignored). `loadPosts()` in `build-blog-posts.js` now merges legacy YAML + DB YAML, DB winning on slug collision. Graceful degradation: missing `DATABASE_URL` or query failure logs and skips — the build continues from legacy YAML, so a Supabase outage can't bring down the static site. Adds `postgres` dep.
+
+**2. Migration 0167 — Netlify Build Hook firing.**
+
+- Extends `public.get_shared_secret` allowlist with `NETLIFY_SWITCHABLE_BUILD_HOOK` (single-function replace, mirrors 0104).
+- New `editorial.fire_netlify_blog_build(p_reason TEXT)` — SECURITY DEFINER, reads the hook URL from the vault, posts via `pg_net.http_post`. Failures don't bubble — if the secret isn't set yet, logs a warning and returns NULL so callers don't break.
+- Updates `editorial.auto_publish_due_scheduled_posts()` to call the firer when the cron flips at least one post. Returns the pg_net request_id alongside the existing flipped count + slug list.
+- Platform-side: `updatePostAction` + `createPostAction` in `/admin/blog` also fire on transitions that change the live site (any → published, published → archived). Spam-resistant — saves to a draft don't trigger Netlify.
+
+**Owner setup (one-shot, in this order):**
+
+1. Apply migration 0167 via Supabase Studio SQL editor.
+2. In Netlify dashboard for switchable.org.uk: **Site settings → Build & deploy → Build hooks → Add build hook**. Name "Editorial CMS publish", branch "main". Copy the URL.
+3. In Supabase Studio SQL editor:
+
+   ```sql
+   SELECT vault.create_secret(
+     '<the hook URL from step 2>',
+     'NETLIFY_SWITCHABLE_BUILD_HOOK',
+     'Netlify Build Hook for switchable.org.uk — fires from editorial.fire_netlify_blog_build()'
+   );
+   ```
+
+4. In Netlify dashboard for switchable.org.uk: **Site settings → Environment variables → Add DATABASE_URL** with the Session-pooler URI (same shape Charlotte uses for local DB scripts).
+5. Smoke-test: `SELECT editorial.fire_netlify_blog_build('manual-test');` — a new deploy should start in Netlify within ~5 seconds.
+
+**Sign-off:** Owner (2026-05-24).
+
+---
+
 ## 2026-05-24 — Auto-publish cron (migration 0166) + content calendar + editor UX pass
 
 **1. Migration 0166 — auto-publish scheduled posts.** `editorial.auto_publish_due_scheduled_posts()` SECURITY DEFINER function flips `status='scheduled'` posts to `'published'` when `publish_date <= CURRENT_DATE`. Scheduled via pg_cron at `0 6 * * *` UTC (07:00 BST / 06:00 GMT — before commute reading hours). Daily cadence chosen because blog publish granularity is dates not times; per-run candidate count is tiny.

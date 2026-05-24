@@ -21,6 +21,23 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { isAdmin } from "@/lib/auth/allowlist";
 
+// Fire-and-forget Netlify Build Hook trigger. Calls the SECURITY DEFINER
+// Postgres function from migration 0167 which holds the hook URL in the
+// vault — keeps the secret out of the Next.js process.
+// Failures don't bubble: a missing vault entry or Netlify outage shouldn't
+// block a save. The post is in the DB; the rebuild will happen on the next
+// cron tick or push.
+async function fireBuildHookOnPublish(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  reason: string,
+): Promise<void> {
+  try {
+    await supabase.schema("editorial").rpc("fire_netlify_blog_build", { p_reason: reason });
+  } catch (err) {
+    console.warn("fire_netlify_blog_build failed (non-blocking):", err);
+  }
+}
+
 export type PostStatus = "draft" | "scheduled" | "published" | "archived";
 
 export type Post = {
@@ -248,6 +265,12 @@ export async function createPostAction(input: PostFormInput): Promise<ActionResu
   const tagErr = await syncTags(gate.supabase, inserted.id as number, tagSlugs);
   if (tagErr) return { ok: false, error: `Post saved but tag sync failed: ${tagErr}` };
 
+  // Fire Netlify rebuild only if this lands as published — most creates are
+  // drafts and don't need a rebuild.
+  if (input.status === "published") {
+    await fireBuildHookOnPublish(gate.supabase, `create-published: ${inserted.slug}`);
+  }
+
   revalidatePath("/admin/blog");
   return { ok: true, data: { slug: inserted.slug as string } };
 }
@@ -265,12 +288,14 @@ export async function updatePostAction(
   const { data: existing, error: lookupErr } = await gate.supabase
     .schema("editorial")
     .from("posts")
-    .select("id")
+    .select("id, status")
     .eq("slug", originalSlug)
     .maybeSingle();
 
   if (lookupErr) return { ok: false, error: lookupErr.message };
   if (!existing) return { ok: false, error: "Post not found" };
+
+  const previousStatus = existing.status as string;
 
   const patch = {
     slug: input.slug.trim(),
@@ -308,6 +333,22 @@ export async function updatePostAction(
   const tagSlugs = parseCsv(input.tags);
   const tagErr = await syncTags(gate.supabase, existing.id as number, tagSlugs);
   if (tagErr) return { ok: false, error: `Post saved but tag sync failed: ${tagErr}` };
+
+  // Fire rebuild on the transitions that change the live site:
+  //   - any → published        (post goes live)
+  //   - published → published  (live post edited — content change shipped)
+  //   - published → archived   (post comes down)
+  // Skip transitions between draft/scheduled (not on live site yet) and
+  // archived → not-published edits (already not on live).
+  const newStatus = input.status;
+  const wasOnLive = previousStatus === "published";
+  const isOnLive = newStatus === "published";
+  if (isOnLive || (wasOnLive && newStatus === "archived")) {
+    await fireBuildHookOnPublish(
+      gate.supabase,
+      `update: ${patch.slug} (${previousStatus} → ${newStatus})`,
+    );
+  }
 
   revalidatePath("/admin/blog");
   revalidatePath(`/admin/blog/${patch.slug}/edit`);
