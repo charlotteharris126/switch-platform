@@ -4,6 +4,33 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-24 — Editorial schema for blog CMS (migration 0163)
+
+Foundation for the planned blog CMS admin. Charlotte's blog plan has Claude drafting + Charlotte editing one post per week ongoing, plus retroactive tag application, cover-image library, scheduled publish, full SEO fields. Today's flow is YAML-files-on-disk and doesn't scale to that workflow.
+
+This migration ships only the **schema** — admin pages and the build-script flip from YAML→DB land in subsequent sessions (Sasha-owned).
+
+- **`editorial` schema** with 5 tables:
+  - `editorial.categories` (5 rows seeded, mirrors `switchable/site/deploy/data/post-categories.yml`)
+  - `editorial.tags` (16 rows seeded, mirrors `switchable/site/deploy/data/blog-tags.yml`)
+  - `editorial.posts` — primary content table with body markdown, status workflow (`draft` / `scheduled` / `published` / `archived`), full SEO fields (`meta_title`, `meta_description`, `og_*`, `canonical_url`, `target_keywords`), `end_cta JSONB`, `lead_magnet_enabled`, `featured`, `reading_time_minutes`, `cover_image_url` + alt, `author_id` → `auth.users`. Indexed on `(status, publish_date DESC)` + category + featured.
+  - `editorial.post_tags` — m2m junction with `created_at` so we can compute "tags added retroactively" for Charlotte's UI ("if we create a new tag, it lets us see older posts we can apply this new tag to").
+  - `editorial.media` — uploaded blog asset metadata (Supabase Storage holds the bytes, this table holds URL/alt/dimensions/byte_size).
+- **Grants:** `editorial` schema SELECT to `authenticated` + `readonly_analytics`. INSERT/UPDATE/DELETE to `authenticated`, gated by RLS.
+- **RLS:**
+  - `readonly_analytics` reads everything (Iris, Mira, agent MCPs).
+  - `authenticated` reads published posts only; all writes gated by `admin.is_admin()`.
+  - Categories/tags/post_tags readable by any authenticated user.
+- **schema_version 1.0** per `.claude/rules/schema-versioning.md` (lives on the row, future bumps coordinated with admin write code).
+
+**No production data migration yet.** YAML files remain canonical until Sasha's admin pages ship + the build script reads from the DB. Then a data-ops script ports existing draft posts. Until that flip, both data sources can coexist (DB stores zero posts, build still reads YAML).
+
+**Phase 2 (next session, Sasha-owned):** admin pages at `/admin/blog/new`, `/admin/blog/[slug]/edit`, `/admin/blog/tags`, `/admin/blog/media`. Markdown editor (textarea v1, Tiptap/Lexical v2). Tag autocomplete + retroactive-apply UI. Cover image upload to a `blog-media` Supabase Storage bucket. Publish workflow. Build script flip from `data/posts/*.yml` to `SELECT * FROM editorial.posts WHERE status='published'`.
+
+Sign-off: Owner (session 2026-05-24, "yes i want all this baked in everything you said... and we need to bake all this into the cms admin on backend").
+
+---
+
 ## 2026-05-24 — Employer-lead router now persists experiment_id / experiment_variant
 
 `/admin/experiments` was missing 3 of 4 Construction (`construction-hero-deputy-2026-05`) leads since the experiment launched on 2026-05-22. Root cause: `netlify-employer-lead-router/index.ts`'s `normalise()` never read the `experiment_id` / `experiment_variant` hidden inputs from the `s4b-employer-lead-v1` form payload. The columns weren't in `EmployerSubmissionRow` and weren't in the INSERT. Hidden inputs arrived intact (`raw_payload->'data'->>'experiment_id'` populated on every row); the router was throwing the attribution away. `_shared/ingest.ts` (funded path) was unaffected — GGTV was capturing correctly.
