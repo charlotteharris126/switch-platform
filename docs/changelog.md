@@ -4,6 +4,23 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-24 — `editorial` schema exposed to PostgREST + one-shot YAML port panel
+
+Two changes shipped together to unblock `/admin/blog`.
+
+**1. PostgREST exposed schemas += `editorial`.** Migration 0163 created the schema and granted SELECT/INSERT/UPDATE/DELETE to `authenticated` with admin-gated RLS, but the production Supabase project's PostgREST `db.schemas` config still listed only `public, storage, graphql_public`. Every `.schema("editorial")` call from `/admin/blog/*` Server Actions returned PostgREST's verbatim `"Invalid schema: editorial"` rejection. Charlotte added `editorial` to **Project Settings → API → Exposed schemas** in Supabase Studio (production). `platform/supabase/config.toml` updated in lockstep so local dev matches (`schemas = ["public", "graphql_public", "editorial"]`).
+
+- **Impact:** widens PostgREST's surface only as far as RLS permits. `editorial.posts` admin-gated, `editorial.categories` / `tags` / `post_tags` / `media` readable by authenticated only, `anon` has no grants. Safe under the existing policies.
+- **Sign-off:** Owner (2026-05-24 platform session).
+
+**2. `/admin/data-ops/port-blog-yaml/`** — one-shot panel to load the 4 launch-set drafts into `editorial.posts`. Replaces the local-terminal `047_port_blog_yaml_to_editorial_posts_2026_05_24.js` script per Charlotte's standing "data-ops panel pattern" (2026-05-11 memory: local scripts hit IPv6-only DB host + secret-handling friction; admin-panel buttons are the default).
+
+- **Data file:** `platform/app/data/blog-launch-set.json` (28 KB, 4 posts pre-converted from `switchable/site/deploy/data/posts/*.yml` at authoring time — the platform/app Netlify bundle doesn't carry switchable/site files).
+- **Server Action `portBlogYamlAction()`** mirrors the script's logic: idempotent slug check, INSERT into `editorial.posts`, tag-slug lookup against the 16-row `editorial.tags` seed, upsert into `editorial.post_tags` with `ignoreDuplicates`. Admin RLS gate via `isAdmin()` + the policies from migration 0163.
+- **Throwaway:** route + JSON delete cleanly after the build-script flip lands (S58 next-step #3). Logged here so the next agent sees the intent.
+
+---
+
 ## 2026-05-24 — Editorial schema for blog CMS (migration 0163)
 
 Foundation for the planned blog CMS admin. Charlotte's blog plan has Claude drafting + Charlotte editing one post per week ongoing, plus retroactive tag application, cover-image library, scheduled publish, full SEO fields. Today's flow is YAML-files-on-disk and doesn't scale to that workflow.
