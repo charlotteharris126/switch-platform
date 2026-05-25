@@ -542,21 +542,32 @@ function mapEnrolStatusForBrevo(dbStatus: string): string {
 // Course/region/provider/enrol attributes deliberately STAY per-submission —
 // those reflect the immediate routing event, and the current submission IS
 // the right source for them.
+//
+// SW_FASTRACK_COMPLETED was historically computed as bool_or(fastracked_at)
+// across every submission for the email — meaning anyone who ever fastracked
+// any past course stayed "completed" forever. Wrong for re-applicants on a
+// new course (Wren push 2026-05-25). It's now read from the canonical
+// submission only (same row driving SW_COURSE_NAME etc.) so the Brevo card
+// stays internally consistent per-course.
 interface EmailAggregateState {
   clientNonce: string | null;
   courseId: string | null;
   marketingOptIn: boolean | null;
   referralCode: string | null;
-  anyFastracked: boolean;
+  canonicalFastracked: boolean;
 }
 
 async function loadEmailAggregateState(
   sql: Sql,
   email: string,
 ): Promise<EmailAggregateState> {
-  const [optIn, anyLatest, earliestRef, fastrackResult] = await Promise.all([
-    sql<Array<{ client_nonce: string | null; course_id: string | null; marketing_opt_in: boolean | null }>>`
-      SELECT client_nonce, course_id, marketing_opt_in
+  // Single combined SELECT for opt-in + latest carries fastracked_at alongside
+  // the canonical fields. Saves the extra round-trip the old bool_or query
+  // needed.
+  const [optIn, anyLatest, earliestRef] = await Promise.all([
+    sql<Array<{ client_nonce: string | null; course_id: string | null; marketing_opt_in: boolean | null; fastracked: boolean }>>`
+      SELECT client_nonce, course_id, marketing_opt_in,
+             (fastracked_at IS NOT NULL) AS fastracked
         FROM leads.submissions
        WHERE lower(email) = lower(${email})
          AND archived_at IS NULL
@@ -564,8 +575,9 @@ async function loadEmailAggregateState(
        ORDER BY submitted_at DESC, id DESC
        LIMIT 1
     `,
-    sql<Array<{ client_nonce: string | null; course_id: string | null; marketing_opt_in: boolean | null }>>`
-      SELECT client_nonce, course_id, marketing_opt_in
+    sql<Array<{ client_nonce: string | null; course_id: string | null; marketing_opt_in: boolean | null; fastracked: boolean }>>`
+      SELECT client_nonce, course_id, marketing_opt_in,
+             (fastracked_at IS NOT NULL) AS fastracked
         FROM leads.submissions
        WHERE lower(email) = lower(${email})
          AND archived_at IS NULL
@@ -581,12 +593,6 @@ async function loadEmailAggregateState(
        ORDER BY submitted_at ASC, id ASC
        LIMIT 1
     `,
-    sql<Array<{ any_fastracked: boolean }>>`
-      SELECT COALESCE(bool_or(fastracked_at IS NOT NULL), false) AS any_fastracked
-        FROM leads.submissions
-       WHERE lower(email) = lower(${email})
-         AND archived_at IS NULL
-    `,
   ]);
 
   const canonical = optIn[0] ?? anyLatest[0];
@@ -595,8 +601,62 @@ async function loadEmailAggregateState(
     courseId: canonical?.course_id ?? null,
     marketingOptIn: canonical?.marketing_opt_in ?? null,
     referralCode: earliestRef[0]?.referral_code ?? null,
-    anyFastracked: fastrackResult[0]?.any_fastracked ?? false,
+    canonicalFastracked: canonical?.fastracked ?? false,
   };
+}
+
+// ─── SW_PENDING_RESTART (Wren push 2026-05-25) ──────────────────────────────
+// Flip detection for the canonical-course-changed signal. Reads the per-email
+// "last canonical course we pushed" from crm.brevo_contact_state (migration
+// 0168). Returns flipped=true when the new canonical differs from the
+// previously stored value AND a previous value existed (first-time leads
+// have no row → flipped=false, per Wren spec "first-time leads leave it
+// untouched"). Both same-course re-submits and DQ duplicates that don't move
+// the canonical return flipped=false.
+//
+// Caller pattern:
+//   1. Compute agg = loadEmailAggregateState(...) — already needed for build.
+//   2. const { flipped } = await detectCanonicalCourseFlip(sql, email, agg.courseId).
+//   3. If flipped: set SW_PENDING_RESTART=true on the Brevo attribute object.
+//   4. Call upsertBrevoContact.
+//   5. On success: await recordCanonicalCourse(sql, email, agg.courseId).
+// Steps 2 + 5 wrap the upsert; failure at step 4 leaves the state table
+// untouched, so the flip retriggers cleanly on the next attempt.
+async function detectCanonicalCourseFlip(
+  sql: Sql,
+  email: string,
+  newCanonicalCourseId: string | null,
+): Promise<{ flipped: boolean; previousCourseId: string | null }> {
+  if (!email) return { flipped: false, previousCourseId: null };
+  const rows = await sql<Array<{ last_canonical_course_id: string | null }>>`
+    SELECT last_canonical_course_id
+      FROM crm.brevo_contact_state
+     WHERE email_lower = lower(${email})
+     LIMIT 1
+  `;
+  const previousCourseId = rows[0]?.last_canonical_course_id ?? null;
+  // First-time lead (no row): not a flip, leave SW_PENDING_RESTART untouched.
+  if (rows.length === 0) return { flipped: false, previousCourseId: null };
+  return {
+    flipped: previousCourseId !== newCanonicalCourseId,
+    previousCourseId,
+  };
+}
+
+async function recordCanonicalCourse(
+  sql: Sql,
+  email: string,
+  newCanonicalCourseId: string | null,
+): Promise<void> {
+  if (!email) return;
+  await sql`
+    INSERT INTO crm.brevo_contact_state (email_lower, last_canonical_course_id, updated_at)
+    VALUES (lower(${email}), ${newCanonicalCourseId}, NOW())
+    ON CONFLICT (email_lower)
+    DO UPDATE SET
+      last_canonical_course_id = EXCLUDED.last_canonical_course_id,
+      updated_at = EXCLUDED.updated_at
+  `;
 }
 
 // Builds the referral page URL for the referrer. The /refer/ page shows the
@@ -785,15 +845,16 @@ export async function buildLearnerBrevoAttributes(
     // Migration 0099 attributes. SW_PHONE for outreach/SMS targeting.
     // SW_LOST_REASON mirrors crm.enrolments.lost_reason so marketing can
     // segment lost reasons (cohort_decline / l3_mismatch / etc.).
-    // SW_FASTRACK_COMPLETED + SW_FASTRACK_URL are email-aggregated (see
-    // loadEmailAggregateState): COMPLETED is true if ANY submission for
-    // this email fastracked, URL uses the canonical opt-in submission.
+    // SW_FASTRACK_COMPLETED + SW_FASTRACK_URL both read from the canonical
+    // submission (see loadEmailAggregateState). Per-course not per-contact —
+    // a re-applicant on a new course shows COMPLETED=false until they
+    // fastrack on that course. URL uses the same canonical opt-in submission.
     // The 4 enrichment fields come from waitlist-enrichment after a
     // cohort_decline or generic /waitlist/ submit — populated on the
     // parent row via the ingest UPDATE step.
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: lostReason,
-    SW_FASTRACK_COMPLETED: agg.anyFastracked,
+    SW_FASTRACK_COMPLETED: agg.canonicalFastracked,
     SW_FASTRACK_URL: buildFastrackUrl(agg.clientNonce, agg.courseId, agg.marketingOptIn === true),
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
@@ -833,6 +894,26 @@ export async function upsertLearnerInBrevo(
 
   const attributes = await buildLearnerBrevoAttributes(sql, provider, submission);
 
+  // SW_PENDING_RESTART (Wren push 2026-05-25): course-flip detection. Reads
+  // crm.brevo_contact_state for the previously-stored canonical course and
+  // sets the attribute when it differs. The canonical course id is the same
+  // value already driving SW_COURSE_NAME etc. in the attribute object
+  // (loadEmailAggregateState resolves it once per build). First-time leads
+  // skip this — there's no row to compare against. Failures in detect or
+  // record don't block the upsert: a missed flip is acceptable, a missed
+  // Brevo write is not.
+  let flipDetected = false;
+  const canonicalAgg = await loadEmailAggregateState(sql, submission.email);
+  try {
+    const { flipped } = await detectCanonicalCourseFlip(
+      sql, submission.email, canonicalAgg.courseId,
+    );
+    flipDetected = flipped;
+    if (flipped) attributes.SW_PENDING_RESTART = true;
+  } catch (err) {
+    console.error("detectCanonicalCourseFlip failed (non-blocking):", String(err));
+  }
+
   // One upsert call adds the contact to both lists atomically. Previously
   // this was a two-call sequence (upsert + addContactToList) which raced
   // against Brevo's backend and surfaced the misleading "Contact already in
@@ -855,6 +936,18 @@ export async function upsertLearnerInBrevo(
       { provider_id: provider.provider_id, submission_id: submission.id },
       `Brevo learner upsert failed: ${upsertResult.error ?? "unknown"}`);
     return { ok: false, error: upsertResult.error ?? "unknown" };
+  }
+
+  // Record the canonical course as "last pushed" only after the Brevo write
+  // succeeds. On failure we leave the previous state intact so the next
+  // retry re-detects the same flip and re-fires SW_PENDING_RESTART.
+  try {
+    await recordCanonicalCourse(sql, submission.email, canonicalAgg.courseId);
+  } catch (err) {
+    console.error("recordCanonicalCourse failed (non-blocking):", String(err));
+  }
+  if (flipDetected) {
+    console.log(`upsertLearnerInBrevo: SW_PENDING_RESTART=true for ${submission.email} (canonical course flipped to ${canonicalAgg.courseId ?? 'null'})`);
   }
   return { ok: true };
 }
@@ -1092,7 +1185,7 @@ export async function buildLearnerBrevoAttributesNoMatch(
     // exists yet for these contacts.
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: "",
-    SW_FASTRACK_COMPLETED: agg.anyFastracked,
+    SW_FASTRACK_COMPLETED: agg.canonicalFastracked,
     SW_FASTRACK_URL: buildFastrackUrl(agg.clientNonce, agg.courseId, agg.marketingOptIn === true),
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
@@ -1142,6 +1235,21 @@ export async function upsertLearnerInBrevoNoMatch(
 
   const attributes = await buildLearnerBrevoAttributesNoMatch(sql, submission, matchStatus);
 
+  // SW_PENDING_RESTART flip detection — mirrors upsertLearnerInBrevo. See
+  // that function for the rationale. Same pattern: read state → maybe set
+  // attribute → upsert → record on success.
+  let flipDetected = false;
+  const canonicalAgg = await loadEmailAggregateState(sql, submission.email);
+  try {
+    const { flipped } = await detectCanonicalCourseFlip(
+      sql, submission.email, canonicalAgg.courseId,
+    );
+    flipDetected = flipped;
+    if (flipped) attributes.SW_PENDING_RESTART = true;
+  } catch (err) {
+    console.error("detectCanonicalCourseFlip failed (non-blocking):", String(err));
+  }
+
   const listIds: number[] = [];
   if (utilityListId != null) listIds.push(utilityListId);
   if (submission.marketing_opt_in && marketingListId != null) {
@@ -1160,6 +1268,15 @@ export async function upsertLearnerInBrevoNoMatch(
       { submission_id: submission.id, match_status: matchStatus },
       `Brevo learner upsert (${matchStatus}) failed: ${upsertResult.error ?? "unknown"}`);
     return { ok: false, error: upsertResult.error ?? "unknown" };
+  }
+
+  try {
+    await recordCanonicalCourse(sql, submission.email, canonicalAgg.courseId);
+  } catch (err) {
+    console.error("recordCanonicalCourse failed (non-blocking):", String(err));
+  }
+  if (flipDetected) {
+    console.log(`upsertLearnerInBrevoNoMatch (${matchStatus}): SW_PENDING_RESTART=true for ${submission.email} (canonical course flipped to ${canonicalAgg.courseId ?? 'null'})`);
   }
   return { ok: true };
 }

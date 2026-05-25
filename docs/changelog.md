@@ -4,6 +4,36 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-25 — Wren push: SW_FASTRACK_COMPLETED per-canonical + new SW_PENDING_RESTART attribute (migration 0168)
+
+Two related changes in `_shared/route-lead.ts`, both gating the EMS new-course broadcast (117 marketing-consented non-enrolled leads).
+
+**(a) `SW_FASTRACK_COMPLETED` per-canonical-submission, not per-contact.** Old logic: `bool_or(fastracked_at IS NOT NULL)` across every submission for the email — anyone who fastracked any past course stayed `true` forever. Wrong for re-applicants on a new course. New logic: read `fastracked_at IS NOT NULL` on the canonical submission (latest opt-in OR latest archived-not row, same row driving `SW_COURSE_NAME` etc). `loadEmailAggregateState` field renamed `anyFastracked` → `canonicalFastracked` to signal the semantic change. Combined the separate `fastrackResult` query into the existing `optIn` + `anyLatest` SELECTs (saves one round-trip).
+
+**(b) Migration 0168 + new `SW_PENDING_RESTART` attribute.** Boolean, default false. Set to `true` on the Brevo upsert when the canonical course flips for a contact. First-time leads leave it untouched (no row in tracking table → no flip). Future-proof signal for Brevo's N1-N3 restart condition — course-agnostic, works for any cross-course campaign without per-campaign automation logic.
+
+- **`crm.brevo_contact_state`** (migration 0168): per-email "last canonical course we pushed to Brevo". PK on `email_lower`. Read before each Brevo upsert (`detectCanonicalCourseFlip`), UPSERTed after the upsert succeeds (`recordCanonicalCourse`). Living in our own DB vs read-back-from-Brevo per lead saves a per-lead API call and survives Brevo outages.
+- **Detect + record flow** mirrored on both write paths: `upsertLearnerInBrevo` (matched) and `upsertLearnerInBrevoNoMatch` (no_match / pending). Detect failures don't bubble — a missed flip is acceptable, a missed Brevo write is not. Record only fires after the upsert succeeds — failure leaves the previous state intact so the next retry re-detects the same flip.
+- **Reset mechanism**: Brevo N1-N3 automation's first step resets `SW_PENDING_RESTART` back to false (Wren owns). If Brevo doesn't support set-attribute as an in-flow action, Sasha exposes a tiny `brevo-clear-pending-restart` webhook the automation hits.
+- **Reconciler unchanged**: `brevo-attribute-reconcile` reads through `buildLearnerBrevoAttributes` which doesn't compute `SW_PENDING_RESTART` (it's event-driven, not state-derived). The reconciler WILL pick up the corrected `SW_FASTRACK_COMPLETED` semantics for free.
+
+**Owner setup (one-shot, in this order):**
+
+1. Apply migration 0168 in Studio SQL editor.
+2. Create `SW_PENDING_RESTART` boolean attribute in Brevo (default false).
+3. Confirm `BREVO_AUDIT_SHARED_SECRET`-bearing deploy of the affected Edge Functions: `netlify-lead-router`, `netlify-employer-lead-router`, `routing-confirm`, `fastrack-receive`, `admin-brevo-resync`, `sms-fastrack-prompt-cron`, `sms-chaser-attempt-1`, `admin-test-email`, `admin-notify-callback`, `backfill-sw-provider-contact-block`.
+4. Run `admin-brevo-resync` on the 117-lead EMS marketing-consented segment (or full audience) to correct `SW_FASTRACK_COMPLETED` AND establish baseline `crm.brevo_contact_state` rows so future flips are detected.
+5. Wren spot-checks 3 contacts post-backfill before broadcast send (per `switchable/email/CLAUDE.md` pre-broadcast gate).
+6. Wren wires the N1-N3 automation restart condition + first-step reset on the Brevo side.
+
+**Verify post-deploy:**
+- Re-run a known fastracked contact through the upsert and confirm `SW_FASTRACK_COMPLETED = false` on the Brevo card when they have no fastrack on the current canonical course.
+- Force a course-flip on a test contact (submit a new lead on a different course) and confirm `SW_PENDING_RESTART = true` on Brevo, then that the N1-N3 first-action reset flips it back to false on restart.
+
+**Sign-off:** Owner (2026-05-25).
+
+---
+
 ## 2026-05-24 — End-to-end auto-publish: DB fetcher + Netlify Build Hook (migration 0167)
 
 Closes the loop on the editorial.posts → live switchable.org.uk pipeline.
