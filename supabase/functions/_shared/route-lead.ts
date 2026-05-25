@@ -377,6 +377,12 @@ interface MatrixRoute {
   nextIntakeFormatted?: string;
   intakes?: MatrixIntake[];
   schedule?: string;
+  // Course-state flag (Wren push 2026-05-25). True/absent means the course is
+  // accepting new learner applications, false means it's closed. Drives
+  // SW_COURSE_OPEN on the Brevo contact so N1-N3 has a course-state exit
+  // condition. Surfaced into matrix.json by the switchable/site build script
+  // from the course YAML's `accepting_applications` field (default true).
+  acceptingApplications?: boolean;
 }
 
 interface MatrixCache {
@@ -393,6 +399,10 @@ interface MatrixContext {
   cfInterest: string | null;
   ffInterest: string | null;
   courseSchedule: string | null;
+  // True when the course is accepting new applications. Defaults to true so
+  // any course YAML without the explicit field stays open. Pushed as
+  // SW_COURSE_OPEN to Brevo on every upsert.
+  courseAcceptingApplications: boolean;
 }
 
 const EMPTY_MATRIX_CONTEXT: MatrixContext = {
@@ -404,6 +414,10 @@ const EMPTY_MATRIX_CONTEXT: MatrixContext = {
   cfInterest: null,
   ffInterest: null,
   courseSchedule: null,
+  // Default open. A submission whose page slug doesn't resolve in matrix.json
+  // shouldn't be marked as a closed course — it's an unknown route, not a
+  // closed one. Marking SW_COURSE_OPEN=true is the safe default.
+  courseAcceptingApplications: true,
 };
 
 let matrixCache: MatrixCache | null = null;
@@ -506,6 +520,10 @@ function readRoute(
     cfInterest: route.cfInterest ?? null,
     ffInterest: route.ffInterest ?? null,
     courseSchedule: route.schedule ?? null,
+    // Explicit false closes the course. Anything else (undefined / true /
+    // omitted) keeps it open. Backwards-compatible with matrix.json builds
+    // that don't yet emit the field.
+    courseAcceptingApplications: route.acceptingApplications !== false,
   };
 }
 
@@ -717,6 +735,11 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
   regionName: string;
   sector: string;
   courseSchedule: string;
+  // True when the canonical course is still accepting applications. Self-funded
+  // submissions stay true (rolling enrolment — never "closed" in the funded
+  // sense). Funded routes inherit from matrix.json's acceptingApplications
+  // field; default true if the field isn't surfaced yet.
+  courseOpen: boolean;
 }> {
   if (submission.funding_category === "self") {
     return {
@@ -727,6 +750,7 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
       regionName: "",
       sector: submission.interest ?? "",
       courseSchedule: "",
+      courseOpen: true,
     };
   }
 
@@ -748,6 +772,7 @@ async function composeBrevoCourseContext(submission: SubmissionRow): Promise<{
     regionName: matrix.regionName ?? "",
     sector: sector ?? "",
     courseSchedule: matrix.courseSchedule ?? "",
+    courseOpen: matrix.courseAcceptingApplications,
   };
 }
 
@@ -819,6 +844,12 @@ export async function buildLearnerBrevoAttributes(
     SW_COURSE_SCHEDULE: ctx.courseSchedule,
     SW_COURSE_INTAKE_ID: ctx.intakeId,
     SW_COURSE_INTAKE_DATE: ctx.intakeDate,
+    // Course-state flag (Wren push 2026-05-25). True when the canonical
+    // course is still accepting applications, false when closed. Read from
+    // matrix.json's acceptingApplications via composeBrevoCourseContext.
+    // Drives the N1-N3 "course closed" exit condition so contacts exit
+    // cleanly when the course they're nurtured against shuts intake.
+    SW_COURSE_OPEN: ctx.courseOpen,
     SW_REGION_NAME: ctx.regionName,
     SW_SECTOR: ctx.sector,
     SW_PROVIDER_NAME: provider.company_name,
@@ -1160,6 +1191,10 @@ export async function buildLearnerBrevoAttributesNoMatch(
     SW_COURSE_SCHEDULE: ctx.courseSchedule,
     SW_COURSE_INTAKE_ID: ctx.intakeId,
     SW_COURSE_INTAKE_DATE: ctx.intakeDate,
+    // Course-state flag (Wren push 2026-05-25). Same source + meaning as
+    // the matched builder; mirrored here so no_match / pending contacts get
+    // a consistent SW_COURSE_OPEN attribute regardless of routing state.
+    SW_COURSE_OPEN: ctx.courseOpen,
     SW_REGION_NAME: ctx.regionName,
     SW_SECTOR: ctx.sector,
     SW_PROVIDER_NAME: "",

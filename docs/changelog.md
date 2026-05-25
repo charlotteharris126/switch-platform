@@ -4,6 +4,28 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-25 — Wren push expansion: SW_COURSE_OPEN + per-course resync panel (bundled with the morning's SW_FASTRACK + SW_PENDING_RESTART work)
+
+Wren expanded handoff item 23 to include a third attribute. Shipping bundled with the morning's two fixes so all three land in one EF deploy cycle.
+
+**(c) New attribute `SW_COURSE_OPEN` (boolean, default true).** Per-contact reflection of "is the canonical course currently accepting applications?" Source-of-truth lives at the course level: optional `accepting_applications: true|false` field on the course YAML in `switchable/site/deploy/data/courses/`, surfaced into `matrix.json` as `acceptingApplications` by `build-funded-pages.js`. `composeBrevoCourseContext` in `_shared/route-lead.ts` reads it via `getMatrixContext` and propagates `courseOpen: matrix.courseAcceptingApplications` (defaults to true when absent). Both attribute builders (matched + no_match) push `SW_COURSE_OPEN: ctx.courseOpen`. Self-funded leads always get true (rolling enrolment — no "closed" concept on that side).
+
+- **Backwards-compatible at every layer:** missing matrix field → defaults true; missing YAML field → defaults true; first build of switchable/site after this commit emits `acceptingApplications: true` on every existing route. No regression risk.
+- **Self-funded path stays open:** `composeBrevoCourseContext`'s self-funded branch returns `courseOpen: true` unconditionally. Self-funded never has a closed state.
+
+**New `/admin/data-ops/brevo-resync-course` panel.** Per-course resync action Wren's spec asks for. Course dropdown populated from `leads.submissions.course_id` with learner counts (so Charlotte picks "the slug she just closed" from a sorted list). Confirm → fires `admin-brevo-resync` over every non-archived submission with that `course_id`. Each upsert rebuilds the full Brevo attribute set including the now-fresh `SW_COURSE_OPEN` value pulled from matrix.json. Idempotent.
+
+**Owner setup (added to the morning's checklist):**
+3a. Create `SW_COURSE_OPEN` boolean attribute in Brevo (default Yes/true).
+4. The morning's EMS resync panel will push `SW_COURSE_OPEN = true` for all 117 contacts (every EMS course is currently open) — no extra step needed.
+6. (When Charlotte closes a course in future): set `accepting_applications: false` in the course YAML → wait for switchable/site rebuild → run `/admin/data-ops/brevo-resync-course` on that slug → Wren's N1-N3 exit fires on next daily check.
+
+**Verify post-deploy:** Edit a test course YAML to `accepting_applications: false`, rebuild switchable/site, run the new course-resync action, confirm `SW_COURSE_OPEN = No` lands on the Brevo card.
+
+**Sign-off:** Owner (2026-05-25, bundle of morning Wren push + afternoon expansion).
+
+---
+
 ## 2026-05-25 — Wren push: SW_FASTRACK_COMPLETED per-canonical + new SW_PENDING_RESTART attribute (migration 0168)
 
 Two related changes in `_shared/route-lead.ts`, both gating the EMS new-course broadcast (117 marketing-consented non-enrolled leads).
