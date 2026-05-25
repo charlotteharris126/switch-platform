@@ -177,8 +177,14 @@ async function resyncOne(submissionId: number): Promise<ResyncResult> {
        WHERE provider_id = ${submissionRow.primary_routed_to}
     `;
     if (!providerRow) return { id: submissionId, status: "error", reason: "provider not found" };
-    if (!providerRow.active || providerRow.archived_at) {
-      return { id: submissionId, status: "error", reason: "provider inactive/archived" };
+    // Only archived providers gate resync. Paused (active=false but not
+    // archived) is fine: a resync rebuilds attributes on EXISTING learner
+    // contacts, it doesn't route a new lead. The active flag is a routing
+    // concern; backfills should still work while a provider is between
+    // intakes. Archived means genuinely off-boarded — the provider's
+    // company/contact data shouldn't keep landing on learner cards.
+    if (providerRow.archived_at) {
+      return { id: submissionId, status: "error", reason: "provider archived" };
     }
     provider = providerRow;
   } catch (err) {
