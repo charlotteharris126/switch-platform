@@ -72,7 +72,7 @@ export default async function EditBlogPostPage({
             </Link>
             {post.status === "published" && (
               <a
-                href={`https://switchable.org.uk/blog/${post.slug}/`}
+                href={`https://switchable.org.uk/the-switch/${post.slug}/`}
                 target="_blank"
                 rel="noopener noreferrer"
               >

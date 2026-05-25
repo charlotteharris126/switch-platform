@@ -31,7 +31,7 @@ const CADENCE_TARGET_DAYS = 7;
 function viewUrl(post: Pick<Post, "status" | "slug">): { href: string; label: string; external: boolean } {
   if (post.status === "published") {
     return {
-      href: `https://switchable.org.uk/blog/${post.slug}/`,
+      href: `https://switchable.org.uk/the-switch/${post.slug}/`,
       label: "View live",
       external: true,
     };

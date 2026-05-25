@@ -353,7 +353,7 @@ function ContentTab({
             <p className="text-[11px] text-[#5a6a72] mt-1">
               {slugAutoFilled
                 ? <>Auto-generated from the title. Edit to lock it.</>
-                : <>Becomes <code className="font-mono">/blog/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.</>
+                : <>Becomes <code className="font-mono">/the-switch/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.</>
               }
             </p>
           </div>
@@ -408,7 +408,7 @@ function ContentTab({
         </div>
 
         <div>
-          <Label htmlFor="excerpt">Excerpt (used in /blog/ listings + meta description fallback)</Label>
+          <Label htmlFor="excerpt">Excerpt (used in The Switch listings + meta description fallback)</Label>
           <textarea
             id="excerpt"
             value={input.excerpt}
@@ -535,7 +535,7 @@ function ContentTab({
                 onChange={(e) => update("featured", e.target.checked)}
                 disabled={pending}
               />
-              Feature on /blog/ home (only one can be featured at a time)
+              Feature on The Switch home (only one can be featured at a time)
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input
