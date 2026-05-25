@@ -91,9 +91,12 @@ function slugFromTitle(title: string): string {
   return title
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")     // strip diacritics
+    // Strip combining diacritics (U+0300 to U+036F). The literal-character
+    // form of this range got mangled by past copy/paste, leaving the regex
+    // matching nothing. Explicit unicode escapes survive every editor.
+    .replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9\s-]/g, "")        // drop non-alphanumerics except spaces + hyphens
-    .replace(/\s+/g, "-")                // spaces → hyphens
+    .replace(/\s+/g, "-")                // spaces -> hyphens
     .replace(/-+/g, "-")                 // collapse runs
     .replace(/^-|-$/g, "")               // trim leading / trailing
     .slice(0, 75);                       // SEO-friendly length cap

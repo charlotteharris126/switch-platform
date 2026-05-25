@@ -24,6 +24,15 @@ type Tool = {
 
 const TOOLS: Tool[] = [
   {
+    href: "/admin/data-ops/ai-assist-log",
+    title: "AI assist log + cost rollup",
+    description:
+      "Every Suggest button click in /admin/blog logs here with cost, latency, model, and any error. Today / 7-day / 30-day / lifetime spend totals.",
+    status: "ongoing",
+    context:
+      "Backed by editorial.ai_assist_log. Rate limit: 30 calls/min, 200 calls/day, enforced inside the EF.",
+  },
+  {
     href: "/admin/data-ops/port-blog-yaml",
     title: "Port launch blog drafts into the CMS",
     description:

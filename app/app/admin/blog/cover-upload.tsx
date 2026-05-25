@@ -85,7 +85,7 @@ export function CoverUpload({ value, onChange, disabled, postSlug, placeholder }
         </p>
       )}
 
-      {value && /\.(jpe?g|png|webp|gif|svg)$/i.test(value) && (
+      {value && /\.(jpe?g|png|webp|gif|svg|avif)$/i.test(value) && (
         // Live preview of the current URL value. Click to open full-size in a new tab.
         // eslint-disable-next-line @next/next/no-img-element
         <a href={value} target="_blank" rel="noopener noreferrer" className="block">
@@ -94,11 +94,21 @@ export function CoverUpload({ value, onChange, disabled, postSlug, placeholder }
             alt="Cover preview"
             className="max-h-40 rounded-md border border-[#e5dfd8] object-cover"
             onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = "none";
+              // Replace the broken preview with a visible warning rather
+              // than silently hiding it — otherwise Charlotte may not notice
+              // the URL doesn't resolve until preview/publish.
+              const img = e.currentTarget as HTMLImageElement;
+              img.style.display = "none";
+              const warning = img.parentElement?.parentElement?.querySelector(".cover-upload-broken");
+              if (warning) (warning as HTMLElement).style.display = "block";
             }}
           />
         </a>
       )}
+
+      <p className="cover-upload-broken text-[11px] text-[#b3412e] mt-1" style={{ display: "none" }}>
+        Cover image URL didn't load. Check the URL is public + the file exists, or upload a new image.
+      </p>
     </div>
   );
 }

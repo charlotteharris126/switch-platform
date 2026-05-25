@@ -120,8 +120,8 @@ serve(async (req) => {
         ${readingTimeMinutes},
         ${post.cover_image_url ?? null},
         ${post.cover_image_alt ?? null},
-        ${post.featured === true},
-        ${post.lead_magnet_enabled !== false},
+        FALSE,                          -- featured locked off via EF; admin promotes manually after proofing
+        TRUE,                           -- lead_magnet locked on via EF; admin opts out manually if a post warrants it
         ${post.meta_title ?? null},
         ${post.meta_description ?? null},
         ${post.og_title ?? null},

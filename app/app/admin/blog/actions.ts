@@ -112,12 +112,54 @@ function readingTimeFromBody(body: string): number {
   return Math.max(1, Math.round(words / 220));
 }
 
+// Featured enforcement helper. Migration 0171 added a partial unique
+// index `WHERE featured = TRUE`. Server actions that flip a post to
+// featured must first unflip any current holder; otherwise the INSERT/
+// UPDATE rejects with a duplicate-key error. Pass `excludeId` to skip
+// the row currently being edited (it may already hold featured=TRUE).
+async function unflipExistingFeatured(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  excludeId?: number,
+): Promise<void> {
+  let q = supabase
+    .schema("editorial")
+    .from("posts")
+    .update({ featured: false })
+    .eq("featured", true);
+  if (excludeId !== undefined) {
+    q = q.neq("id", excludeId);
+  }
+  // Best-effort — if it fails, the INSERT/UPDATE will still produce a clear
+  // dup-key error which friendlyDbError translates for the UI.
+  await q;
+}
+
+// Translate the noisier Postgres / PostgREST error messages into something
+// Charlotte can actually read in the Save banner.
+function friendlyDbError(raw: string): string {
+  if (raw.includes("posts_slug_key") || raw.includes("duplicate key value violates")) {
+    return "Slug already in use. Pick another.";
+  }
+  if (raw.includes("posts_only_one_featured")) {
+    return "Another post is already featured. Untick it first, or this save will replace it.";
+  }
+  if (raw.includes("row-level security")) {
+    return "Not authorised to write to this table. Check admin allowlist (admin.is_admin in migration 0014).";
+  }
+  return raw;
+}
+
 function parseCsv(value: string): string[] {
   return value
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
+
+// Body size cap. Tiptap rendering slows noticeably above ~200KB of raw
+// markdown (which is already ~30K words — well beyond any sensible post).
+// The cap protects the editor from a paste-the-whole-book accident.
+const BODY_MAX_BYTES = 200_000;
 
 function validateInput(input: PostFormInput): string | null {
   if (!input.slug.trim()) return "Slug is required";
@@ -128,6 +170,9 @@ function validateInput(input: PostFormInput): string | null {
   if (input.title.length > 200) return "Title is too long (200 char max)";
   if (input.dek && input.dek.length > 300) return "Dek is too long (300 char max)";
   if (!input.body.trim()) return "Body is required (even one paragraph)";
+  if (input.body.length > BODY_MAX_BYTES) {
+    return `Body is too long (${(input.body.length / 1024).toFixed(0)} KB; max ${BODY_MAX_BYTES / 1000} KB)`;
+  }
   if (!["draft", "scheduled", "published", "archived"].includes(input.status)) {
     return "Invalid status";
   }
@@ -229,6 +274,25 @@ export async function createPostAction(input: PostFormInput): Promise<ActionResu
   const validation = validateInput(input);
   if (validation) return { ok: false, error: validation };
 
+  // Pre-flight slug collision check so the user sees a clean message
+  // rather than raw Postgres "duplicate key value violates unique
+  // constraint posts_slug_key".
+  const { data: collision } = await gate.supabase
+    .schema("editorial")
+    .from("posts")
+    .select("id")
+    .eq("slug", input.slug.trim())
+    .maybeSingle();
+  if (collision) {
+    return { ok: false, error: `Slug "${input.slug.trim()}" is already in use. Pick another.` };
+  }
+
+  // Featured enforcement: if marking this post featured, unflip any
+  // existing featured row first so the partial-unique index doesn't reject.
+  if (input.featured) {
+    await unflipExistingFeatured(gate.supabase);
+  }
+
   const row = {
     slug: input.slug.trim(),
     title: input.title.trim(),
@@ -260,7 +324,7 @@ export async function createPostAction(input: PostFormInput): Promise<ActionResu
     .select("id, slug")
     .single();
 
-  if (error) return { ok: false, error: error.message };
+  if (error) return { ok: false, error: friendlyDbError(error.message) };
 
   const tagSlugs = parseCsv(input.tags);
   const tagErr = await syncTags(gate.supabase, inserted.id as number, tagSlugs);
@@ -298,6 +362,26 @@ export async function updatePostAction(
 
   const previousStatus = existing.status as string;
 
+  // Pre-flight slug collision check if the slug is changing.
+  if (input.slug.trim() !== originalSlug) {
+    const { data: collision } = await gate.supabase
+      .schema("editorial")
+      .from("posts")
+      .select("id")
+      .eq("slug", input.slug.trim())
+      .neq("id", existing.id)
+      .maybeSingle();
+    if (collision) {
+      return { ok: false, error: `Slug "${input.slug.trim()}" is already in use by another post.` };
+    }
+  }
+
+  // Featured enforcement: if marking this post featured, unflip any other
+  // existing featured row first.
+  if (input.featured) {
+    await unflipExistingFeatured(gate.supabase, existing.id as number);
+  }
+
   const patch = {
     slug: input.slug.trim(),
     title: input.title.trim(),
@@ -329,7 +413,7 @@ export async function updatePostAction(
     .update(patch)
     .eq("id", existing.id);
 
-  if (error) return { ok: false, error: error.message };
+  if (error) return { ok: false, error: friendlyDbError(error.message) };
 
   const tagSlugs = parseCsv(input.tags);
   const tagErr = await syncTags(gate.supabase, existing.id as number, tagSlugs);
@@ -522,12 +606,42 @@ export async function updateTagAction(input: {
   return { ok: true, data: { id: input.id, slug } };
 }
 
-export async function deleteTagAction(id: number): Promise<ActionResult<{ id: number }>> {
+// Two-step delete: countTagUsageAction returns how many posts hold the
+// tag, deleteTagAction does the actual delete (with `force: true` after
+// the UI confirms). Splits the destructive op behind a usage check so
+// Charlotte sees the impact before clicking through.
+export async function countTagUsageAction(id: number): Promise<ActionResult<{ count: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+  const { count, error } = await gate.supabase
+    .schema("editorial")
+    .from("post_tags")
+    .select("*", { count: "exact", head: true })
+    .eq("tag_id", id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: { count: count ?? 0 } };
+}
+
+export async function deleteTagAction(
+  id: number,
+  opts?: { force?: boolean },
+): Promise<ActionResult<{ id: number }>> {
   const gate = await getAdminSupabase();
   if (!gate.ok) return gate;
 
-  // ON DELETE CASCADE on post_tags removes the relations automatically.
-  // No need to deny if used — Charlotte may intentionally retire a tag.
+  // Block deletion when the tag is in use unless the caller explicitly
+  // forces it. ON DELETE CASCADE on post_tags would otherwise silently
+  // strip the tag from every post.
+  if (!opts?.force) {
+    const usage = await countTagUsageAction(id);
+    if (usage.ok && usage.data.count > 0) {
+      return {
+        ok: false,
+        error: `Tag is used by ${usage.data.count} post${usage.data.count === 1 ? "" : "s"}. Retry with force to delete (the tag will be removed from every post automatically).`,
+      };
+    }
+  }
+
   const { error } = await gate.supabase
     .schema("editorial")
     .from("tags")
@@ -537,6 +651,7 @@ export async function deleteTagAction(id: number): Promise<ActionResult<{ id: nu
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/admin/blog/tags");
+  revalidatePath("/admin/blog");
   return { ok: true, data: { id } };
 }
 
@@ -597,6 +712,7 @@ export async function applyTagToPostsAction(
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/admin/blog/tags");
+  revalidatePath("/admin/blog");
   return { ok: true, data: { applied: postIds.length } };
 }
 

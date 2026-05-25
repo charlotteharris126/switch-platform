@@ -36,7 +36,11 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import postgres from "https://deno.land/x/postgresjs@v3.4.5/mod.js";
-import Anthropic from "npm:@anthropic-ai/sdk";
+// Pin to a known-working SDK version (the unversioned form let the Edge
+// runtime cache an older copy that didn't know about output_config /
+// json_schema, which is the most likely silent-failure path for the
+// previous deploy). Update as new SDK versions land + are tested.
+import Anthropic from "npm:@anthropic-ai/sdk@0.65.0";
 
 const sql = postgres(Deno.env.get("SUPABASE_DB_URL")!, { max: 1, prepare: false });
 
@@ -242,7 +246,7 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
           ? `Target keywords: ${p.target_keywords.join(", ")}`
           : "",
         p.body
-          ? `First 600 chars of body:\n${p.body.slice(0, 600)}`
+          ? `Body excerpt (start + end so meta-description anchors to the whole post, not just the lead):\n${sample(p.body, 600)}`
           : "",
         p.current_value
           ? `Existing meta description (improve this):\n${p.current_value}`
@@ -265,7 +269,7 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
         `Title: ${p.title ?? "(no title)"}`,
         p.dek ? `Dek: ${p.dek}` : "",
         p.body
-          ? `First 800 chars of body:\n${p.body.slice(0, 800)}`
+          ? `Body excerpt (start + end so the model sees both intro and conclusion):\n${sample(p.body, 800)}`
           : "",
         p.current_value
           ? `Existing excerpt (improve this):\n${p.current_value}`
@@ -292,7 +296,7 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
           ? `Target keywords: ${p.target_keywords.join(", ")}`
           : "",
         p.body
-          ? `First 800 chars of body:\n${p.body.slice(0, 800)}`
+          ? `Body excerpt (start + end so the model sees both intro and conclusion):\n${sample(p.body, 800)}`
           : "",
         "",
         `Available tags (slug, name): ${known || "(no tags in registry)"}`,
@@ -322,6 +326,18 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
 
 const KIND_LIST: Kind[] = ["outline", "headlines", "meta_description", "excerpt", "tags"];
 
+// sample(body, total) — pull head + tail of a long body so the model sees
+// both the intro and the conclusion. Short bodies just return the whole
+// thing. Used to give meta-description and excerpt surfaces the full
+// thematic shape instead of just the lead paragraph.
+function sample(body: string, total: number): string {
+  if (body.length <= total) return body;
+  const half = Math.floor(total / 2);
+  const head = body.slice(0, half).trim();
+  const tail = body.slice(-half).trim();
+  return `${head}\n\n[…]\n\n${tail}`;
+}
+
 serve(async (req) => {
   if (req.method !== "POST") {
     return json({ ok: false, error: "method not allowed" }, 405);
@@ -347,6 +363,30 @@ serve(async (req) => {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) {
     return json({ ok: false, error: "ANTHROPIC_API_KEY not set in Edge Function env" }, 500);
+  }
+
+  // Rate limit: per-API-key budget against editorial.ai_assist_log so a
+  // runaway client can't drain Charlotte's Anthropic spend. Hard caps:
+  // 30 calls/minute, 200/day. Cheap query: indexed scan on created_at.
+  try {
+    const limits = await sql`
+      SELECT
+        count(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 minute') AS per_min,
+        count(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 day')    AS per_day
+      FROM editorial.ai_assist_log
+    `;
+    const perMin = Number(limits[0]?.per_min ?? 0);
+    const perDay = Number(limits[0]?.per_day ?? 0);
+    if (perMin >= 30) {
+      return json({ ok: false, error: "Rate limit: 30 calls per minute reached. Wait a minute and retry." }, 429);
+    }
+    if (perDay >= 200) {
+      return json({ ok: false, error: "Rate limit: 200 calls per day reached. Resets at midnight UTC." }, 429);
+    }
+  } catch (rlErr) {
+    // Rate-limit check should fail-open (don't block real work on a log
+    // table read failure). Continue but log.
+    console.warn("rate-limit check failed (fail-open):", rlErr);
   }
 
   const surface = SURFACES[body.kind];
@@ -385,13 +425,42 @@ serve(async (req) => {
 
     const response = await client.messages.create(params as never);
 
-    // Pull out the first text block. Structured + plain both surface as text.
+    // Pull text from every text-flavoured block. Structured-output responses
+    // (output_config.format = json_schema) may surface as a "text" block
+    // containing a JSON string, OR as a structured block with a `.json` /
+    // `.input` payload depending on SDK version — handle both shapes.
     let responseText = "";
-    for (const block of response.content) {
-      if (block.type === "text") responseText += block.text;
+    let structured: unknown = null;
+    for (const block of response.content as Array<Record<string, unknown>>) {
+      const t = block.type as string;
+      if (t === "text" && typeof block.text === "string") {
+        responseText += block.text;
+      } else if (t === "json" || t === "structured_output") {
+        // Some SDK versions wrap json_schema output in a non-text block.
+        structured = (block.json ?? block.input ?? block.output) as unknown;
+      } else if (t === "tool_use" && block.input) {
+        // If the SDK ever rewrites json_schema as a tool-use call.
+        structured = block.input as unknown;
+      }
     }
 
-    suggestion = surface.extract(responseText);
+    if (surface.schema && structured !== null) {
+      // Structured block was emitted directly — use it (skip text parse).
+      suggestion = structured;
+    } else if (surface.schema) {
+      // Structured response expected but only text returned — parse it.
+      if (!responseText.trim()) {
+        throw new Error("Empty response from model (expected JSON for structured surface)");
+      }
+      suggestion = surface.extract(responseText);
+    } else {
+      // Plain-text surface (outline / meta / excerpt).
+      if (!responseText.trim()) {
+        throw new Error("Empty response from model");
+      }
+      suggestion = surface.extract(responseText);
+    }
+
     usage = {
       input: response.usage.input_tokens ?? 0,
       output: response.usage.output_tokens ?? 0,
@@ -400,8 +469,17 @@ serve(async (req) => {
     };
     ok = true;
   } catch (err) {
-    errorMessage = err instanceof Error ? err.message : String(err);
-    console.error(`blog-ai-assist [${body.kind}] failed:`, errorMessage);
+    // Capture as much detail as possible — Anthropic SDK errors carry
+    // `.status` (HTTP), `.error.type`, `.error.message`, `.message`.
+    const e = err as { status?: number; name?: string; message?: string; error?: { type?: string; message?: string } };
+    const parts: string[] = [];
+    if (e.status) parts.push(`HTTP ${e.status}`);
+    if (e.name && e.name !== "Error") parts.push(e.name);
+    if (e.error?.type) parts.push(e.error.type);
+    if (e.error?.message) parts.push(e.error.message);
+    else if (e.message) parts.push(e.message);
+    errorMessage = parts.length > 0 ? parts.join(" — ") : String(err);
+    console.error(`blog-ai-assist [${body.kind}] failed:`, errorMessage, err);
   }
 
   const costUsd =

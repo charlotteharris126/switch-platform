@@ -233,10 +233,12 @@ function SuggestionDisplay({
 
 function UsageFooter({ result }: { result: Extract<AiAssistResult, { ok: true }> }) {
   const u = result.usage;
-  const cents = (u.cost_usd * 100).toFixed(3);
+  // Cost is in USD, shown as US cents. Previous format mixed `$` and `¢`
+  // which read as nonsense — picking one (¢, since most calls are sub-1¢).
+  const usCents = (u.cost_usd * 100).toFixed(3);
   return (
     <p className="text-[10px] text-[#5a6a72] pt-1.5 border-t border-[#e5dfd8]">
-      {u.model} · {u.input + u.output + u.cache_read + u.cache_creation} tokens · {u.cache_read > 0 ? `cache hit (${u.cache_read}t)` : "cache miss"} · ${cents}¢ · {u.latency_ms}ms
+      {u.model} · {u.input + u.output + u.cache_read + u.cache_creation} tokens · {u.cache_read > 0 ? `cache hit (${u.cache_read}t)` : "cache miss"} · {usCents}¢ · {u.latency_ms}ms
     </p>
   );
 }

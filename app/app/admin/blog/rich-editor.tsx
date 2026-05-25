@@ -106,6 +106,15 @@ export function RichEditor({ value, onChange, disabled, postSlug }: Props) {
       const file = e.target.files?.[0];
       if (!file || !editor) return;
       setUploadError(null);
+      // Prompt for alt text before insert. Skipping defaults to filename
+      // (e.g. "IMG_4291.jpg") which tanks accessibility + image SEO. Empty
+      // input is allowed (decorative image) but at least Charlotte saw the
+      // prompt and made a choice.
+      const altPrompt = window.prompt(
+        "Alt text for this image (what's in it; leave blank if purely decorative):",
+        "",
+      );
+      const alt = (altPrompt ?? "").trim();
       startUpload(async () => {
         const fd = new FormData();
         fd.set("file", file);
@@ -114,7 +123,7 @@ export function RichEditor({ value, onChange, disabled, postSlug }: Props) {
         if (!result.ok) {
           setUploadError(result.error);
         } else {
-          editor.chain().focus().setImage({ src: result.public_url, alt: file.name }).run();
+          editor.chain().focus().setImage({ src: result.public_url, alt }).run();
         }
         if (fileInputRef.current) fileInputRef.current.value = "";
       });
