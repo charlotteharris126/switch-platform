@@ -36,7 +36,7 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import postgres from "https://deno.land/x/postgresjs@v3.4.5/mod.js";
-import Anthropic from "npm:@anthropic-ai/sdk@0.34.2";
+import Anthropic from "npm:@anthropic-ai/sdk";
 
 const sql = postgres(Deno.env.get("SUPABASE_DB_URL")!, { max: 1, prepare: false });
 
