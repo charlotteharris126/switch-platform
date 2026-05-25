@@ -4,6 +4,12 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # Tell Netlify's secrets scanner to ignore env vars whose values are
+  # legitimately public. NEXT_PUBLIC_* vars are exposed to the browser
+  # by Next.js design, and the Supabase URL is the literal API endpoint —
+  # both appear in source code (admin SQL recipes, EF URLs in actions.ts).
+  # Without this, the scanner false-flags every new deploy.
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
