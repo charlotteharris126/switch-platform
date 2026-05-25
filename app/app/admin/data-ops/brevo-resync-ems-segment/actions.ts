@@ -112,61 +112,69 @@ export async function previewEmsSegmentAction(): Promise<SegmentPreviewResult> {
 }
 
 export async function listEmsSegmentIdsAction(): Promise<SegmentIdsResult> {
-  const g = await gate();
-  if (!g.ok) return g;
-  const r = await loadFilteredSegmentRows();
-  if (!r.ok) return r;
-  return { ok: true, ids: r.rows.map((row) => row.id as number) };
+  try {
+    const g = await gate();
+    if (!g.ok) return g;
+    const r = await loadFilteredSegmentRows();
+    if (!r.ok) return r;
+    return { ok: true, ids: r.rows.map((row) => row.id as number) };
+  } catch (err) {
+    return { ok: false, error: `listEmsSegmentIdsAction threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 // Fires admin-brevo-resync over a chunk of IDs. Panel calls this in a loop
 // with batches sized to fit inside the Netlify Function timeout.
 export async function runResyncBatchAction(submissionIds: number[]): Promise<BatchResult> {
-  const g = await gate();
-  if (!g.ok) return g;
-
-  if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
-    return { ok: true, results: [] };
-  }
-  const validated = submissionIds.filter((v) => Number.isFinite(v));
-  if (validated.length === 0) {
-    return { ok: false, error: "submissionIds must contain valid numbers" };
-  }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl) {
-    return { ok: false, error: "Server misconfigured: NEXT_PUBLIC_SUPABASE_URL missing" };
-  }
-  const admin = createAdminClient();
-  const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
-    p_name: "AUDIT_SHARED_SECRET",
-  });
-  if (secretErr || typeof secretData !== "string" || !secretData) {
-    return {
-      ok: false,
-      error: `Could not read AUDIT_SHARED_SECRET from vault: ${secretErr?.message ?? "no value returned"}`,
-    };
-  }
-
-  let resp: Response;
   try {
-    resp = await fetch(`${supabaseUrl}/functions/v1/admin-brevo-resync`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-audit-key": secretData },
-      body: JSON.stringify({ submissionIds: validated }),
+    const g = await gate();
+    if (!g.ok) return g;
+
+    if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
+      return { ok: true, results: [] };
+    }
+    const validated = submissionIds.filter((v) => Number.isFinite(v));
+    if (validated.length === 0) {
+      return { ok: false, error: "submissionIds must contain valid numbers" };
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (!supabaseUrl) {
+      return { ok: false, error: "Server misconfigured: NEXT_PUBLIC_SUPABASE_URL missing" };
+    }
+    const admin = createAdminClient();
+    const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
+      p_name: "AUDIT_SHARED_SECRET",
     });
-  } catch (err) {
-    return { ok: false, error: `Network error: ${err instanceof Error ? err.message : String(err)}` };
-  }
+    if (secretErr || typeof secretData !== "string" || !secretData) {
+      return {
+        ok: false,
+        error: `Could not read AUDIT_SHARED_SECRET from vault: ${secretErr?.message ?? "no value returned"}`,
+      };
+    }
 
-  let body: { results?: ResyncOneResult[]; error?: string };
-  try {
-    body = (await resp.json()) as { results?: ResyncOneResult[]; error?: string };
-  } catch {
-    return { ok: false, error: `Edge Function ${resp.status}: non-JSON response` };
+    let resp: Response;
+    try {
+      resp = await fetch(`${supabaseUrl}/functions/v1/admin-brevo-resync`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-audit-key": secretData },
+        body: JSON.stringify({ submissionIds: validated }),
+      });
+    } catch (err) {
+      return { ok: false, error: `Network error: ${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    let body: { results?: ResyncOneResult[]; error?: string };
+    try {
+      body = (await resp.json()) as { results?: ResyncOneResult[]; error?: string };
+    } catch {
+      return { ok: false, error: `Edge Function ${resp.status}: non-JSON response` };
+    }
+    if (!resp.ok || body.error) {
+      return { ok: false, error: body.error ?? `Edge Function ${resp.status}` };
+    }
+    return { ok: true, results: Array.isArray(body.results) ? body.results : [] };
+  } catch (err) {
+    return { ok: false, error: `runResyncBatchAction threw: ${err instanceof Error ? err.message : String(err)}` };
   }
-  if (!resp.ok || body.error) {
-    return { ok: false, error: body.error ?? `Edge Function ${resp.status}` };
-  }
-  return { ok: true, results: Array.isArray(body.results) ? body.results : [] };
 }

@@ -70,75 +70,83 @@ export async function listCoursesWithLearnersAction(): Promise<CoursesListResult
 }
 
 export async function listCourseIdsAction(courseId: string): Promise<CourseIdsResult> {
-  const g = await gate();
-  if (!g.ok) return g;
+  try {
+    const g = await gate();
+    if (!g.ok) return g;
 
-  const trimmedSlug = courseId.trim();
-  if (!trimmedSlug) return { ok: false, error: "course_id is required" };
+    const trimmedSlug = courseId.trim();
+    if (!trimmedSlug) return { ok: false, error: "course_id is required" };
 
-  const admin = createAdminClient();
-  const { data, error } = await admin
-    .schema("leads")
-    .from("submissions")
-    .select("id, course_id, archived_at, submitted_at")
-    .eq("course_id", trimmedSlug)
-    .is("archived_at", null)
-    .order("submitted_at", { ascending: false });
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .schema("leads")
+      .from("submissions")
+      .select("id, course_id, archived_at, submitted_at")
+      .eq("course_id", trimmedSlug)
+      .is("archived_at", null)
+      .order("submitted_at", { ascending: false });
 
-  if (error) return { ok: false, error: error.message };
-  return {
-    ok: true,
-    course_id: trimmedSlug,
-    ids: (data ?? []).map((r) => r.id as number),
-  };
+    if (error) return { ok: false, error: error.message };
+    return {
+      ok: true,
+      course_id: trimmedSlug,
+      ids: (data ?? []).map((r) => r.id as number),
+    };
+  } catch (err) {
+    return { ok: false, error: `listCourseIdsAction threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 export async function runResyncBatchAction(submissionIds: number[]): Promise<BatchResult> {
-  const g = await gate();
-  if (!g.ok) return g;
-
-  if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
-    return { ok: true, results: [] };
-  }
-  const validated = submissionIds.filter((v) => Number.isFinite(v));
-  if (validated.length === 0) {
-    return { ok: false, error: "submissionIds must contain valid numbers" };
-  }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl) {
-    return { ok: false, error: "Server misconfigured: NEXT_PUBLIC_SUPABASE_URL missing" };
-  }
-  const admin = createAdminClient();
-  const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
-    p_name: "AUDIT_SHARED_SECRET",
-  });
-  if (secretErr || typeof secretData !== "string" || !secretData) {
-    return {
-      ok: false,
-      error: `Could not read AUDIT_SHARED_SECRET from vault: ${secretErr?.message ?? "no value returned"}`,
-    };
-  }
-
-  let resp: Response;
   try {
-    resp = await fetch(`${supabaseUrl}/functions/v1/admin-brevo-resync`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-audit-key": secretData },
-      body: JSON.stringify({ submissionIds: validated }),
+    const g = await gate();
+    if (!g.ok) return g;
+
+    if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
+      return { ok: true, results: [] };
+    }
+    const validated = submissionIds.filter((v) => Number.isFinite(v));
+    if (validated.length === 0) {
+      return { ok: false, error: "submissionIds must contain valid numbers" };
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (!supabaseUrl) {
+      return { ok: false, error: "Server misconfigured: NEXT_PUBLIC_SUPABASE_URL missing" };
+    }
+    const admin = createAdminClient();
+    const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
+      p_name: "AUDIT_SHARED_SECRET",
     });
-  } catch (err) {
-    return { ok: false, error: `Network error: ${err instanceof Error ? err.message : String(err)}` };
-  }
+    if (secretErr || typeof secretData !== "string" || !secretData) {
+      return {
+        ok: false,
+        error: `Could not read AUDIT_SHARED_SECRET from vault: ${secretErr?.message ?? "no value returned"}`,
+      };
+    }
 
-  let body: { results?: ResyncOneResult[]; error?: string };
-  try {
-    body = (await resp.json()) as { results?: ResyncOneResult[]; error?: string };
-  } catch {
-    return { ok: false, error: `Edge Function ${resp.status}: non-JSON response` };
+    let resp: Response;
+    try {
+      resp = await fetch(`${supabaseUrl}/functions/v1/admin-brevo-resync`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-audit-key": secretData },
+        body: JSON.stringify({ submissionIds: validated }),
+      });
+    } catch (err) {
+      return { ok: false, error: `Network error: ${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    let body: { results?: ResyncOneResult[]; error?: string };
+    try {
+      body = (await resp.json()) as { results?: ResyncOneResult[]; error?: string };
+    } catch {
+      return { ok: false, error: `Edge Function ${resp.status}: non-JSON response` };
+    }
+    if (!resp.ok || body.error) {
+      return { ok: false, error: body.error ?? `Edge Function ${resp.status}` };
+    }
+    return { ok: true, results: Array.isArray(body.results) ? body.results : [] };
+  } catch (err) {
+    return { ok: false, error: `runResyncBatchAction threw: ${err instanceof Error ? err.message : String(err)}` };
   }
-  if (!resp.ok || body.error) {
-    return { ok: false, error: body.error ?? `Edge Function ${resp.status}` };
-  }
-  return { ok: true, results: Array.isArray(body.results) ? body.results : [] };
 }
