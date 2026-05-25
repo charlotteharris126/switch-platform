@@ -2,15 +2,13 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// One-shot per-course Brevo resync. Run after closing a course in the YAML
-// (accepting_applications: false) so every existing contact carrying that
-// course as their canonical receives the updated SW_COURSE_OPEN = false
-// attribute. Wren's N1-N3 exit condition then fires on the next daily check.
+// One-shot per-course Brevo resync. Run after closing/reopening a course
+// in the YAML so every existing contact carrying that course as their
+// canonical receives the updated SW_COURSE_OPEN attribute.
 //
-// Why per-course (not "any contact whose canonical might have flipped"):
-// closing a course is an editorial event, so the operator already knows the
-// scope. Targeted resync is cheap (~50 contacts per course typically) and
-// avoids re-syncing the entire learner base unnecessarily.
+// Architecture mirrors brevo-resync-ems-segment: list IDs once, then panel
+// loops in batches of ~30 to stay inside the Netlify Function timeout.
+// The EF throttles at 250ms/contact internally.
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -22,22 +20,18 @@ export type CoursesListResult =
   | { ok: true; courses: CourseOption[] }
   | { ok: false; error: string };
 
+export type CourseIdsResult =
+  | { ok: true; course_id: string; ids: number[] }
+  | { ok: false; error: string };
+
 export type ResyncOneResult = {
   id: number;
   status: "ok" | "skipped" | "error";
   reason?: string;
 };
 
-export type RunResult =
-  | {
-      ok: true;
-      course_id: string;
-      total_requested: number;
-      ok_count: number;
-      skipped_count: number;
-      error_count: number;
-      results: ResyncOneResult[];
-    }
+export type BatchResult =
+  | { ok: true; results: ResyncOneResult[] }
   | { ok: false; error: string };
 
 async function gate() {
@@ -49,9 +43,6 @@ async function gate() {
   return { ok: true as const, supabase };
 }
 
-// List every course_id that has at least one non-archived submission, with
-// learner counts. Drives the dropdown so Charlotte can pick the slug she
-// just closed without typing it.
 export async function listCoursesWithLearnersAction(): Promise<CoursesListResult> {
   const g = await gate();
   if (!g.ok) return g;
@@ -78,7 +69,7 @@ export async function listCoursesWithLearnersAction(): Promise<CoursesListResult
   return { ok: true, courses };
 }
 
-export async function runCourseResyncAction(courseId: string): Promise<RunResult> {
+export async function listCourseIdsAction(courseId: string): Promise<CourseIdsResult> {
   const g = await gate();
   if (!g.ok) return g;
 
@@ -89,30 +80,36 @@ export async function runCourseResyncAction(courseId: string): Promise<RunResult
   const { data, error } = await admin
     .schema("leads")
     .from("submissions")
-    .select("id, course_id, archived_at")
+    .select("id, course_id, archived_at, submitted_at")
     .eq("course_id", trimmedSlug)
     .is("archived_at", null)
     .order("submitted_at", { ascending: false });
 
   if (error) return { ok: false, error: error.message };
-  const submissionIds = (data ?? []).map((r) => r.id as number);
+  return {
+    ok: true,
+    course_id: trimmedSlug,
+    ids: (data ?? []).map((r) => r.id as number),
+  };
+}
 
-  if (submissionIds.length === 0) {
-    return {
-      ok: true,
-      course_id: trimmedSlug,
-      total_requested: 0,
-      ok_count: 0,
-      skipped_count: 0,
-      error_count: 0,
-      results: [],
-    };
+export async function runResyncBatchAction(submissionIds: number[]): Promise<BatchResult> {
+  const g = await gate();
+  if (!g.ok) return g;
+
+  if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
+    return { ok: true, results: [] };
+  }
+  const validated = submissionIds.filter((v) => Number.isFinite(v));
+  if (validated.length === 0) {
+    return { ok: false, error: "submissionIds must contain valid numbers" };
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (!supabaseUrl) {
     return { ok: false, error: "Server misconfigured: NEXT_PUBLIC_SUPABASE_URL missing" };
   }
+  const admin = createAdminClient();
   const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
     p_name: "AUDIT_SHARED_SECRET",
   });
@@ -128,7 +125,7 @@ export async function runCourseResyncAction(courseId: string): Promise<RunResult
     resp = await fetch(`${supabaseUrl}/functions/v1/admin-brevo-resync`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-audit-key": secretData },
-      body: JSON.stringify({ submissionIds }),
+      body: JSON.stringify({ submissionIds: validated }),
     });
   } catch (err) {
     return { ok: false, error: `Network error: ${err instanceof Error ? err.message : String(err)}` };
@@ -143,14 +140,5 @@ export async function runCourseResyncAction(courseId: string): Promise<RunResult
   if (!resp.ok || body.error) {
     return { ok: false, error: body.error ?? `Edge Function ${resp.status}` };
   }
-  const results = Array.isArray(body.results) ? body.results : [];
-  return {
-    ok: true,
-    course_id: trimmedSlug,
-    total_requested: submissionIds.length,
-    ok_count: results.filter((r) => r.status === "ok").length,
-    skipped_count: results.filter((r) => r.status === "skipped").length,
-    error_count: results.filter((r) => r.status === "error").length,
-    results,
-  };
+  return { ok: true, results: Array.isArray(body.results) ? body.results : [] };
 }

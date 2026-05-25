@@ -1,21 +1,36 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useTransition, useEffect, useRef } from "react";
 import {
   previewEmsSegmentAction,
-  runEmsResyncAction,
+  listEmsSegmentIdsAction,
+  runResyncBatchAction,
   type SegmentPreviewResult,
-  type RunResult,
+  type ResyncOneResult,
 } from "./actions";
+
+// Batch size sized to fit inside the Netlify Function timeout (~26s).
+// EF throttles at 250ms/contact → 30 × 700ms ≈ 21s per batch.
+const BATCH_SIZE = 30;
+
+type RunSummary = {
+  total_requested: number;
+  ok_count: number;
+  skipped_count: number;
+  error_count: number;
+  results: ResyncOneResult[];
+};
 
 export function EmsResyncPanel() {
   const [preview, setPreview] = useState<SegmentPreviewResult | null>(null);
-  const [result, setResult] = useState<RunResult | null>(null);
   const [previewPending, startPreview] = useTransition();
-  const [runPending, startRun] = useTransition();
   const [confirmRun, setConfirmRun] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [finalSummary, setFinalSummary] = useState<RunSummary | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const abortedRef = useRef(false);
 
-  // Auto-load preview on mount so Charlotte sees the count immediately.
   useEffect(() => {
     startPreview(async () => {
       try {
@@ -26,16 +41,52 @@ export function EmsResyncPanel() {
     });
   }, []);
 
-  function run() {
-    setResult(null);
+  async function run() {
     setConfirmRun(false);
-    startRun(async () => {
-      try {
-        setResult(await runEmsResyncAction());
-      } catch (err) {
-        setResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    setRunError(null);
+    setFinalSummary(null);
+    setRunning(true);
+    abortedRef.current = false;
+
+    try {
+      const idsResult = await listEmsSegmentIdsAction();
+      if (!idsResult.ok) {
+        setRunError(idsResult.error);
+        setRunning(false);
+        return;
       }
-    });
+      const ids = idsResult.ids;
+      setProgress({ done: 0, total: ids.length });
+
+      const allResults: ResyncOneResult[] = [];
+      for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
+        if (abortedRef.current) break;
+        const batch = ids.slice(offset, offset + BATCH_SIZE);
+        const r = await runResyncBatchAction(batch);
+        if (!r.ok) {
+          setRunError(`Batch starting at ${offset} failed: ${r.error}. ${allResults.length} contacts resynced before failure — safe to re-run (idempotent).`);
+          break;
+        }
+        allResults.push(...r.results);
+        setProgress({ done: Math.min(offset + BATCH_SIZE, ids.length), total: ids.length });
+      }
+
+      setFinalSummary({
+        total_requested: ids.length,
+        ok_count: allResults.filter((r) => r.status === "ok").length,
+        skipped_count: allResults.filter((r) => r.status === "skipped").length,
+        error_count: allResults.filter((r) => r.status === "error").length,
+        results: allResults,
+      });
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  function stop() {
+    abortedRef.current = true;
   }
 
   return (
@@ -72,12 +123,11 @@ export function EmsResyncPanel() {
         </div>
       )}
 
-      {preview && preview.ok && preview.total > 0 && !confirmRun && (
+      {preview && preview.ok && preview.total > 0 && !confirmRun && !running && !finalSummary && (
         <button
           type="button"
           onClick={() => setConfirmRun(true)}
-          disabled={runPending}
-          className="px-4 py-2 bg-[#11242e] text-white rounded-md text-sm font-semibold hover:bg-[#1a3540] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+          className="px-4 py-2 bg-[#11242e] text-white rounded-md text-sm font-semibold hover:bg-[#1a3540] cursor-pointer"
         >
           Resync {preview.total} contacts in Brevo
         </button>
@@ -86,21 +136,19 @@ export function EmsResyncPanel() {
       {confirmRun && (
         <div className="rounded-md border border-[#e9b3a4] bg-[#fffaf0] p-4 space-y-3">
           <p className="text-sm text-[#11242e]">
-            <strong>Confirm.</strong> This rebuilds {preview && preview.ok ? preview.total : "every"} EMS contact card in Brevo using the corrected SW_FASTRACK_COMPLETED logic and establishes baseline rows in <code className="font-mono text-xs">crm.brevo_contact_state</code>. Takes ~30-90s. Safe to re-run.
+            <strong>Confirm.</strong> Rebuilds {preview && preview.ok ? preview.total : "every"} EMS contact card in Brevo using the corrected SW_FASTRACK_COMPLETED + SW_COURSE_OPEN logic and seeds baseline rows in <code className="font-mono text-xs">crm.brevo_contact_state</code>. Runs in batches of {BATCH_SIZE} (~{Math.ceil(BATCH_SIZE * 0.7)}s per batch). Total ~{preview && preview.ok ? Math.ceil(preview.total * 0.7) : "?"}s. Safe to re-run.
           </p>
           <div className="flex gap-2">
             <button
               type="button"
               onClick={run}
-              disabled={runPending}
-              className="px-4 py-2 bg-[#b3412e] text-white rounded-md text-sm font-semibold hover:bg-[#8a2e1a] disabled:opacity-60 cursor-pointer"
+              className="px-4 py-2 bg-[#b3412e] text-white rounded-md text-sm font-semibold hover:bg-[#8a2e1a] cursor-pointer"
             >
-              {runPending ? "Resyncing…" : "Yes, resync now"}
+              Yes, resync now
             </button>
             <button
               type="button"
               onClick={() => setConfirmRun(false)}
-              disabled={runPending}
               className="px-4 py-2 text-sm font-semibold text-[#5a6a72] hover:text-[#11242e] cursor-pointer"
             >
               Cancel
@@ -109,35 +157,55 @@ export function EmsResyncPanel() {
         </div>
       )}
 
-      {runPending && (
-        <p className="text-xs text-[#5a6a72]">
-          Resync in progress. EF throttles at 250ms/contact, expect ~{Math.ceil(((preview?.ok ? preview.total : 117) * 0.6))}s wall time. Don&apos;t close the tab.
-        </p>
+      {running && progress && (
+        <div className="rounded-md border border-[#bcdfd8] bg-[#dcefea] p-4 space-y-3">
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <p className="text-sm text-[#1f5f5e] font-semibold">
+              Resyncing… {progress.done} / {progress.total}
+            </p>
+            <button
+              type="button"
+              onClick={stop}
+              className="px-3 py-1 text-xs font-semibold text-[#8a2e1a] hover:underline cursor-pointer"
+            >
+              Stop after current batch
+            </button>
+          </div>
+          <div className="h-2 bg-white rounded-full overflow-hidden border border-[#bcdfd8]">
+            <div
+              className="h-full bg-[#287271] transition-[width] duration-300"
+              style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-[#1f5f5e]">
+            Don&apos;t close the tab. Batches of {BATCH_SIZE} sequentially; if a batch fails, partial results are kept and the panel shows where to resume.
+          </p>
+        </div>
       )}
 
-      {result && !result.ok && (
-        <ErrorBox title="Resync failed" message={result.error} />
+      {runError && (
+        <ErrorBox title="Resync stopped" message={runError} />
       )}
 
-      {result && result.ok && (
+      {finalSummary && (
         <div className="space-y-3">
           <div
             className={`rounded-md border p-4 ${
-              result.error_count === 0
+              finalSummary.error_count === 0
                 ? "bg-[#dcefea] border-[#bcdfd8] text-[#1f5f5e]"
                 : "bg-[#fcefd6] border-[#f0d99c] text-[#92651c]"
             }`}
           >
             <p className="font-semibold text-sm">
-              {result.ok_count} resynced · {result.skipped_count} skipped · {result.error_count} errors
+              {finalSummary.ok_count} resynced · {finalSummary.skipped_count} skipped · {finalSummary.error_count} errors
             </p>
             <p className="text-xs mt-1">
-              {result.ok_count} contacts now carry the corrected SW_FASTRACK_COMPLETED + have a baseline row in crm.brevo_contact_state.
-              {result.error_count > 0 && " Check the per-id rows below for failure reasons; safe to re-run."}
+              {finalSummary.ok_count} contacts now carry the corrected attributes + baseline crm.brevo_contact_state rows.
+              {finalSummary.error_count > 0 && " Check the per-id rows below; safe to re-run (idempotent)."}
             </p>
           </div>
 
-          {result.results.length > 0 && (
+          {finalSummary.results.length > 0 && (
             <div className="bg-white border border-[#e5dfd8] rounded-md max-h-80 overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="bg-[#f5f2eb] text-[#5a6a72] uppercase tracking-wide sticky top-0">
@@ -148,7 +216,7 @@ export function EmsResyncPanel() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f0ece3]">
-                  {result.results.map((r) => (
+                  {finalSummary.results.map((r) => (
                     <tr key={r.id}>
                       <td className="px-3 py-1.5 font-mono">{r.id}</td>
                       <td className={`px-3 py-1.5 font-semibold ${

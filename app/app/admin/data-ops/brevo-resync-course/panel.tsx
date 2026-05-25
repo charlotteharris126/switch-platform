@@ -1,20 +1,35 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   listCoursesWithLearnersAction,
-  runCourseResyncAction,
+  listCourseIdsAction,
+  runResyncBatchAction,
   type CourseOption,
-  type RunResult,
+  type ResyncOneResult,
 } from "./actions";
+
+const BATCH_SIZE = 30;
+
+type RunSummary = {
+  course_id: string;
+  total_requested: number;
+  ok_count: number;
+  skipped_count: number;
+  error_count: number;
+  results: ResyncOneResult[];
+};
 
 export function CourseResyncPanel() {
   const [courses, setCourses] = useState<CourseOption[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>("");
   const [confirmRun, setConfirmRun] = useState(false);
-  const [result, setResult] = useState<RunResult | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [finalSummary, setFinalSummary] = useState<RunSummary | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const abortedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,16 +46,53 @@ export function CourseResyncPanel() {
 
   const selectedOption = courses?.find((c) => c.course_id === selected) ?? null;
 
-  function run() {
-    setResult(null);
+  async function run() {
     setConfirmRun(false);
-    startTransition(async () => {
-      try {
-        setResult(await runCourseResyncAction(selected));
-      } catch (err) {
-        setResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    setRunError(null);
+    setFinalSummary(null);
+    setRunning(true);
+    abortedRef.current = false;
+
+    try {
+      const idsResult = await listCourseIdsAction(selected);
+      if (!idsResult.ok) {
+        setRunError(idsResult.error);
+        setRunning(false);
+        return;
       }
-    });
+      const ids = idsResult.ids;
+      setProgress({ done: 0, total: ids.length });
+
+      const allResults: ResyncOneResult[] = [];
+      for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
+        if (abortedRef.current) break;
+        const batch = ids.slice(offset, offset + BATCH_SIZE);
+        const r = await runResyncBatchAction(batch);
+        if (!r.ok) {
+          setRunError(`Batch starting at ${offset} failed: ${r.error}. ${allResults.length} contacts resynced before failure — safe to re-run (idempotent).`);
+          break;
+        }
+        allResults.push(...r.results);
+        setProgress({ done: Math.min(offset + BATCH_SIZE, ids.length), total: ids.length });
+      }
+
+      setFinalSummary({
+        course_id: idsResult.course_id,
+        total_requested: ids.length,
+        ok_count: allResults.filter((r) => r.status === "ok").length,
+        skipped_count: allResults.filter((r) => r.status === "skipped").length,
+        error_count: allResults.filter((r) => r.status === "error").length,
+        results: allResults,
+      });
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  function stop() {
+    abortedRef.current = true;
   }
 
   return (
@@ -58,10 +110,11 @@ export function CourseResyncPanel() {
             value={selected}
             onChange={(e) => {
               setSelected(e.target.value);
-              setResult(null);
+              setFinalSummary(null);
+              setRunError(null);
               setConfirmRun(false);
             }}
-            disabled={pending || !courses}
+            disabled={running || !courses}
             className="w-full border border-[#d4ccc0] rounded-md px-3 py-2 text-sm bg-white"
           >
             <option value="">
@@ -75,12 +128,11 @@ export function CourseResyncPanel() {
           </select>
         </div>
 
-        {selected && !confirmRun && (
+        {selected && !confirmRun && !running && !finalSummary && (
           <button
             type="button"
             onClick={() => setConfirmRun(true)}
-            disabled={pending}
-            className="px-4 py-2 bg-[#11242e] text-white rounded-md text-sm font-semibold hover:bg-[#1a3540] disabled:opacity-60 cursor-pointer"
+            className="px-4 py-2 bg-[#11242e] text-white rounded-md text-sm font-semibold hover:bg-[#1a3540] cursor-pointer"
           >
             Resync {selectedOption?.learner_count ?? "all"} contacts
           </button>
@@ -90,22 +142,20 @@ export function CourseResyncPanel() {
       {confirmRun && selectedOption && (
         <div className="rounded-md border border-[#e9b3a4] bg-[#fffaf0] p-4 space-y-3">
           <p className="text-sm text-[#11242e]">
-            <strong>Confirm.</strong> This re-pushes every Brevo attribute (including the new <code className="font-mono text-xs">SW_COURSE_OPEN</code> from matrix.json) for the {selectedOption.learner_count} contact{selectedOption.learner_count === 1 ? "" : "s"} on{" "}
-            <code className="font-mono text-xs">{selectedOption.course_id}</code>. EF throttles at 250ms/contact ≈ {Math.ceil(selectedOption.learner_count * 0.6)}s wall time.
+            <strong>Confirm.</strong> Re-pushes every Brevo attribute (including the current <code className="font-mono text-xs">SW_COURSE_OPEN</code> from matrix.json) for the {selectedOption.learner_count} contact{selectedOption.learner_count === 1 ? "" : "s"} on{" "}
+            <code className="font-mono text-xs">{selectedOption.course_id}</code>. Runs in batches of {BATCH_SIZE} (~{Math.ceil(BATCH_SIZE * 0.7)}s per batch). Total ~{Math.ceil(selectedOption.learner_count * 0.7)}s.
           </p>
           <div className="flex gap-2">
             <button
               type="button"
               onClick={run}
-              disabled={pending}
-              className="px-4 py-2 bg-[#b3412e] text-white rounded-md text-sm font-semibold hover:bg-[#8a2e1a] disabled:opacity-60 cursor-pointer"
+              className="px-4 py-2 bg-[#b3412e] text-white rounded-md text-sm font-semibold hover:bg-[#8a2e1a] cursor-pointer"
             >
-              {pending ? "Resyncing…" : "Yes, resync now"}
+              Yes, resync now
             </button>
             <button
               type="button"
               onClick={() => setConfirmRun(false)}
-              disabled={pending}
               className="px-4 py-2 text-sm font-semibold text-[#5a6a72] hover:text-[#11242e] cursor-pointer"
             >
               Cancel
@@ -114,35 +164,55 @@ export function CourseResyncPanel() {
         </div>
       )}
 
-      {pending && (
-        <p className="text-xs text-[#5a6a72]">
-          Resync in progress. Don&apos;t close the tab.
-        </p>
+      {running && progress && (
+        <div className="rounded-md border border-[#bcdfd8] bg-[#dcefea] p-4 space-y-3">
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <p className="text-sm text-[#1f5f5e] font-semibold">
+              Resyncing… {progress.done} / {progress.total}
+            </p>
+            <button
+              type="button"
+              onClick={stop}
+              className="px-3 py-1 text-xs font-semibold text-[#8a2e1a] hover:underline cursor-pointer"
+            >
+              Stop after current batch
+            </button>
+          </div>
+          <div className="h-2 bg-white rounded-full overflow-hidden border border-[#bcdfd8]">
+            <div
+              className="h-full bg-[#287271] transition-[width] duration-300"
+              style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-[#1f5f5e]">
+            Don&apos;t close the tab. Batches of {BATCH_SIZE} sequentially; if a batch fails, partial results are kept.
+          </p>
+        </div>
       )}
 
-      {result && !result.ok && (
-        <ErrorBox title="Resync failed" message={result.error} />
+      {runError && (
+        <ErrorBox title="Resync stopped" message={runError} />
       )}
 
-      {result && result.ok && (
+      {finalSummary && (
         <div className="space-y-3">
           <div
             className={`rounded-md border p-4 ${
-              result.error_count === 0
+              finalSummary.error_count === 0
                 ? "bg-[#dcefea] border-[#bcdfd8] text-[#1f5f5e]"
                 : "bg-[#fcefd6] border-[#f0d99c] text-[#92651c]"
             }`}
           >
             <p className="font-semibold text-sm">
-              {result.ok_count} resynced · {result.skipped_count} skipped · {result.error_count} errors
+              {finalSummary.ok_count} resynced · {finalSummary.skipped_count} skipped · {finalSummary.error_count} errors
             </p>
             <p className="text-xs mt-1">
-              <code className="font-mono">{result.course_id}</code> — every contact now carries the current <code className="font-mono">SW_COURSE_OPEN</code> value from matrix.json.
-              {result.error_count > 0 && " Check the per-id rows below; safe to re-run."}
+              <code className="font-mono">{finalSummary.course_id}</code> — every contact now carries the current <code className="font-mono">SW_COURSE_OPEN</code> from matrix.json.
+              {finalSummary.error_count > 0 && " Check the per-id rows below; safe to re-run."}
             </p>
           </div>
 
-          {result.results.length > 0 && (
+          {finalSummary.results.length > 0 && (
             <div className="bg-white border border-[#e5dfd8] rounded-md max-h-80 overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="bg-[#f5f2eb] text-[#5a6a72] uppercase tracking-wide sticky top-0">
@@ -153,7 +223,7 @@ export function CourseResyncPanel() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f0ece3]">
-                  {result.results.map((r) => (
+                  {finalSummary.results.map((r) => (
                     <tr key={r.id}>
                       <td className="px-3 py-1.5 font-mono">{r.id}</td>
                       <td className={`px-3 py-1.5 font-semibold ${
