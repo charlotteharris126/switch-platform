@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { createPostAction, updatePostAction, deletePostAction } from "./actions";
 import type { Post, PostFormInput, PostStatus } from "./actions";
 import { checkSeo } from "./seo-checks";
-import { SeoChecklist } from "./seo-checklist";
+import { EditorSidebar } from "./editor-sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -82,6 +82,25 @@ function fromPost(post: Post, tagSlugs: string[]): PostFormInput {
   };
 }
 
+// Title → slug. UK spelling, drop punctuation, lowercase, hyphenate.
+function slugFromTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")     // strip diacritics
+    .replace(/[^a-z0-9\s-]/g, "")        // drop non-alphanumerics except spaces + hyphens
+    .replace(/\s+/g, "-")                // spaces → hyphens
+    .replace(/-+/g, "-")                 // collapse runs
+    .replace(/^-|-$/g, "")               // trim leading / trailing
+    .slice(0, 75);                       // SEO-friendly length cap
+}
+
+function isoToday(): string {
+  // Local-time YYYY-MM-DD without UTC drift.
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function PostForm({ mode, categories, allTags, initial, initialPublishDate }: PostFormProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -95,11 +114,27 @@ export function PostForm({ mode, categories, allTags, initial, initialPublishDat
     }
     return base;
   });
+  // Track whether the user has manually edited the slug. Once true, the
+  // title→slug auto-fill stops overwriting their work. Edit mode starts
+  // with this true (slug came from the existing post).
+  const [slugManuallyEdited, setSlugManuallyEdited] = useState<boolean>(mode === "edit");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   function update<K extends keyof PostFormInput>(key: K, value: PostFormInput[K]) {
-    setInput((prev) => ({ ...prev, [key]: value }));
+    setInput((prev) => {
+      const next = { ...prev, [key]: value };
+      // Title → slug auto-fill, only while the slug is untouched in create mode.
+      if (key === "title" && !slugManuallyEdited && mode === "create") {
+        next.slug = slugFromTitle(String(value));
+      }
+      return next;
+    });
+  }
+
+  function handleSlugChange(value: string) {
+    setSlugManuallyEdited(true);
+    setInput((prev) => ({ ...prev, slug: value }));
   }
 
   const knownTagSlugs = useMemo(() => new Set(allTags.map((t) => t.slug)), [allTags]);
@@ -194,6 +229,8 @@ export function PostForm({ mode, categories, allTags, initial, initialPublishDat
             <ContentTab
               input={input}
               update={update}
+              onSlugChange={handleSlugChange}
+              slugAutoFilled={!slugManuallyEdited && mode === "create" && input.slug.length > 0}
               pending={pending}
               categories={categories}
               allTags={allTags}
@@ -207,7 +244,12 @@ export function PostForm({ mode, categories, allTags, initial, initialPublishDat
           )}
         </div>
 
-        <SeoChecklist checks={checks} />
+        <EditorSidebar
+          checks={checks}
+          title={input.title}
+          dek={input.dek}
+          body={input.body}
+        />
       </div>
 
       <StickyFooter
@@ -254,6 +296,8 @@ function TabBar({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) {
 function ContentTab({
   input,
   update,
+  onSlugChange,
+  slugAutoFilled,
   pending,
   categories,
   allTags,
@@ -262,6 +306,8 @@ function ContentTab({
 }: {
   input: PostFormInput;
   update: <K extends keyof PostFormInput>(key: K, value: PostFormInput[K]) => void;
+  onSlugChange: (value: string) => void;
+  slugAutoFilled: boolean;
   pending: boolean;
   categories: Category[];
   allTags: TagOption[];
@@ -277,13 +323,16 @@ function ContentTab({
             <Input
               id="slug"
               value={input.slug}
-              onChange={(e) => update("slug", e.target.value)}
+              onChange={(e) => onSlugChange(e.target.value)}
               placeholder="how-to-change-career-uk"
               required
               disabled={pending}
             />
             <p className="text-[11px] text-[#5a6a72] mt-1">
-              Becomes <code className="font-mono">/blog/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.
+              {slugAutoFilled
+                ? <>Auto-generated from the title. Edit to lock it.</>
+                : <>Becomes <code className="font-mono">/blog/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.</>
+              }
             </p>
           </div>
           <div>
