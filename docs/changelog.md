@@ -4,6 +4,25 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-25 — CMS Phase 2.3: Storage uploads (0170) + agent write surface (blog-post-create EF) + skill rewire
+
+**1. Migration 0170 — `blog-media` Supabase Storage bucket.** Public bucket with 10 MB file cap, JPEG/PNG/WEBP/GIF/SVG only. 4 RLS policies on `storage.objects`: anon + authenticated public read; admin INSERT / UPDATE / DELETE. Idempotent — `ON CONFLICT` updates the bucket config in place.
+
+**2. Cover image upload in `/admin/blog` editor.** New `uploadBlogMediaAction` server action + `CoverUpload` UI component. Replaces the cover_image_url Input on the SEO tab. Charlotte (or any admin-authed agent) can paste a URL OR click Upload to push a file. Storage path is `<slug>/<ts>-<safe-filename>` so repeat uploads on the same post get unique URLs. Live `<img>` preview when the URL value parses as an image.
+
+**3. New Edge Function `blog-post-create` — programmatic write surface for editorial.posts.** Auth via `x-audit-key` (same pattern as admin-brevo-resync + blog-ai-assist). POST `{post, tag_slugs}` → validates → inserts into `editorial.posts` → links tags via `post_tags` → returns `{id, slug, admin_url, preview_url}`. Always lands `status=draft` regardless of input (agents don't auto-publish). Slug pre-check returns 409 with a hint instead of surfacing the constraint violation.
+
+**4. `draft-blog-post` skill rewired to write directly to the CMS.** Previously wrote YAML to `switchable/site/deploy/data/posts/` + ran `npm run build` + committed + pushed. Now composes the post payload in memory, fetches the audit secret via `psql` against `public.get_shared_secret('AUDIT_SHARED_SECRET')`, POSTs to the `blog-post-create` EF, reports back the admin + preview URLs. No more git push from the skill — drafts land in the CMS, Charlotte proofs in `/admin/blog`, flipping to published auto-fires the Netlify Build Hook (0167) → live.
+
+**Owner setup (one-shot):**
+
+1. Apply migration 0170 in Studio SQL editor.
+2. Confirm in Dashboard → Storage that the `blog-media` bucket exists (it'll be auto-created by the migration; verify the toggle is "Public bucket: on").
+
+**Sign-off:** Owner (2026-05-25).
+
+---
+
 ## 2026-05-25 — CMS Phase 2.1: blog-ai-assist Edge Function + editor Suggest buttons (migration 0169)
 
 Five "Suggest" surfaces in the /admin/blog editor, powered by Claude API:
