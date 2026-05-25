@@ -14,6 +14,7 @@ import type { Post, PostFormInput, PostStatus } from "./actions";
 import { checkSeo } from "./seo-checks";
 import { EditorSidebar } from "./editor-sidebar";
 import { AiSuggestButton } from "./ai-suggest-button";
+import { CoverUpload } from "./cover-upload";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -634,16 +635,16 @@ function SeoTab({
         <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Cover image (also used for OG)</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <Label htmlFor="cover_image_url">URL</Label>
-            <Input
-              id="cover_image_url"
+            <Label htmlFor="cover_image_url">URL or upload</Label>
+            <CoverUpload
               value={input.cover_image_url}
-              onChange={(e) => update("cover_image_url", e.target.value)}
-              placeholder="/brand/blog/your-slug.jpg or full URL"
+              onChange={(v) => update("cover_image_url", v)}
               disabled={pending}
+              postSlug={postSlug}
+              placeholder="Paste a URL or click Upload"
             />
             <p className="text-[11px] text-[#5a6a72] mt-1">
-              1200×630 minimum for clean OG share cards. Storage upload UI lands next session.
+              1200×630 minimum for clean OG share cards. Uploads land in the public blog-media bucket; max 10 MB, JPEG/PNG/WEBP/GIF/SVG.
             </p>
           </div>
           <div>

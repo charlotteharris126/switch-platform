@@ -710,3 +710,70 @@ export async function aiAssistAction(input: AiAssistInput): Promise<AiAssistResu
     return { ok: false, error: `aiAssistAction threw: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
+
+// ── Cover image upload (Supabase Storage) ────────────────────────────────────
+// Uploads a file to the blog-media bucket. Returns the public URL so the
+// editor can drop it straight into cover_image_url. Filenames are scoped by
+// post slug (or 'misc/' for create-mode uploads before save) and made unique
+// with a short content hash so repeat uploads don't overwrite earlier covers.
+
+export type UploadResult =
+  | { ok: true; public_url: string; storage_path: string; size_bytes: number }
+  | { ok: false; error: string };
+
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/svg+xml",
+]);
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB — matches bucket file_size_limit
+
+export async function uploadBlogMediaAction(formData: FormData): Promise<UploadResult> {
+  try {
+    const gate = await getAdminSupabase();
+    if (!gate.ok) return gate;
+
+    const file = formData.get("file");
+    const postSlug = (formData.get("post_slug") as string | null) ?? "misc";
+
+    if (!(file instanceof File)) {
+      return { ok: false, error: "No file provided" };
+    }
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      return { ok: false, error: `Unsupported file type ${file.type || "(unknown)"}. Allowed: JPEG, PNG, WEBP, GIF, SVG.` };
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      return { ok: false, error: `File is ${(file.size / 1024 / 1024).toFixed(1)} MB; max 10 MB.` };
+    }
+
+    // Path: <slug-or-misc>/<timestamp>-<safe-filename>. Timestamp prevents
+    // repeat-upload overwrite without forcing a full content hash (Storage
+    // returns a unique URL even on re-upload).
+    const safeSlug = postSlug.replace(/[^a-z0-9-]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "") || "misc";
+    const safeName = file.name.replace(/[^a-z0-9.-]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "");
+    const path = `${safeSlug}/${Date.now()}-${safeName}`;
+
+    const arrayBuffer = await file.arrayBuffer();
+    const { error: uploadErr } = await gate.supabase.storage
+      .from("blog-media")
+      .upload(path, arrayBuffer, {
+        contentType: file.type,
+        cacheControl: "31536000",  // 1 year — files are content-hashed via timestamp prefix
+        upsert: false,
+      });
+    if (uploadErr) return { ok: false, error: uploadErr.message };
+
+    const { data: pub } = gate.supabase.storage.from("blog-media").getPublicUrl(path);
+    return {
+      ok: true,
+      public_url: pub.publicUrl,
+      storage_path: path,
+      size_bytes: file.size,
+    };
+  } catch (err) {
+    return { ok: false, error: `uploadBlogMediaAction threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
