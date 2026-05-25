@@ -1,16 +1,19 @@
-// /admin/data-ops — index of one-shot + ongoing data-operation panels.
+// /admin/data-ops — index of data-operation panels + paste-ready SQL recipes
+// for jobs that don't have a UI yet.
 //
-// History: this page used to redirect to /errors back when "data-ops" meant
-// the migrated one-shot panels from the 024 era. As the platform's grown,
-// new panels have landed here that aren't tied to error-fixing (port-blog-yaml,
-// brevo-resync-course etc.). The redirect was hiding them — the URL now
-// renders a proper directory so Charlotte can discover what's available
-// without remembering specific subroute paths.
+// History note: between 2026-05-24 and 2026-05-25 this directory briefly
+// hosted three React-based bulk-resync panels (EMS segment, per-course,
+// EMS YAML port). Two of them tripped a Next.js "unexpected response from
+// server" error during the EMS resync push — root cause was a Server
+// Action / Edge Function timeout interaction that needs framework-level
+// debugging. The reliable fallback is pg_net.http_post from the SQL
+// editor, recipes below. Panels deleted to avoid future operators
+// reaching for them and hitting the same wall.
 
 import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 
-type ToolStatus = "ongoing" | "one_shot" | "throwaway";
+type ToolStatus = "ongoing" | "throwaway";
 type Tool = {
   href: string;
   title: string;
@@ -20,27 +23,6 @@ type Tool = {
 };
 
 const TOOLS: Tool[] = [
-  // ── Ongoing — keep ──────────────────────────────────────────────────────
-  {
-    href: "/admin/data-ops/brevo-resync-course",
-    title: "Resync a course in Brevo",
-    description:
-      "Re-push every Brevo attribute (including SW_COURSE_OPEN read from current matrix.json) for every contact whose canonical course is the picked slug.",
-    status: "ongoing",
-    context:
-      "Run after closing or reopening a course in the YAML — drives Wren's N1-N3 course-state exit. Course dropdown lists every slug with a learner count.",
-  },
-
-  // ── One-shot — retire after first use ───────────────────────────────────
-  {
-    href: "/admin/data-ops/brevo-resync-ems-segment",
-    title: "Resync EMS marketing-consented segment in Brevo",
-    description:
-      "Fires admin-brevo-resync over the ~117 EMS marketing-consented non-enrolled contacts to backfill SW_FASTRACK_COMPLETED (per-canonical) and seed crm.brevo_contact_state baseline rows.",
-    status: "one_shot",
-    context:
-      "Pre-broadcast gate for the EMS new-course broadcast (Wren push 2026-05-25). Idempotent — safe to re-run while debugging. Retire once broadcast has shipped + spot-checks clean.",
-  },
   {
     href: "/admin/data-ops/port-blog-yaml",
     title: "Port launch blog drafts into the CMS",
@@ -54,31 +36,55 @@ const TOOLS: Tool[] = [
 
 const STATUS_STYLE: Record<ToolStatus, { pill: string; label: string }> = {
   ongoing: { pill: "bg-[#dcefea] text-[#1f5f5e] border-[#bcdfd8]", label: "Ongoing" },
-  one_shot: { pill: "bg-[#fcefd6] text-[#92651c] border-[#f0d99c]", label: "One-shot" },
   throwaway: { pill: "bg-[#eee9e0] text-[#5a6a72] border-[#d4ccc0]", label: "Throwaway" },
 };
 
-export default function DataOpsPage() {
-  const ongoing = TOOLS.filter((t) => t.status === "ongoing");
-  const oneShot = TOOLS.filter((t) => t.status !== "ongoing");
+const COURSE_RESYNC_SQL = `-- Resync every contact whose canonical course is the picked slug.
+-- Use after closing a course (accepting_applications: false on the YAML +
+-- switchable-site rebuild) so SW_COURSE_OPEN=false lands on existing
+-- contacts and Wren's N1-N3 course-closed exit fires.
+-- Replace <course-slug> below with the page slug (e.g. counselling-skills-tees-valley).
+SELECT net.http_post(
+  url := 'https://igvlngouxcirqhlsrhga.supabase.co/functions/v1/admin-brevo-resync',
+  headers := jsonb_build_object(
+    'x-audit-key', public.get_shared_secret('AUDIT_SHARED_SECRET'),
+    'content-type', 'application/json'
+  ),
+  body := jsonb_build_object(
+    'submissionIds', (
+      SELECT COALESCE(array_agg(id), ARRAY[]::INT[])
+      FROM leads.submissions
+      WHERE course_id = '<course-slug>'
+        AND archived_at IS NULL
+    )
+  ),
+  timeout_milliseconds := 150000
+) AS request_id;
 
+-- Then wait ~30-90s and check results (replace <request_id> with the number above):
+SELECT
+  status_code,
+  jsonb_array_length(COALESCE(content::jsonb -> 'results', '[]'::jsonb)) AS total,
+  (SELECT COUNT(*) FROM jsonb_array_elements(content::jsonb -> 'results') r WHERE r->>'status' = 'ok') AS ok,
+  (SELECT COUNT(*) FROM jsonb_array_elements(content::jsonb -> 'results') r WHERE r->>'status' = 'error') AS err
+FROM net._http_response
+WHERE id = <request_id>;`;
+
+export default function DataOpsPage() {
   return (
     <div className="max-w-4xl space-y-8 py-6">
       <PageHeader
         eyebrow="Tools"
         title="Data ops"
-        subtitle="One-shot and ongoing data-operation panels. Per-attribute drift reconcilers live on Data health (/errors) — these are full-contact rebuilds and bulk data moves."
+        subtitle="Panels + SQL recipes for one-off data-operations. Per-attribute drift reconcilers live on Data health (/errors) — these are full-contact rebuilds and bulk data moves."
       />
 
       <section className="space-y-3">
         <h2 className="text-xs font-extrabold uppercase tracking-[0.14em] text-[#5a6a72]">
-          Ongoing
+          UI panels
         </h2>
-        <p className="text-xs text-[#5a6a72] -mt-1">
-          Keep these. Reach for them whenever the trigger condition applies.
-        </p>
         <div className="grid grid-cols-1 gap-3">
-          {ongoing.map((tool) => (
+          {TOOLS.map((tool) => (
             <ToolCard key={tool.href} tool={tool} />
           ))}
         </div>
@@ -86,16 +92,23 @@ export default function DataOpsPage() {
 
       <section className="space-y-3">
         <h2 className="text-xs font-extrabold uppercase tracking-[0.14em] text-[#5a6a72]">
-          One-shot / throwaway
+          SQL recipes
         </h2>
         <p className="text-xs text-[#5a6a72] -mt-1">
-          Built for a specific job. Safe to delete the route once the job is done — context line names the trigger.
+          Paste into Supabase Studio → SQL editor. Used when a UI panel doesn&apos;t exist for a job, or when the Server Action wrapper is hitting framework limits.
         </p>
-        <div className="grid grid-cols-1 gap-3">
-          {oneShot.map((tool) => (
-            <ToolCard key={tool.href} tool={tool} />
-          ))}
-        </div>
+
+        <details className="rounded-xl border border-[#e5dfd8] bg-white p-4">
+          <summary className="cursor-pointer font-extrabold text-[#11242e] text-base">
+            Resync a course in Brevo
+          </summary>
+          <p className="text-sm text-[#11242e] mt-3 mb-3">
+            Pushes every Brevo attribute (including the current <code className="font-mono text-xs">SW_COURSE_OPEN</code> from matrix.json) for every contact on the picked course slug. Run after closing a course in the YAML so existing contacts exit the N1-N3 spine cleanly. Idempotent — safe to re-run.
+          </p>
+          <pre className="bg-[#11242e] text-[#f5f2eb] text-[11px] p-4 rounded-md overflow-x-auto font-mono whitespace-pre-wrap">
+{COURSE_RESYNC_SQL}
+          </pre>
+        </details>
       </section>
     </div>
   );
