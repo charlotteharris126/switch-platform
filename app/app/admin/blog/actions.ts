@@ -19,6 +19,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdmin } from "@/lib/auth/allowlist";
 
 // Fire-and-forget Netlify Build Hook trigger. Calls the SECURITY DEFINER
@@ -619,4 +620,93 @@ export async function removeTagFromPostsAction(
 
   revalidatePath("/admin/blog/tags");
   return { ok: true, data: { removed: postIds.length } };
+}
+
+
+// ── AI assist ────────────────────────────────────────────────────────────────
+// Wraps blog-ai-assist Edge Function for the "Suggest" buttons in the editor.
+// Read AUDIT_SHARED_SECRET from vault + POST per kind. Returns the suggestion
+// shape that surface produces (string for outline/meta/excerpt; string[] for
+// headlines/tags).
+
+export type AiAssistKind = "outline" | "headlines" | "meta_description" | "excerpt" | "tags";
+
+export type AiAssistInput = {
+  kind: AiAssistKind;
+  post: {
+    title?: string;
+    dek?: string | null;
+    excerpt?: string | null;
+    body?: string;
+    category_id?: string | null;
+    target_keywords?: string[];
+    current_value?: string;
+  };
+  post_id?: number | null;
+  post_slug?: string | null;
+  known_tags?: Array<{ slug: string; name: string }>;
+};
+
+export type AiAssistResult =
+  | {
+      ok: true;
+      suggestion: string | string[];
+      usage: {
+        input: number;
+        output: number;
+        cache_read: number;
+        cache_creation: number;
+        cost_usd: number;
+        latency_ms: number;
+        model: string;
+      };
+    }
+  | { ok: false; error: string };
+
+export async function aiAssistAction(input: AiAssistInput): Promise<AiAssistResult> {
+  try {
+    const gate = await getAdminSupabase();
+    if (!gate.ok) return gate;
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (!supabaseUrl) {
+      return { ok: false, error: "Server misconfigured: NEXT_PUBLIC_SUPABASE_URL missing" };
+    }
+
+    const admin = createAdminClient();
+    const { data: secretData, error: secretErr } = await admin.rpc("get_shared_secret", {
+      p_name: "AUDIT_SHARED_SECRET",
+    });
+    if (secretErr || typeof secretData !== "string" || !secretData) {
+      return {
+        ok: false,
+        error: `Could not read AUDIT_SHARED_SECRET: ${secretErr?.message ?? "no value"}`,
+      };
+    }
+
+    let resp: Response;
+    try {
+      resp = await fetch(`${supabaseUrl}/functions/v1/blog-ai-assist`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-audit-key": secretData },
+        body: JSON.stringify(input),
+      });
+    } catch (err) {
+      return { ok: false, error: `Network error: ${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    let body: AiAssistResult;
+    try {
+      body = (await resp.json()) as AiAssistResult;
+    } catch {
+      return { ok: false, error: `Edge Function ${resp.status}: non-JSON response` };
+    }
+    if (!resp.ok || !("ok" in body) || body.ok !== true) {
+      const errMsg = !body.ok ? body.error : `Edge Function ${resp.status}`;
+      return { ok: false, error: errMsg };
+    }
+    return body;
+  } catch (err) {
+    return { ok: false, error: `aiAssistAction threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }

@@ -13,6 +13,7 @@ import { createPostAction, updatePostAction, deletePostAction } from "./actions"
 import type { Post, PostFormInput, PostStatus } from "./actions";
 import { checkSeo } from "./seo-checks";
 import { EditorSidebar } from "./editor-sidebar";
+import { AiSuggestButton } from "./ai-suggest-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -236,11 +237,19 @@ export function PostForm({ mode, categories, allTags, initial, initialPublishDat
               allTags={allTags}
               wordCount={wordCount}
               readingTime={readingTime}
+              postId={initial?.post.id ?? null}
+              postSlug={initial?.post.slug ?? null}
             />
           )}
 
           {tab === "seo" && (
-            <SeoTab input={input} update={update} pending={pending} />
+            <SeoTab
+              input={input}
+              update={update}
+              pending={pending}
+              postId={initial?.post.id ?? null}
+              postSlug={initial?.post.slug ?? null}
+            />
           )}
         </div>
 
@@ -303,6 +312,8 @@ function ContentTab({
   allTags,
   wordCount,
   readingTime,
+  postId,
+  postSlug,
 }: {
   input: PostFormInput;
   update: <K extends keyof PostFormInput>(key: K, value: PostFormInput[K]) => void;
@@ -313,6 +324,8 @@ function ContentTab({
   allTags: TagOption[];
   wordCount: number;
   readingTime: number;
+  postId: number | null;
+  postSlug: string | null;
 }) {
   return (
     <div className="space-y-8">
@@ -363,6 +376,15 @@ function ContentTab({
             disabled={pending}
           />
           <CharMeter value={input.title} ideal={[40, 60]} max={70} hint="Google truncates past ~60 chars in search results." />
+          <AiSuggestButton
+            kind="headlines"
+            label="Suggest 5 titles"
+            input={input}
+            postId={postId}
+            postSlug={postSlug}
+            currentValue={input.title}
+            onApply={(v) => update("title", v)}
+          />
         </div>
 
         <div>
@@ -388,6 +410,15 @@ function ContentTab({
             className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
           />
           <CharMeter value={input.excerpt} ideal={[140, 200]} max={300} hint="Doubles as the meta-description fallback when that field is blank." />
+          <AiSuggestButton
+            kind="excerpt"
+            label={input.excerpt ? "Improve excerpt" : "Suggest excerpt"}
+            input={input}
+            postId={postId}
+            postSlug={postSlug}
+            currentValue={input.excerpt}
+            onApply={(v) => update("excerpt", v)}
+          />
         </div>
       </section>
 
@@ -407,6 +438,21 @@ function ContentTab({
           required
           disabled={pending}
           className="w-full px-3 py-3 rounded-md border border-input bg-background font-mono text-sm"
+        />
+        <AiSuggestButton
+          kind="outline"
+          label="Suggest H2 outline"
+          input={input}
+          postId={postId}
+          postSlug={postSlug}
+          currentValue={input.body}
+          onApply={(v) => {
+            // If the body is empty, drop the outline in as scaffolding.
+            // If it already has content, append the outline at the bottom so
+            // Charlotte can re-arrange rather than losing her work.
+            if (!input.body.trim()) update("body", v);
+            else update("body", `${input.body.trim()}\n\n${v}`);
+          }}
         />
       </section>
 
@@ -443,6 +489,16 @@ function ContentTab({
               Known tags: {allTags.slice(0, 8).map((t) => t.slug).join(", ")}
               {allTags.length > 8 ? "…" : ""} · manage at <Link href="/admin/blog/tags" className="underline">/admin/blog/tags</Link>.
             </p>
+            <AiSuggestButton
+              kind="tags"
+              label="Suggest tags"
+              input={input}
+              knownTags={allTags}
+              postId={postId}
+              postSlug={postSlug}
+              currentValue={input.tags}
+              onApply={(v) => update("tags", v)}
+            />
           </div>
         </div>
       </section>
@@ -493,10 +549,14 @@ function SeoTab({
   input,
   update,
   pending,
+  postId,
+  postSlug,
 }: {
   input: PostFormInput;
   update: <K extends keyof PostFormInput>(key: K, value: PostFormInput[K]) => void;
   pending: boolean;
+  postId: number | null;
+  postSlug: string | null;
 }) {
   return (
     <div className="space-y-8">
@@ -530,6 +590,15 @@ function SeoTab({
             className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
           />
           <CharMeter value={input.meta_description} ideal={[140, 160]} max={170} hint="Defaults to excerpt if blank. Google truncates past ~160 chars." />
+          <AiSuggestButton
+            kind="meta_description"
+            label={input.meta_description ? "Improve meta description" : "Suggest meta description"}
+            input={input}
+            postId={postId}
+            postSlug={postSlug}
+            currentValue={input.meta_description}
+            onApply={(v) => update("meta_description", v)}
+          />
         </div>
 
         <div>

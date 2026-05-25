@@ -4,6 +4,43 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-25 — CMS Phase 2.1: blog-ai-assist Edge Function + editor Suggest buttons (migration 0169)
+
+Five "Suggest" surfaces in the /admin/blog editor, powered by Claude API:
+
+1. **Titles** (5 variants) — next to the Title field on Content tab
+2. **Outline** (markdown H2 list) — under the Body textarea
+3. **Excerpt** (single replace/improve) — under the Excerpt textarea
+4. **Tags** (toggle-merge from registry) — next to the Tags input
+5. **Meta description** (single replace/improve) — under the Meta description field on SEO tab
+
+Architecture:
+
+- **Migration 0169** — `editorial.ai_assist_log` (per-call cost + usage audit) + extend `get_shared_secret` allowlist with `ANTHROPIC_API_KEY`.
+- **Edge Function `blog-ai-assist`** — Anthropic SDK via `npm:@anthropic-ai/sdk@0.34.2`, Opus 4.7 with thinking off + effort medium (good cost/quality for short generation). System prompt carries brand context + voice rules + audience + Charlotte voice examples — designed to exceed the 4096-token Opus 4.7 cache minimum so the first call writes once, subsequent calls within 5 min read at 0.1× cost. Top-level `cache_control: {type: "ephemeral"}` auto-places the breakpoint. Structured outputs (`output_config.format` with json_schema) for headlines + tags so the panel can trust shape. Plain text for outline/meta/excerpt.
+- **Cost log** — every call (success + failure) writes a row to `editorial.ai_assist_log` with input/output/cache tokens + USD cost computed at call time from embedded pricing constants. Failures still log so cost dashboards see the API charge AND Charlotte sees what surfaces are flaky.
+- **Server Action `aiAssistAction`** — wraps the EF call via the `x-audit-key` pattern.
+- **Component `AiSuggestButton`** — reusable, kind-aware. Text surfaces show inline "Use this" / "Dismiss" panel. Headlines shows 5 pickable variants with character counts. Tags shows clickable chips that toggle on/off into the existing CSV. Every result panel shows cost in cents + tokens + cache hit/miss + latency.
+
+**Owner setup (one-shot):**
+
+1. Apply migration 0169 in Studio SQL editor.
+2. Get an Anthropic API key from console.anthropic.com.
+3. Store it in vault via Studio SQL editor:
+   ```sql
+   SELECT vault.create_secret('sk-ant-...', 'ANTHROPIC_API_KEY', 'Claude API key for blog-ai-assist EF');
+   ```
+4. Deploy the EF: `supabase functions deploy blog-ai-assist --project-ref igvlngouxcirqhlsrhga`.
+5. Test by opening any draft in /admin/blog/[slug]/edit and clicking "✨ Suggest 5 titles".
+
+**Expected per-call cost** (Opus 4.7, claude-api-skill compliant):
+- Cold cache (first call in a 5-min window): ~£0.03 per suggestion.
+- Warm cache (subsequent calls within 5 min): ~£0.012 per suggestion.
+
+**Sign-off:** Owner (2026-05-25).
+
+---
+
 ## 2026-05-25 — Wren push expansion: SW_COURSE_OPEN + per-course resync panel (bundled with the morning's SW_FASTRACK + SW_PENDING_RESTART work)
 
 Wren expanded handoff item 23 to include a third attribute. Shipping bundled with the morning's two fixes so all three land in one EF deploy cycle.
