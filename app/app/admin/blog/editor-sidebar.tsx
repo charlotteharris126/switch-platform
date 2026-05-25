@@ -9,6 +9,7 @@
 
 import { useMemo, useState } from "react";
 import { Marked } from "marked";
+import DOMPurify from "isomorphic-dompurify";
 import type { SeoCheck, CheckStatus, CheckGroup } from "./seo-checks";
 import { checkSeoSummary } from "./seo-checks";
 
@@ -185,7 +186,13 @@ function PreviewPanel({ title, dek, body }: { title: string; dek: string; body: 
       .replace(/\{\{course-finder\}\}/g, '<div class="ed-placeholder">[course-finder CTA]</div>')
       .replace(/\{\{newsletter\}\}/g, '<div class="ed-placeholder">[newsletter signup]</div>')
       .replace(/\{\{course-card\s+slug=([a-z0-9-]+)\}\}/g, '<div class="ed-placeholder">[course-card: $1]</div>');
-    return marked.parse(massaged) as string;
+    // DOMPurify strips <script>, <iframe>, event handlers, and other XSS
+    // vectors from the rendered HTML before injection. Defence-in-depth:
+    // Tiptap is configured html: false so the body shouldn't contain raw
+    // HTML anyway, but if anything ever does (markdown imports, agent
+    // writes, paste-from-Word), the preview tab stays safe.
+    const rawHtml = marked.parse(massaged) as string;
+    return DOMPurify.sanitize(rawHtml);
   }, [body]);
 
   return (

@@ -12,6 +12,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Marked } from "marked";
+import DOMPurify from "isomorphic-dompurify";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { getPostBySlugAction, listTagsAction } from "../../actions";
@@ -98,7 +99,9 @@ export default async function PreviewBlogPostPage({
     .replace(/\{\{recommended-next\}\}/g, '<div class="border border-dashed border-[#bcc7cc] rounded-lg p-4 text-xs text-[#5a6a72] my-6">[recommended-next callout — rendered at build time]</div>')
     .replace(/\{\{pull-quote:\s*([^}]+)\}\}/g, '<blockquote class="border-l-4 border-[#287271] pl-4 italic text-[#11242e] my-6">$1</blockquote>');
 
-  const bodyHtml = await marked.parse(bodyForRender);
+  // Sanitise the parsed HTML before injection. Defence-in-depth against any
+  // raw HTML that slips into the body via markdown imports or paste paths.
+  const bodyHtml = DOMPurify.sanitize(await marked.parse(bodyForRender));
 
   const isLive = post.status === "published";
   const liveUrl = `https://switchable.org.uk/the-switch/${post.slug}/`;

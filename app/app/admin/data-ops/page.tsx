@@ -33,6 +33,15 @@ const TOOLS: Tool[] = [
       "Backed by editorial.ai_assist_log. Rate limit: 30 calls/min, 200 calls/day, enforced inside the EF.",
   },
   {
+    href: "/admin/data-ops/blog-media-usage",
+    title: "Blog media bucket usage",
+    description:
+      "Supabase Storage bucket: blog-media. Total bytes, file count, the 20 biggest files, and a runbook for when the bucket fills up.",
+    status: "ongoing",
+    context:
+      "Per-file cap is 10 MB. Project-wide soft cap at 1 GB (Supabase free tier). Hard limit hit means uploads fail; existing images still serve.",
+  },
+  {
     href: "/admin/data-ops/port-blog-yaml",
     title: "Port launch blog drafts into the CMS",
     description:
