@@ -51,6 +51,7 @@ export type Post = {
   category_id: string | null;
   status: PostStatus;
   publish_date: string | null;
+  publish_at: string | null;   // ISO TIMESTAMPTZ; null = falls back to publish_date 06:00 UTC
   reading_time_minutes: number | null;
   cover_image_url: string | null;
   cover_image_alt: string | null;
@@ -79,6 +80,7 @@ export type PostFormInput = {
   category_id: string;
   status: PostStatus;
   publish_date: string;
+  publish_time: string;        // HH:MM in UK timezone, optional; combined with publish_date → publish_at
   cover_image_url: string;
   cover_image_alt: string;
   featured: boolean;
@@ -147,6 +149,38 @@ function friendlyDbError(raw: string): string {
     return "Not authorised to write to this table. Check admin allowlist (admin.is_admin in migration 0014).";
   }
   return raw;
+}
+
+// Combine publish_date (YYYY-MM-DD) + publish_time (HH:MM in UK) into an
+// ISO TIMESTAMPTZ for editorial.posts.publish_at. Returns null if either
+// piece is missing (cron falls back to publish_date 06:00 UTC then).
+// UK timezone handling: BST = UTC+1 (late March → late October), GMT =
+// UTC+0. Intl gives us the right offset for any given moment.
+function buildPublishAt(dateStr: string, timeStr: string): string | null {
+  if (!dateStr || !timeStr) return null;
+  // Parse YYYY-MM-DD + HH:MM as if they were UK local time, then convert
+  // to UTC. We do this by constructing a date string Postgres will accept.
+  // Easiest: build "YYYY-MM-DD HH:MM:00 Europe/London" and let JS parse.
+  try {
+    // Build a Date that represents the moment YYYY-MM-DD HH:MM UK time.
+    // Use formatToParts to discover the UTC offset at that moment.
+    const probe = new Date(`${dateStr}T${timeStr}:00Z`);
+    const dtf = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/London",
+      timeZoneName: "shortOffset",
+      hour: "2-digit",
+      hour12: false,
+    });
+    const parts = dtf.formatToParts(probe);
+    const offsetPart = parts.find((p) => p.type === "timeZoneName")?.value || "GMT";
+    // "GMT" → +00:00, "GMT+1" → +01:00, etc.
+    const offMatch = offsetPart.match(/GMT([+-]\d+)?/);
+    const offHours = offMatch?.[1] ? parseInt(offMatch[1], 10) : 0;
+    const offStr = `${offHours >= 0 ? "+" : "-"}${String(Math.abs(offHours)).padStart(2, "0")}:00`;
+    return `${dateStr}T${timeStr}:00${offStr}`;
+  } catch {
+    return null;
+  }
 }
 
 function parseCsv(value: string): string[] {
@@ -302,6 +336,7 @@ export async function createPostAction(input: PostFormInput): Promise<ActionResu
     category_id: input.category_id || null,
     status: input.status,
     publish_date: input.publish_date || null,
+    publish_at: buildPublishAt(input.publish_date, input.publish_time),
     reading_time_minutes: readingTimeFromBody(input.body),
     cover_image_url: input.cover_image_url.trim() || null,
     cover_image_alt: input.cover_image_alt.trim() || null,
@@ -391,6 +426,7 @@ export async function updatePostAction(
     category_id: input.category_id || null,
     status: input.status,
     publish_date: input.publish_date || null,
+    publish_at: buildPublishAt(input.publish_date, input.publish_time),
     reading_time_minutes: readingTimeFromBody(input.body),
     cover_image_url: input.cover_image_url.trim() || null,
     cover_image_alt: input.cover_image_alt.trim() || null,
@@ -738,6 +774,28 @@ export async function removeTagFromPostsAction(
   return { ok: true, data: { removed: postIds.length } };
 }
 
+
+// ── Cron test trigger ────────────────────────────────────────────────────────
+// Fires editorial.auto_publish_scheduled_posts() on demand. Use to test
+// scheduled publishing without waiting for the 15-min cron tick. Returns
+// the flipped slugs so the UI can confirm what actually happened.
+
+export async function triggerAutoPublishAction(): Promise<ActionResult<{ flipped_count: number; flipped_slugs: string[] }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+  const admin = createAdminClient();
+  const { data, error } = await admin.schema("editorial").rpc("auto_publish_scheduled_posts");
+  if (error) return { ok: false, error: error.message };
+  // RPC returns a setof — Supabase JS wraps in an array.
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    ok: true,
+    data: {
+      flipped_count: Number(row?.flipped_count ?? 0),
+      flipped_slugs: (row?.flipped_slugs ?? []) as string[],
+    },
+  };
+}
 
 // ── AI assist ────────────────────────────────────────────────────────────────
 // Wraps blog-ai-assist Edge Function for the "Suggest" buttons in the editor.

@@ -110,7 +110,9 @@ export function AiSuggestButton({
 
       {state.phase === "error" && (
         <div className="rounded-md border border-[#e9b3a4] bg-[#f7d8d0] text-[#8a2e1a] px-3 py-2 text-[11px]">
-          {state.error}
+          {state.error && state.error.trim()
+            ? state.error
+            : "AI assist failed but returned no error message. Check Supabase function logs (blog-ai-assist) for the raw exception."}
         </div>
       )}
 

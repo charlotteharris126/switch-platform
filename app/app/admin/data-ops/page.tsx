@@ -33,6 +33,15 @@ const TOOLS: Tool[] = [
       "Backed by editorial.ai_assist_log. Rate limit: 30 calls/min, 200 calls/day, enforced inside the EF.",
   },
   {
+    href: "/admin/data-ops/run-scheduled-publish",
+    title: "Run scheduled-publish cron now",
+    description:
+      "Manually fires editorial.auto_publish_scheduled_posts(). Use to test scheduled publishing without waiting for the 15-min cron tick. Reports the slugs that flipped.",
+    status: "ongoing",
+    context:
+      "Backed by migration 0172. Cron also runs every 15 minutes automatically; this button just lets you not wait.",
+  },
+  {
     href: "/admin/data-ops/blog-media-usage",
     title: "Blog media bucket usage",
     description:

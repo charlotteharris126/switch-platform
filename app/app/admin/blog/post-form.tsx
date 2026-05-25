@@ -46,6 +46,7 @@ function emptyInput(): PostFormInput {
     category_id: "",
     status: "draft",
     publish_date: "",
+    publish_time: "",
     cover_image_url: "",
     cover_image_alt: "",
     featured: false,
@@ -62,6 +63,23 @@ function emptyInput(): PostFormInput {
 }
 
 function fromPost(post: Post, tagSlugs: string[]): PostFormInput {
+  // Split publish_at (ISO TIMESTAMPTZ) into the YYYY-MM-DD + HH:MM the
+  // form inputs want. UK timezone — Europe/London — so summer/winter
+  // shifts surface as the user expects (BST = UTC+1, GMT = UTC+0).
+  let pubTime = "";
+  if (post.publish_at) {
+    try {
+      const d = new Date(post.publish_at);
+      // Format in UK timezone
+      const fmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Europe/London",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+      pubTime = fmt.format(d);
+    } catch { /* fall through */ }
+  }
   return {
     slug: post.slug,
     title: post.title,
@@ -71,6 +89,7 @@ function fromPost(post: Post, tagSlugs: string[]): PostFormInput {
     category_id: post.category_id ?? "",
     status: post.status,
     publish_date: post.publish_date ?? "",
+    publish_time: pubTime,
     cover_image_url: post.cover_image_url ?? "",
     cover_image_alt: post.cover_image_alt ?? "",
     featured: post.featured,
@@ -527,7 +546,20 @@ function ContentTab({
               disabled={pending}
             />
             <p className="text-[11px] text-[#5a6a72] mt-1">
-              Required for scheduled / published. Scheduled posts auto-flip on this date.
+              Required for scheduled / published.
+            </p>
+          </div>
+          <div>
+            <Label htmlFor="publish_time">Publish time (UK)</Label>
+            <Input
+              id="publish_time"
+              type="time"
+              value={input.publish_time}
+              onChange={(e) => update("publish_time", e.target.value)}
+              disabled={pending}
+            />
+            <p className="text-[11px] text-[#5a6a72] mt-1">
+              Optional. Default 07:00 UK. Cron runs every 15 min, so the post lands within ~15 min of the chosen time.
             </p>
           </div>
           <div className="space-y-2 pt-6">

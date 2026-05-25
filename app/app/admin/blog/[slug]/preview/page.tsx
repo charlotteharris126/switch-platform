@@ -76,6 +76,7 @@ export default async function PreviewBlogPostPage({
     category_id: post.category_id ?? "",
     status: post.status,
     publish_date: post.publish_date ?? "",
+    publish_time: "",   // preview surface; SEO checklist doesn't read it
     cover_image_url: post.cover_image_url ?? "",
     cover_image_alt: post.cover_image_alt ?? "",
     featured: post.featured,

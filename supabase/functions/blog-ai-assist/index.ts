@@ -335,7 +335,33 @@ function sample(body: string, total: number): string {
   const half = Math.floor(total / 2);
   const head = body.slice(0, half).trim();
   const tail = body.slice(-half).trim();
-  return `${head}\n\n[…]\n\n${tail}`;
+  return `${head}\n\n[...]\n\n${tail}`;
+}
+
+// describeError(err) — always returns a non-empty human-readable string.
+// Falls back through several shapes the Anthropic SDK + Deno runtime can
+// throw (typed SDK errors with `.status`/`.error.type`, plain Errors with
+// `.message`, raw objects). Critical: never returns "" — the admin UI
+// rendered an empty red box when the previous version did.
+function describeError(err: unknown): string {
+  if (err === null || err === undefined) return "unknown error (null thrown)";
+  const e = err as { status?: number; name?: string; message?: string; error?: { type?: string; message?: string } };
+  const parts: string[] = [];
+  if (e.status) parts.push(`HTTP ${e.status}`);
+  if (e.name && e.name !== "Error") parts.push(e.name);
+  if (e.error?.type) parts.push(e.error.type);
+  if (e.error?.message) parts.push(e.error.message);
+  else if (e.message) parts.push(e.message);
+  if (parts.length > 0) return parts.join(" | ");
+  // Last-resort fallback. JSON.stringify can throw on circular refs or
+  // serialise to "{}" for plain Error objects, so catch + try toString +
+  // try Object.getOwnPropertyNames before giving up.
+  try {
+    const json = JSON.stringify(err, Object.getOwnPropertyNames(err as object));
+    if (json && json !== "{}" && json !== "null") return json;
+  } catch { /* fall through */ }
+  const str = String(err);
+  return str && str !== "[object Object]" ? str : `unknown error (typeof ${typeof err})`;
 }
 
 serve(async (req) => {
@@ -344,10 +370,26 @@ serve(async (req) => {
   }
 
   // Auth — same x-audit-key pattern as admin-brevo-resync / port-blog-yaml.
+  // Source the expected secret from the DB vault (single source of truth)
+  // rather than Deno.env so we don't have to keep two copies in sync —
+  // the admin Server Action also reads from the vault, so they match
+  // automatically.
   const auditKey = req.headers.get("x-audit-key");
-  const expected = Deno.env.get("AUDIT_SHARED_SECRET");
+  let expected: string | null = null;
+  try {
+    const rows = await sql<Array<{ secret: string }>>`
+      SELECT public.get_shared_secret('AUDIT_SHARED_SECRET') AS secret
+    `;
+    expected = rows[0]?.secret ?? null;
+  } catch (err) {
+    console.error("blog-ai-assist: vault secret fetch failed:", String(err));
+    return json({ ok: false, error: "AUDIT_SHARED_SECRET not retrievable from vault" }, 500);
+  }
+  if (!expected) {
+    return json({ ok: false, error: "AUDIT_SHARED_SECRET not in vault" }, 500);
+  }
   if (!auditKey || auditKey !== expected) {
-    return json({ ok: false, error: "unauthorised" }, 401);
+    return json({ ok: false, error: "unauthorised (x-audit-key mismatch)" }, 401);
   }
 
   let body: AssistRequest;
@@ -469,17 +511,12 @@ serve(async (req) => {
     };
     ok = true;
   } catch (err) {
-    // Capture as much detail as possible — Anthropic SDK errors carry
-    // `.status` (HTTP), `.error.type`, `.error.message`, `.message`.
-    const e = err as { status?: number; name?: string; message?: string; error?: { type?: string; message?: string } };
-    const parts: string[] = [];
-    if (e.status) parts.push(`HTTP ${e.status}`);
-    if (e.name && e.name !== "Error") parts.push(e.name);
-    if (e.error?.type) parts.push(e.error.type);
-    if (e.error?.message) parts.push(e.error.message);
-    else if (e.message) parts.push(e.message);
-    errorMessage = parts.length > 0 ? parts.join(" — ") : String(err);
-    console.error(`blog-ai-assist [${body.kind}] failed:`, errorMessage, err);
+    errorMessage = describeError(err);
+    console.error(`blog-ai-assist [${body.kind}] failed:`, errorMessage);
+    console.error(`blog-ai-assist [${body.kind}] raw err:`, err);
+    try {
+      console.error(`blog-ai-assist [${body.kind}] json:`, JSON.stringify(err, Object.getOwnPropertyNames(err as object)));
+    } catch { /* JSON.stringify can throw on circular */ }
   }
 
   const costUsd =
@@ -506,7 +543,9 @@ serve(async (req) => {
   }
 
   if (!ok) {
-    return json({ ok: false, error: errorMessage ?? "unknown error" }, 502);
+    // `|| ` not `?? ` — empty string is technically not nullish so we'd
+    // pass it through and the admin UI would render an empty error box.
+    return json({ ok: false, error: errorMessage || "unknown error (empty message)" }, 502);
   }
 
   return json({
