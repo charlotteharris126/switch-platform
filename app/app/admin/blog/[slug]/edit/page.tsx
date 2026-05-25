@@ -7,6 +7,7 @@ import {
   listTagsAction,
 } from "../../actions";
 import { PostForm } from "../../post-form";
+import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,22 @@ export default async function EditBlogPostPage({
             <code className="font-mono">{post.slug}</code> · status {post.status}
             {post.publish_date && ` · ${post.publish_date}`}
           </span>
+        }
+        actions={
+          <div className="flex gap-2">
+            <Link href={`/admin/blog/${post.slug}/preview`} target="_blank" rel="noopener noreferrer">
+              <Button variant="outline">Preview ↗</Button>
+            </Link>
+            {post.status === "published" && (
+              <a
+                href={`https://switchable.org.uk/blog/${post.slug}/`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button>View live ↗</Button>
+              </a>
+            )}
+          </div>
         }
       />
       <PostForm

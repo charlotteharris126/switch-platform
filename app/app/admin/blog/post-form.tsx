@@ -15,6 +15,8 @@ import { checkSeo } from "./seo-checks";
 import { EditorSidebar } from "./editor-sidebar";
 import { AiSuggestButton } from "./ai-suggest-button";
 import { CoverUpload } from "./cover-upload";
+import { TagInput } from "./tag-input";
+import { RichEditor } from "./rich-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -211,7 +213,13 @@ export function PostForm({ mode, categories, allTags, initial, initialPublishDat
   const readingTime = Math.max(1, Math.round(wordCount / 220));
 
   return (
-    <form onSubmit={onSubmit} className="space-y-6 pb-28">
+    <form onSubmit={onSubmit} className="space-y-6 pb-28 [&_[data-slot=input]]:bg-white">
+{/*
+  [&_[data-slot=input]]:bg-white forces every Input in the editor to white
+  background. Shared Input primitive defaults to bg-transparent, which
+  inherits the cream admin theme — Charlotte flagged that as hard-to-see.
+  Scoped to this form so other admin pages keep their themed inputs.
+*/}
       {error && (
         <div className="rounded-lg border border-[#e9b3a4] bg-[#f7d8d0] text-[#8a2e1a] px-4 py-3 text-sm">
           {error}
@@ -356,7 +364,7 @@ function ContentTab({
               value={input.status}
               onChange={(e) => update("status", e.target.value as PostStatus)}
               disabled={pending}
-              className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+              className="w-full h-9 px-3 rounded-md border border-input bg-white text-sm"
             >
               <option value="draft">Draft</option>
               <option value="scheduled">Scheduled</option>
@@ -408,7 +416,7 @@ function ContentTab({
             placeholder="2-3 sentence summary that sells the click."
             rows={3}
             disabled={pending}
-            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+            className="w-full px-3 py-2 rounded-md border border-input bg-white text-sm"
           />
           <CharMeter value={input.excerpt} ideal={[140, 200]} max={300} hint="Doubles as the meta-description fallback when that field is blank." />
           <AiSuggestButton
@@ -425,21 +433,22 @@ function ContentTab({
 
       <section className="space-y-3">
         <div className="flex items-baseline justify-between">
-          <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Body (markdown)</h3>
+          <h3 className="font-bold text-[#11242e] text-sm uppercase tracking-wider">Body</h3>
           <span className="text-[11px] text-[#5a6a72]">
             {wordCount} words · ~{readingTime} min read
           </span>
         </div>
-        <textarea
-          id="body"
+        <RichEditor
           value={input.body}
-          onChange={(e) => update("body", e.target.value)}
-          placeholder="Markdown. Use ## for section headings (the title is already H1). Shortcodes: {{pull-quote: text}} and {{recommended-next}}."
-          rows={28}
-          required
+          onChange={(md) => update("body", md)}
           disabled={pending}
-          className="w-full px-3 py-3 rounded-md border border-input bg-background font-mono text-sm"
+          postSlug={postSlug}
         />
+        <p className="text-[11px] text-[#5a6a72]">
+          Toolbar buttons map to markdown — body is stored + rendered as markdown so the live blog template + AI suggest both work.
+          H1 is reserved for the post title (rendered at the top of the live page); use H2 for sections, H3 for sub-sections.
+          Image button uploads to the blog-media bucket and inserts the URL inline.
+        </p>
         <AiSuggestButton
           kind="outline"
           label="Suggest H2 outline"
@@ -467,7 +476,7 @@ function ContentTab({
               value={input.category_id}
               onChange={(e) => update("category_id", e.target.value)}
               disabled={pending}
-              className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+              className="w-full h-9 px-3 rounded-md border border-input bg-white text-sm"
             >
               <option value="">— None —</option>
               {categories.map((c) => (
@@ -478,17 +487,15 @@ function ContentTab({
             </select>
           </div>
           <div>
-            <Label htmlFor="tags">Tags (comma-separated slugs)</Label>
-            <Input
-              id="tags"
+            <Label htmlFor="tags">Tags</Label>
+            <TagInput
               value={input.tags}
-              onChange={(e) => update("tags", e.target.value)}
-              placeholder="skills-bootcamps, eligibility, mid-life-career"
+              onChange={(v) => update("tags", v)}
+              allTags={allTags}
               disabled={pending}
             />
             <p className="text-[11px] text-[#5a6a72] mt-1">
-              Known tags: {allTags.slice(0, 8).map((t) => t.slug).join(", ")}
-              {allTags.length > 8 ? "…" : ""} · manage at <Link href="/admin/blog/tags" className="underline">/admin/blog/tags</Link>.
+              Type to search · ↑↓ to navigate · Enter to add · Backspace on empty to remove last · manage tags at <Link href="/admin/blog/tags" className="underline">/admin/blog/tags</Link>.
             </p>
             <AiSuggestButton
               kind="tags"
@@ -588,7 +595,7 @@ function SeoTab({
             placeholder="Defaults to the excerpt. 140-160 chars is the sweet spot."
             rows={2}
             disabled={pending}
-            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+            className="w-full px-3 py-2 rounded-md border border-input bg-white text-sm"
           />
           <CharMeter value={input.meta_description} ideal={[140, 160]} max={170} hint="Defaults to excerpt if blank. Google truncates past ~160 chars." />
           <AiSuggestButton
@@ -701,7 +708,7 @@ function SeoTab({
             placeholder="Defaults to meta description"
             rows={2}
             disabled={pending}
-            className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+            className="w-full px-3 py-2 rounded-md border border-input bg-white text-sm"
           />
           <CharMeter value={input.og_description} ideal={[100, 200]} max={300} hint="Facebook trims past ~200 chars in some surfaces." />
         </div>
