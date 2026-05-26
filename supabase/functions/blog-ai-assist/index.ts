@@ -200,14 +200,19 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
   headlines: {
     buildUser: (r) => {
       const p = r.post;
+      const anchors = extractAnchorSubjects(p.title ?? "");
+      const anchorBlock = anchors.length > 0
+        ? `ANCHOR SUBJECTS (these define what makes this post different from a generic career-change article). At least 4 of your 5 titles MUST contain at least one of these subjects (or an obvious singular/plural variant). A title that could apply to any career-change post in general is wrong:\n${anchors.map((a) => `- ${a}`).join("\n")}`
+        : "";
       return [
-        "Suggest 5 title variants for THIS specific post. Read the body excerpt below before writing anything — every variant must genuinely fit what the post actually covers. Do not widen the topic to generic career-change content; do not drop key subjects that the current title or body anchors to.",
+        "Suggest 5 title variants for THIS specific post. Read the body excerpt below before writing anything. Every variant must genuinely fit what the post actually covers. Do not widen the topic to generic career-change content; do not drop the specific subjects the title and body anchor to.",
         "",
         p.title ? `Current draft title: ${p.title}` : "",
         p.dek ? `Dek: ${p.dek}` : "",
         p.target_keywords && p.target_keywords.length > 0
           ? `Target keywords: ${p.target_keywords.join(", ")}`
           : "",
+        anchorBlock,
         p.body
           ? `Body excerpt (start + end so you see the actual angle, not just the intro):\n${sample(p.body, 1500)}`
           : "",
@@ -215,10 +220,9 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
         "RULES:",
         "- 40-60 characters each.",
         "- Plain UK English. No clickbait. No exclamation marks. No em dashes.",
-        "- If the current title or body names specific subjects (e.g. 'pensions', 'savings', 'self-employed', a specific funding route), at least 3 of your 5 variants MUST keep those specifics. Don't quietly generalise.",
-        "- Mix angles across the 5: 1 plain-literal, 1 question-shaped, 1 contrarian-but-honest, 1 outcome-focused, 1 with a real number/year/cohort where it fits naturally.",
+        "- Mix angles across the 5: 1 plain-literal, 1 question-shaped, 1 contrarian-but-honest, 1 outcome-focused, 1 with a real number/year/cohort where it fits naturally. BUT all 5 must still anchor to the post's actual subjects per the list above.",
         "",
-        "BANNED PATTERNS (these will be rejected — never use):",
+        "BANNED PATTERNS (titles using these will be rejected and you will be asked to retry):",
         "- 'X is not Y' / 'X isn't Y. It's Z.' setup-and-reveal pairs.",
         "- Clipped emphasis fragments after a positive setup ('Worth knowing.', 'Different problem.', 'Three reasons.').",
         "- Rhetorical triples ('real numbers, real learners, real results').",
@@ -353,6 +357,59 @@ function sample(body: string, total: number): string {
   return `${head}\n\n[...]\n\n${tail}`;
 }
 
+// extractAnchorSubjects(title) — pull the distinctive nouns out of a
+// title so the headlines prompt can demand the model keep them. Stopword
+// list trims connective tissue ("the", "and", "real cost of a", ...) so
+// what's left is the differentiating content. Returns up to 4 anchors.
+const TITLE_STOPWORDS = new Set([
+  "the","a","an","of","and","or","but","to","for","in","on","at","by","with","from",
+  "is","are","was","were","be","been","being","do","does","did",
+  "uk","england","british","that","this","these","those","your","you","i","we",
+  "how","why","what","when","where","who","which",
+  "into","out","up","down","over","under","than","then","also",
+  "no","not","yes","real","new","old","first","next","last",
+  "post","article","guide","story",
+  // generic blog-topic words that aren't subject-anchors
+  "cost","costs","change","changing","money","career","careers","work","working",
+  "without","with",
+]);
+
+function extractAnchorSubjects(title: string): string[] {
+  if (!title) return [];
+  // Split on punctuation + spaces, lowercase, dedupe.
+  const tokens = title
+    .toLowerCase()
+    .split(/[\s,;:\-/()'"!?.]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 4 && !TITLE_STOPWORDS.has(t));
+  // De-dupe preserving order; cap at 4 strongest signals.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of tokens) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+      if (out.length >= 4) break;
+    }
+  }
+  return out;
+}
+
+// titleHitsAnyAnchor(title, anchors) — case-insensitive substring check.
+// Singulars match plurals (anchors are usually already plural; we also
+// trim trailing 's' from each title token before checking).
+function titleHitsAnyAnchor(title: string, anchors: string[]): boolean {
+  if (anchors.length === 0) return true;
+  const lower = title.toLowerCase();
+  for (const a of anchors) {
+    if (lower.includes(a)) return true;
+    // singular/plural fallback
+    if (a.endsWith("s") && lower.includes(a.slice(0, -1))) return true;
+    if (!a.endsWith("s") && lower.includes(a + "s")) return true;
+  }
+  return false;
+}
+
 // describeError(err) — always returns a non-empty human-readable string.
 // Falls back through several shapes the Anthropic SDK + Deno runtime can
 // throw (typed SDK errors with `.status`/`.error.type`, plain Errors with
@@ -455,37 +512,29 @@ serve(async (req) => {
   let ok = false;
   let errorMessage: string | null = null;
 
-  try {
-    // Top-level cache_control auto-places on the last cacheable block (in
-    // this case, the system prompt). System renders before messages, so the
-    // marker caches the entire system prompt across calls.
+  // Single-call helper so we can retry once if a quality check fails
+  // (headlines anchor coverage, currently). Accumulates token usage
+  // across calls so the cost log reflects every API hit.
+  async function callOnce(userPrompt: string): Promise<unknown> {
     const params: Record<string, unknown> = {
       model: MODEL,
       max_tokens: 1024,
-      // Opus 4.7 needs effort explicitly. medium = good cost/quality for
-      // short generation; high would over-spend tokens on a tagline.
       output_config: { effort: "medium" },
       cache_control: { type: "ephemeral" },
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: surface.buildUser(body) }],
+      messages: [{ role: "user", content: userPrompt }],
     };
-
     if (surface.schema) {
-      // Structured outputs for headlines + tags via output_config.format.
-      // The model returns a JSON string that matches the schema; surface.extract
-      // parses + unwraps it.
       (params.output_config as Record<string, unknown>).format = {
         type: "json_schema",
         schema: surface.schema,
       };
     }
-
     const response = await client.messages.create(params as never);
-
-    // Pull text from every text-flavoured block. Structured-output responses
-    // (output_config.format = json_schema) may surface as a "text" block
-    // containing a JSON string, OR as a structured block with a `.json` /
-    // `.input` payload depending on SDK version — handle both shapes.
+    usage.input          += response.usage.input_tokens ?? 0;
+    usage.output         += response.usage.output_tokens ?? 0;
+    usage.cache_read     += response.usage.cache_read_input_tokens ?? 0;
+    usage.cache_creation += response.usage.cache_creation_input_tokens ?? 0;
     let responseText = "";
     let structured: unknown = null;
     for (const block of response.content as Array<Record<string, unknown>>) {
@@ -493,37 +542,55 @@ serve(async (req) => {
       if (t === "text" && typeof block.text === "string") {
         responseText += block.text;
       } else if (t === "json" || t === "structured_output") {
-        // Some SDK versions wrap json_schema output in a non-text block.
         structured = (block.json ?? block.input ?? block.output) as unknown;
       } else if (t === "tool_use" && block.input) {
-        // If the SDK ever rewrites json_schema as a tool-use call.
         structured = block.input as unknown;
       }
     }
+    if (surface.schema && structured !== null) return structured;
+    if (!responseText.trim()) {
+      throw new Error(surface.schema
+        ? "Empty response from model (expected JSON for structured surface)"
+        : "Empty response from model");
+    }
+    return surface.extract(responseText);
+  }
 
-    if (surface.schema && structured !== null) {
-      // Structured block was emitted directly — use it (skip text parse).
-      suggestion = structured;
-    } else if (surface.schema) {
-      // Structured response expected but only text returned — parse it.
-      if (!responseText.trim()) {
-        throw new Error("Empty response from model (expected JSON for structured surface)");
+  try {
+    suggestion = await callOnce(surface.buildUser(body));
+
+    // Headlines anchor-coverage check. The prompt asks for at least 4 of 5
+    // titles to mention an anchor subject from the post's current title;
+    // models still sometimes generalise away from the subject. If coverage
+    // is weak (and we have anchors at all), one retry with the failed batch
+    // shown back to the model usually fixes it.
+    if (body.kind === "headlines" && Array.isArray(suggestion)) {
+      const anchors = extractAnchorSubjects(body.post?.title ?? "");
+      const titles = suggestion as string[];
+      const hits = titles.filter((t) => titleHitsAnyAnchor(t, anchors)).length;
+      const REQUIRED_HITS = 4;
+      if (anchors.length > 0 && hits < REQUIRED_HITS) {
+        console.warn(`headlines: only ${hits}/${titles.length} hit anchors ${JSON.stringify(anchors)} — retrying once.`);
+        const retryPrompt = [
+          surface.buildUser(body),
+          "",
+          "RETRY. Your previous attempt produced these 5 titles:",
+          ...titles.map((t, i) => `${i + 1}. ${t}`),
+          "",
+          `Only ${hits} of them contained one of the anchor subjects (${anchors.join(", ")}). This is a hard fail. Try again — ALL 5 titles must contain at least one anchor subject (or its singular/plural form). A title that could apply to a generic UK career-change post is wrong and must be discarded.`,
+        ].join("\n");
+        const retryResult = await callOnce(retryPrompt);
+        if (Array.isArray(retryResult)) {
+          const retryTitles = retryResult as string[];
+          const retryHits = retryTitles.filter((t) => titleHitsAnyAnchor(t, anchors)).length;
+          // Only adopt the retry if it actually did better.
+          if (retryHits > hits) {
+            suggestion = retryResult;
+          }
+        }
       }
-      suggestion = surface.extract(responseText);
-    } else {
-      // Plain-text surface (outline / meta / excerpt).
-      if (!responseText.trim()) {
-        throw new Error("Empty response from model");
-      }
-      suggestion = surface.extract(responseText);
     }
 
-    usage = {
-      input: response.usage.input_tokens ?? 0,
-      output: response.usage.output_tokens ?? 0,
-      cache_read: response.usage.cache_read_input_tokens ?? 0,
-      cache_creation: response.usage.cache_creation_input_tokens ?? 0,
-    };
     ok = true;
   } catch (err) {
     errorMessage = describeError(err);
