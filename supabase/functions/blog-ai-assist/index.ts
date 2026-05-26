@@ -215,14 +215,18 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
         "Each title 40-60 characters. Action-shaped. Names the outcome. Plain UK English. No clickbait, no exclamation marks. Mix angles: 1 plain literal, 1 question-shaped, 1 contrarian, 1 outcome-focused, 1 with a number where it fits naturally.",
       ].filter(Boolean).join("\n");
     },
+    // NB: Anthropic's json_schema validator only supports minItems values
+    // of 0 or 1 (anything else returns invalid_request_error). The exact
+    // count is enforced in the user prompt instead ("Each title 40-60
+    // characters... Mix angles: 1 plain literal, 1 question-shaped...").
+    // extract() trims to 5 in JS as a safety net if the model returns more.
     schema: {
       type: "object",
       properties: {
         titles: {
           type: "array",
           items: { type: "string" },
-          minItems: 5,
-          maxItems: 5,
+          minItems: 1,
         },
       },
       required: ["titles"],
@@ -230,7 +234,7 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
     },
     extract: (text) => {
       const parsed = JSON.parse(text) as { titles: string[] };
-      return parsed.titles;
+      return parsed.titles.slice(0, 5);
     },
   },
 
@@ -304,6 +308,8 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
         "Pick 3-6 slugs from this registry that genuinely apply. Do NOT invent new slugs — only return slugs from the list above. Order by relevance (most relevant first).",
       ].filter(Boolean).join("\n");
     },
+    // maxItems also drops here — Anthropic's validator pairs minItems/
+    // maxItems; safer to enforce in JS. User prompt says "3-6 tags".
     schema: {
       type: "object",
       properties: {
@@ -311,7 +317,6 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
           type: "array",
           items: { type: "string" },
           minItems: 1,
-          maxItems: 8,
         },
       },
       required: ["tags"],
@@ -319,7 +324,7 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
     },
     extract: (text) => {
       const parsed = JSON.parse(text) as { tags: string[] };
-      return parsed.tags;
+      return parsed.tags.slice(0, 8);
     },
   },
 };
