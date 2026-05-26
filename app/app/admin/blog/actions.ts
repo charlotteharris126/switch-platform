@@ -55,7 +55,7 @@ export type Post = {
   reading_time_minutes: number | null;
   cover_image_url: string | null;
   cover_image_alt: string | null;
-  featured_position: number | null;   // 1 / 2 / 3 = featured slot on /the-switch/. null = not featured.
+  featured_position: number | null;   // 1 / 2 / 3 = featured slot on /switchguides/. null = not featured.
   lead_magnet_enabled: boolean;
   meta_title: string | null;
   meta_description: string | null;
@@ -740,7 +740,7 @@ export async function removeTagFromPostsAction(
 
 
 // ── Featured slots ──────────────────────────────────────────────────────────
-// Up to 3 ranked featured slots on /the-switch/. Slot 1 = lead hero card;
+// Up to 3 ranked featured slots on /switchguides/. Slot 1 = lead hero card;
 // slots 2 + 3 = secondary cards. Managed centrally from /admin/blog/featured
 // rather than from each post's edit form.
 

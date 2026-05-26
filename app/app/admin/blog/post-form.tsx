@@ -392,9 +392,9 @@ function ContentTab({
           </select>
         </div>
         <p className="text-[11px] text-[#5a6a72] basis-full">
-          {input.status === "draft" && "Not on the live site. Visible only in admin + at /preview/the-switch/<slug>/."}
+          {input.status === "draft" && "Not on the live site. Visible only in admin + at /preview/switchguides/<slug>/."}
           {input.status === "scheduled" && "Will auto-flip to published when the publish date+time hits. Cron runs every 15 min."}
-          {input.status === "published" && "Live on switchable.org.uk/the-switch/<slug>/. Any save fires a Netlify rebuild."}
+          {input.status === "published" && "Live on switchable.org.uk/switchguides/<slug>/. Any save fires a Netlify rebuild."}
           {input.status === "archived" && "Removed from the live site. Still in the DB for restore. Old URL 301s preserved via slug history."}
         </p>
       </section>
@@ -413,7 +413,7 @@ function ContentTab({
           <p className="text-[11px] text-[#5a6a72] mt-1">
             {slugAutoFilled
               ? <>Auto-generated from the title. Edit to lock it.</>
-              : <>Becomes <code className="font-mono">/the-switch/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.</>
+              : <>Becomes <code className="font-mono">/switchguides/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.</>
             }
           </p>
         </div>
@@ -452,7 +452,7 @@ function ContentTab({
         </div>
 
         <div>
-          <Label htmlFor="excerpt">Excerpt (used in The Switch listings + meta description fallback)</Label>
+          <Label htmlFor="excerpt">Excerpt (used in Switchguides listings + meta description fallback)</Label>
           <textarea
             id="excerpt"
             value={input.excerpt}
@@ -595,7 +595,7 @@ function ContentTab({
               Show lead-magnet CTA in the bottom-of-post stack
             </label>
             <p className="text-[11px] text-[#5a6a72]">
-              To feature this post on The Switch home, visit <a href="/admin/blog/featured" className="underline text-[#287271]">/admin/blog/featured</a>. Up to 3 ranked slots, managed centrally.
+              To feature this post on Switchguides home, visit <a href="/admin/blog/featured" className="underline text-[#287271]">/admin/blog/featured</a>. Up to 3 ranked slots, managed centrally.
             </p>
           </div>
         </div>

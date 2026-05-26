@@ -120,7 +120,7 @@ function SlotCard({
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="min-w-0">
             <p className="font-extrabold text-[#11242e] truncate">{slot.post.title}</p>
-            <p className="text-[11px] text-[#5a6a72] font-mono truncate">/the-switch/{slot.post.slug}/</p>
+            <p className="text-[11px] text-[#5a6a72] font-mono truncate">/switchguides/{slot.post.slug}/</p>
             {slot.post.publish_date && (
               <p className="text-[11px] text-[#5a6a72]">Published {slot.post.publish_date}</p>
             )}
@@ -168,7 +168,7 @@ function SlotCard({
               >
                 <span className="block font-bold text-[#11242e] truncate">{p.title}</span>
                 <span className="block text-[10px] font-mono text-[#5a6a72] truncate">
-                  /the-switch/{p.slug}/
+                  /switchguides/{p.slug}/
                   {p.featured_position && p.featured_position !== slot.position
                     ? ` · currently in slot ${p.featured_position}`
                     : ""}

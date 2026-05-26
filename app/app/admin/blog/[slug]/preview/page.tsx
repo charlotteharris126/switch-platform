@@ -104,7 +104,7 @@ export default async function PreviewBlogPostPage({
   const bodyHtml = DOMPurify.sanitize(await marked.parse(bodyForRender));
 
   const isLive = post.status === "published";
-  const liveUrl = `https://switchable.org.uk/the-switch/${post.slug}/`;
+  const liveUrl = `https://switchable.org.uk/switchguides/${post.slug}/`;
 
   return (
     <div className="space-y-6 pb-12">
