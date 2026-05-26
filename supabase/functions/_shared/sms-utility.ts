@@ -76,6 +76,16 @@ export interface FireSmsArgs {
   sql: Sql;
   submission: SubmissionRow;
   provider: ProviderRow;
+  /** Optional dedup window in hours. Passed through to sendSms. When set, the
+   *  per-(submission_id, comm_type) idempotency check only blocks if a
+   *  non-failed row landed within this many hours. Default (undefined) is
+   *  once-ever, used by the auto-fire path. The bulk manual path passes 24. */
+  cooldownHours?: number;
+  /** Override the SMS log metadata.trigger_source. Default value per helper
+   *  matches the auto-fire trigger; the bulk manual path passes
+   *  'admin_bulk_chaser' so post-hoc inspection of sms_log can distinguish
+   *  the two firing paths. */
+  triggerSourceOverride?: string;
 }
 
 export type SmsHelperOutcome =
@@ -113,7 +123,8 @@ export async function fireChaserSms(args: FireSmsArgs): Promise<SmsHelperOutcome
     template: CHASER_BODY_TEMPLATE,
     commType: "chaser_call_attempt",
     tag: "chaser-attempt-1",
-    triggerSource: "attempt_1_no_answer",
+    triggerSource: args.triggerSourceOverride ?? "attempt_1_no_answer",
+    cooldownHours: args.cooldownHours,
   });
   return { kind: "sent", result };
 }
@@ -249,6 +260,7 @@ interface RenderAndSendArgs {
   commType: SmsLogType;
   tag: string;
   triggerSource: string;
+  cooldownHours?: number;
 }
 
 async function renderAndSend(args: RenderAndSendArgs): Promise<SendSmsResult> {
@@ -278,6 +290,7 @@ async function renderAndSend(args: RenderAndSendArgs): Promise<SendSmsResult> {
       course_id: args.submission.course_id,
     },
     tag: args.tag,
+    cooldownHours: args.cooldownHours,
   });
 }
 

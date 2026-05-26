@@ -4,6 +4,35 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-26 — Manual batch SMS chaser button on /admin/leads (migration 0174)
+
+**1. Migration 0174 — `crm.fire_sms_chaser_bulk(BIGINT[])` RPC.** Sibling of `crm.fire_provider_chaser` (email bulk, migration 0086) and `crm.fire_sms_chaser_attempt_1` (singular auto-fire, migration 0157). Per-row gates: not archived, has phone, has primary_routed_to, AND no non-failed chaser SMS in `crm.sms_log` within the last 24h. Eligible rows audit (`fire_sms_chaser_bulk`) and async-fire the existing `sms-chaser-attempt-1` Edge Function with `cooldown_hours=24` in the body. SECURITY DEFINER, EXECUTE granted to `authenticated`.
+
+**2. `sms-chaser-attempt-1` EF extended** — accepts optional `cooldown_hours` in the body. When set, the EF passes it through `fireChaserSms` → `sendSms` so the idempotency check on `(submission_id, comm_type)` windows to that interval instead of once-ever. The auto-fire path (`crm.fire_sms_chaser_attempt_1`, migration 0157) doesn't pass it — once-ever behaviour preserved. Bulk path passes 24. EF also tags `sms_log.metadata.trigger_source` as `admin_bulk_chaser` for the manual path (auto-fire stays `attempt_1_no_answer`).
+
+**3. `sendSms` (`_shared/brevo.ts`) extended** — new optional `cooldownHours` arg. Undefined = current once-ever behaviour (no other caller passes it). Set = windowed check via `triggered_at > now() - make_interval(hours => N)`.
+
+**4. New server action `fireSmsChaser(submissionIds[])`** in `app/admin/leads/bulk-actions.ts`. Calls the new RPC, returns per-id status, revalidates `/leads`.
+
+**5. New "Send SMS chaser" button** in the sticky `BulkActionBar` on `/admin/leads`. Sits next to the existing "Send chaser" (email) button. Toast surfaces fired vs skipped (with reasons: archived / no phone / not routed / sms sent within last 24h). RPC counts are accurate; the EF runs its own gates async for SMS-specific rules (gov/loan funding, `sms_chaser_enabled`, regional rep phone) but those are rare skip reasons for active providers.
+
+**Why the 24h window:** auto-fire path is once-ever (one SMS per learner per attempt-1 click). Charlotte wanted a manual nudge button for two cases: (a) leads where the auto-fire didn't happen (provider jumped to attempt_2 without clicking attempt_1_no_answer), (b) leads where she wants a second push at least a day after the first. 24h matches "don't spam the learner today" without locking her out of next-day re-pushes.
+
+**Impact assessment (per .claude/rules/data-infrastructure.md §8):**
+- Change: new SECURITY DEFINER function. Three files extended additively (`brevo.ts`, `sms-utility.ts`, `sms-chaser-attempt-1/index.ts`). New server action + UI button.
+- Readers/writers: only the new server action + new UI button consume the RPC. Auto-fire path untouched (no caller passes `cooldownHours`, so dedup stays once-ever).
+- Schema_version: no contract bumped.
+- Data migration: none.
+- New role / policy: none.
+- Rollback: DROP FUNCTION in the migration DOWN block; revert the file edits.
+- Sign-off: Owner 2026-05-26.
+
+**Owner setup (one-shot):** apply migration 0174, redeploy `sms-chaser-attempt-1` EF.
+
+**Sign-off:** Owner (2026-05-26).
+
+---
+
 ## 2026-05-25 — CMS Phase 2.3: Storage uploads (0170) + agent write surface (blog-post-create EF) + skill rewire
 
 **1. Migration 0170 — `blog-media` Supabase Storage bucket.** Public bucket with 10 MB file cap, JPEG/PNG/WEBP/GIF/SVG only. 4 RLS policies on `storage.objects`: anon + authenticated public read; admin INSERT / UPDATE / DELETE. Idempotent — `ON CONFLICT` updates the bucket config in place.

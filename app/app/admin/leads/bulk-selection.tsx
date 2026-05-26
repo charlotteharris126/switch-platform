@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { markEnrolmentOutcomeBulk, fireProviderChaser } from "./bulk-actions";
+import { markEnrolmentOutcomeBulk, fireProviderChaser, fireSmsChaser } from "./bulk-actions";
 import type { EnrolmentStatus, LostReason } from "./[id]/actions";
 
 // -----------------------------------------------------------------------------
@@ -175,6 +175,38 @@ export function BulkActionBar() {
     });
   }
 
+  function handleFireSmsChaser() {
+    const submissionIds = Array.from(selected);
+    if (submissionIds.length === 0) return;
+
+    startTransition(async () => {
+      const result = await fireSmsChaser(submissionIds);
+      if (!result.ok) {
+        toast.error("SMS chaser failed", {
+          description: "DB error firing SMS chaser. See logs.",
+        });
+        return;
+      }
+      const skippedReasons = Array.from(
+        new Set(
+          result.perId
+            .filter((r) => r.status === "skipped")
+            .map((r) => r.reason ?? "skipped"),
+        ),
+      );
+      if (result.skipped === 0) {
+        toast.success(`SMS chaser sent for ${result.fired}`, {
+          description: "Brevo SMS dispatch queued.",
+        });
+      } else {
+        toast.warning(`SMS chaser sent for ${result.fired}, ${result.skipped} skipped`, {
+          description: skippedReasons.join("; ") || "See per-id detail.",
+        });
+      }
+      clear();
+    });
+  }
+
   function handleApply() {
     if (!status) {
       toast.warning("Pick a status before applying.");
@@ -319,6 +351,15 @@ export function BulkActionBar() {
               className="h-9 px-4 text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60 hover:bg-[#fbf9f5] active:scale-[0.97] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Send chaser
+            </button>
+            <button
+              type="button"
+              onClick={handleFireSmsChaser}
+              disabled={pending}
+              title="Sends the chaser SMS to selected learners. Gov/loan-funded only, requires phone + regional rep phone + provider sms_chaser_enabled. Skips any learner who got a chaser SMS in the last 24h."
+              className="h-9 px-4 text-[10px] font-bold uppercase tracking-[0.08em] rounded-full bg-white text-[#143643] border border-[#dad4cb] hover:border-[#cd8b76]/60 hover:bg-[#fbf9f5] active:scale-[0.97] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Send SMS chaser
             </button>
           </div>
         </div>

@@ -1,22 +1,20 @@
 // Edge Function: sms-chaser-attempt-1
 //
-// Chunk 2 of SMS utility build. Fires the chaser SMS (Trigger C) when a
-// provider marks an `attempt_1_no_answer` outcome in the portal. Wired
-// from the server action `markOutcomeAction` via the RPC
-// `crm.fire_sms_chaser_attempt_1` → `net.http_post` to this URL. Mirrors
-// the email chaser dispatch pattern (`crm.fire_provider_chaser` →
-// `admin-brevo-chase`).
-//
-// Fires ONCE per submission via the sendSms idempotency check on
-// (submission_id, 'chaser_call_attempt'). Subsequent attempt_2 / attempt_3
-// / cannot_reach transitions do NOT fire another SMS — the email chaser
-// still fires on each one per the existing markOutcomeAction logic.
+// Chunk 2 of SMS utility build. Fires the chaser SMS (Trigger C). Two
+// callers:
+//   1. Auto-fire: server action `markOutcomeAction` clicks
+//      attempt_1_no_answer → `crm.fire_sms_chaser_attempt_1` → this EF
+//      with no cooldown_hours → sendSms blocks once-ever (one SMS per
+//      learner). Mirrors the email chaser dispatch pattern.
+//   2. Manual batch: /admin/leads "Send SMS chaser" bulk button →
+//      `crm.fire_sms_chaser_bulk` → this EF with cooldown_hours=24 →
+//      sendSms windows the dedup check so Charlotte can re-push tomorrow.
 //
 // Auth: x-audit-key matched against AUDIT_SHARED_SECRET (vault). Same
 // pattern as admin-test-sms / admin-test-email / admin-brevo-chase.
 //
 // Body:
-//   { "submission_id": 347 }
+//   { "submission_id": 347, "cooldown_hours"?: 24 }
 //
 // Response:
 //   { ok: true, status: "sent" | "skipped_duplicate" | ..., sms_log_id?, brevo_message_id?, shadow_mode }
@@ -50,6 +48,7 @@ async function getAuditSharedSecret(): Promise<string> {
 
 interface RequestBody {
   submission_id?: unknown;
+  cooldown_hours?: unknown;
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -77,6 +76,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
   const submissionId = typeof body.submission_id === "number" ? body.submission_id : null;
   if (!submissionId) return json({ error: "submission_id required" }, 400);
+  const cooldownHours = typeof body.cooldown_hours === "number" && body.cooldown_hours > 0
+    ? body.cooldown_hours
+    : undefined;
+  const triggerSourceOverride = cooldownHours !== undefined ? "admin_bulk_chaser" : undefined;
 
   let submission: SubmissionRow | undefined;
   try {
@@ -109,7 +112,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
   if (!provider) return json({ error: "routed provider not found" }, 404);
 
-  const outcome = await fireChaserSms({ sql, submission, provider });
+  const outcome = await fireChaserSms({ sql, submission, provider, cooldownHours, triggerSourceOverride });
   if (outcome.kind === "skipped") {
     return json({ ok: true, status: "skipped", reason: outcome.reason });
   }

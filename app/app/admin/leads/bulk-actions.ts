@@ -101,6 +101,61 @@ export async function fireProviderChaser(
   };
 }
 
+export interface FireSmsChaserResult {
+  ok: boolean;
+  fired: number;
+  skipped: number;
+  perId: Array<{ submissionId: number; status: string; reason: string | null }>;
+}
+
+// Bulk-fire the SMS chaser for the selected submission ids. Calls
+// crm.fire_sms_chaser_bulk (migration 0174), which gates each row on a 24h
+// cooldown window (skip if a non-failed chaser SMS landed in the last 24h)
+// then async-fires the existing sms-chaser-attempt-1 Edge Function with
+// cooldown_hours=24 so sendSms's internal dedup matches.
+//
+// Differs from fireProviderChaser in two ways: (a) windowed cooldown, not
+// once-ever — Charlotte can re-push a learner tomorrow; (b) no lead_type
+// split — SMS chaser is learner-only (gov/loan funded, gated inside the EF).
+// Employer leads selected in the same batch will skip at the EF gate on
+// funding_category.
+export async function fireSmsChaser(
+  submissionIds: number[],
+): Promise<FireSmsChaserResult> {
+  if (submissionIds.length === 0) {
+    return { ok: true, fired: 0, skipped: 0, perId: [] };
+  }
+
+  const supabase = await createClient();
+
+  type ChaserRow = { submission_id: number; status: string; reason: string | null };
+
+  const { data, error } = await supabase
+    .schema("crm")
+    .rpc("fire_sms_chaser_bulk", { p_submission_ids: submissionIds });
+
+  if (error) {
+    return { ok: false, fired: 0, skipped: 0, perId: [] };
+  }
+
+  const rows = (data as ChaserRow[]) ?? [];
+  const fired = rows.filter((r) => r.status === "ok").length;
+  const skipped = rows.filter((r) => r.status === "skipped").length;
+
+  revalidatePath("/leads");
+
+  return {
+    ok: true,
+    fired,
+    skipped,
+    perId: rows.map((r) => ({
+      submissionId: r.submission_id,
+      status: r.status,
+      reason: r.reason,
+    })),
+  };
+}
+
 export interface BulkMarkEnrolmentInput {
   submissionIds: number[];
   status: EnrolmentStatus;

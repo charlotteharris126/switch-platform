@@ -695,6 +695,13 @@ export interface SendSmsArgs {
   metadata?: Record<string, unknown>;
   /** Brevo "tag" field — surfaces in their dashboard for filtering. */
   tag?: string;
+  /** Optional dedup window. When set, the (submission_id, comm_type)
+   *  idempotency check only blocks if a non-failed row landed within this
+   *  many hours. When undefined (default), the check is once-ever (matches
+   *  the auto-fire path: provider clicks attempt_1_no_answer → one SMS). The
+   *  manual batch path (crm.fire_sms_chaser_bulk → sms-chaser-attempt-1)
+   *  passes 24 so Charlotte can re-push a learner tomorrow if needed. */
+  cooldownHours?: number;
 }
 
 export type SendSmsStatus =
@@ -725,16 +732,32 @@ export async function sendSms(args: SendSmsArgs): Promise<SendSmsResult> {
   // Idempotency: skip if a non-failed row already exists for this
   // (submission_id, comm_type). 'failed' / 'undelivered' rows do not block —
   // a previous failure must not silently silence the next attempt. Matches
-  // the sendTransactional pattern. No force-resend path for SMS — every
-  // utility SMS is a single-shot per learner per comm_type.
+  // the sendTransactional pattern.
+  //
+  // Default behaviour (cooldownHours undefined) is once-ever — the auto-fire
+  // attempt-1 path relies on this so a learner only ever gets one auto SMS.
+  // The manual batch path passes cooldownHours=24 which windows the check,
+  // letting Charlotte re-push a learner the next day.
   try {
-    const existing = await args.sql<Array<{ id: number }>>`
-      SELECT id FROM crm.sms_log
-       WHERE submission_id = ${args.submissionId}
-         AND comm_type     = ${args.commType}
-         AND status IN ('queued','sent','delivered')
-       LIMIT 1
-    `;
+    const cooldownHours = typeof args.cooldownHours === "number" && args.cooldownHours > 0
+      ? args.cooldownHours
+      : null;
+    const existing = cooldownHours === null
+      ? await args.sql<Array<{ id: number }>>`
+          SELECT id FROM crm.sms_log
+           WHERE submission_id = ${args.submissionId}
+             AND comm_type     = ${args.commType}
+             AND status IN ('queued','sent','delivered')
+           LIMIT 1
+        `
+      : await args.sql<Array<{ id: number }>>`
+          SELECT id FROM crm.sms_log
+           WHERE submission_id = ${args.submissionId}
+             AND comm_type     = ${args.commType}
+             AND status IN ('queued','sent','delivered')
+             AND triggered_at  > now() - make_interval(hours => ${cooldownHours})
+           LIMIT 1
+        `;
     if (existing.length > 0) {
       return { ok: true, status: "skipped_duplicate", smsLogId: Number(existing[0].id), shadowMode };
     }
