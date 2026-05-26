@@ -97,6 +97,9 @@ export default async function BlogAdminPage() {
         }
         actions={
           <div className="flex gap-2">
+            <Link href="/admin/blog/featured">
+              <Button variant="outline">Featured</Button>
+            </Link>
             <Link href="/admin/blog/calendar">
               <Button variant="outline">Calendar</Button>
             </Link>
@@ -247,9 +250,9 @@ function PostSection({
                     href={`/admin/blog/${p.slug}/edit`}
                     className="block hover:text-[#287271]"
                   >
-                    {p.featured && (
+                    {p.featured_position && (
                       <span className="inline-block text-[9px] font-bold uppercase tracking-wider bg-[#E9C46A] text-[#11242e] px-1.5 py-0.5 rounded mr-2">
-                        Featured
+                        Featured #{p.featured_position}
                       </span>
                     )}
                     {p.title || <em className="text-[#5a6a72]">Untitled</em>}

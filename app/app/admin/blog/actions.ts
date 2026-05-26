@@ -55,7 +55,7 @@ export type Post = {
   reading_time_minutes: number | null;
   cover_image_url: string | null;
   cover_image_alt: string | null;
-  featured: boolean;
+  featured_position: number | null;   // 1 / 2 / 3 = featured slot on /the-switch/. null = not featured.
   lead_magnet_enabled: boolean;
   meta_title: string | null;
   meta_description: string | null;
@@ -83,7 +83,6 @@ export type PostFormInput = {
   publish_time: string;        // HH:MM in UK timezone, optional; combined with publish_date → publish_at
   cover_image_url: string;
   cover_image_alt: string;
-  featured: boolean;
   lead_magnet_enabled: boolean;
   meta_title: string;
   meta_description: string;
@@ -114,36 +113,14 @@ function readingTimeFromBody(body: string): number {
   return Math.max(1, Math.round(words / 220));
 }
 
-// Featured enforcement helper. Migration 0171 added a partial unique
-// index `WHERE featured = TRUE`. Server actions that flip a post to
-// featured must first unflip any current holder; otherwise the INSERT/
-// UPDATE rejects with a duplicate-key error. Pass `excludeId` to skip
-// the row currently being edited (it may already hold featured=TRUE).
-async function unflipExistingFeatured(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  excludeId?: number,
-): Promise<void> {
-  let q = supabase
-    .schema("editorial")
-    .from("posts")
-    .update({ featured: false })
-    .eq("featured", true);
-  if (excludeId !== undefined) {
-    q = q.neq("id", excludeId);
-  }
-  // Best-effort — if it fails, the INSERT/UPDATE will still produce a clear
-  // dup-key error which friendlyDbError translates for the UI.
-  await q;
-}
-
 // Translate the noisier Postgres / PostgREST error messages into something
 // Charlotte can actually read in the Save banner.
 function friendlyDbError(raw: string): string {
   if (raw.includes("posts_slug_key") || raw.includes("duplicate key value violates")) {
     return "Slug already in use. Pick another.";
   }
-  if (raw.includes("posts_only_one_featured")) {
-    return "Another post is already featured. Untick it first, or this save will replace it.";
+  if (raw.includes("posts_one_per_featured_position")) {
+    return "Another post is already in that featured slot. Move it out first via /admin/blog/featured.";
   }
   if (raw.includes("row-level security")) {
     return "Not authorised to write to this table. Check admin allowlist (admin.is_admin in migration 0014).";
@@ -321,12 +298,6 @@ export async function createPostAction(input: PostFormInput): Promise<ActionResu
     return { ok: false, error: `Slug "${input.slug.trim()}" is already in use. Pick another.` };
   }
 
-  // Featured enforcement: if marking this post featured, unflip any
-  // existing featured row first so the partial-unique index doesn't reject.
-  if (input.featured) {
-    await unflipExistingFeatured(gate.supabase);
-  }
-
   const row = {
     slug: input.slug.trim(),
     title: input.title.trim(),
@@ -340,7 +311,6 @@ export async function createPostAction(input: PostFormInput): Promise<ActionResu
     reading_time_minutes: readingTimeFromBody(input.body),
     cover_image_url: input.cover_image_url.trim() || null,
     cover_image_alt: input.cover_image_alt.trim() || null,
-    featured: input.featured,
     lead_magnet_enabled: input.lead_magnet_enabled,
     meta_title: input.meta_title.trim() || null,
     meta_description: input.meta_description.trim() || null,
@@ -411,11 +381,6 @@ export async function updatePostAction(
     }
   }
 
-  // Featured enforcement: if marking this post featured, unflip any other
-  // existing featured row first.
-  if (input.featured) {
-    await unflipExistingFeatured(gate.supabase, existing.id as number);
-  }
 
   const patch = {
     slug: input.slug.trim(),
@@ -430,7 +395,6 @@ export async function updatePostAction(
     reading_time_minutes: readingTimeFromBody(input.body),
     cover_image_url: input.cover_image_url.trim() || null,
     cover_image_alt: input.cover_image_alt.trim() || null,
-    featured: input.featured,
     lead_magnet_enabled: input.lead_magnet_enabled,
     meta_title: input.meta_title.trim() || null,
     meta_description: input.meta_description.trim() || null,
@@ -774,6 +738,104 @@ export async function removeTagFromPostsAction(
   return { ok: true, data: { removed: postIds.length } };
 }
 
+
+// ── Featured slots ──────────────────────────────────────────────────────────
+// Up to 3 ranked featured slots on /the-switch/. Slot 1 = lead hero card;
+// slots 2 + 3 = secondary cards. Managed centrally from /admin/blog/featured
+// rather than from each post's edit form.
+
+export type FeaturedSlot = {
+  position: 1 | 2 | 3;
+  post: Pick<Post, "id" | "slug" | "title" | "status" | "category_id" | "cover_image_url" | "publish_date"> | null;
+};
+
+export async function listFeaturedSlotsAction(): Promise<ActionResult<{ slots: FeaturedSlot[] }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  const { data, error } = await gate.supabase
+    .schema("editorial")
+    .from("posts")
+    .select("id, slug, title, status, category_id, cover_image_url, publish_date, featured_position")
+    .not("featured_position", "is", null)
+    .order("featured_position", { ascending: true });
+
+  if (error) return { ok: false, error: error.message };
+
+  const byPos = new Map<number, Post>();
+  for (const r of (data ?? [])) {
+    const p = r as Post & { featured_position: number };
+    byPos.set(p.featured_position, p);
+  }
+  const slots: FeaturedSlot[] = [1, 2, 3].map((pos) => ({
+    position: pos as 1 | 2 | 3,
+    post: (byPos.get(pos) as FeaturedSlot["post"]) ?? null,
+  }));
+  return { ok: true, data: { slots } };
+}
+
+export async function listPublishedPostsForFeaturedAction(): Promise<ActionResult<Array<Pick<Post, "id" | "slug" | "title" | "publish_date" | "featured_position">>>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  const { data, error } = await gate.supabase
+    .schema("editorial")
+    .from("posts")
+    .select("id, slug, title, publish_date, featured_position")
+    .eq("status", "published")
+    .order("publish_date", { ascending: false, nullsFirst: false });
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: (data ?? []) as Array<Pick<Post, "id" | "slug" | "title" | "publish_date" | "featured_position">> };
+}
+
+// Sets a post into a featured slot. If another post currently holds that
+// slot, it gets cleared (featured_position → null) first so the partial
+// unique index doesn't reject. Passing null clears the slot entirely.
+export async function setFeaturedSlotAction(
+  position: 1 | 2 | 3,
+  postId: number | null,
+): Promise<ActionResult<{ position: number; postId: number | null }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  if (![1, 2, 3].includes(position)) {
+    return { ok: false, error: "Position must be 1, 2, or 3" };
+  }
+
+  // Step 1: clear whatever currently holds this slot.
+  const { error: clearErr } = await gate.supabase
+    .schema("editorial")
+    .from("posts")
+    .update({ featured_position: null })
+    .eq("featured_position", position);
+  if (clearErr) return { ok: false, error: friendlyDbError(clearErr.message) };
+
+  // Step 2: if a post was named, also clear it from any OTHER slot it might
+  // be in (a post can't hold two slots simultaneously), then set the new slot.
+  if (postId !== null) {
+    const { error: dedupeErr } = await gate.supabase
+      .schema("editorial")
+      .from("posts")
+      .update({ featured_position: null })
+      .eq("id", postId);
+    if (dedupeErr) return { ok: false, error: friendlyDbError(dedupeErr.message) };
+
+    const { error: setErr } = await gate.supabase
+      .schema("editorial")
+      .from("posts")
+      .update({ featured_position: position })
+      .eq("id", postId);
+    if (setErr) return { ok: false, error: friendlyDbError(setErr.message) };
+  }
+
+  // Fire the build hook so the live homepage reflects the new featured stack.
+  await fireBuildHookOnPublish(gate.supabase, `featured slot ${position} updated`);
+
+  revalidatePath("/admin/blog/featured");
+  revalidatePath("/admin/blog");
+  return { ok: true, data: { position, postId } };
+}
 
 // ── Cron test trigger ────────────────────────────────────────────────────────
 // Fires editorial.auto_publish_scheduled_posts() on demand. Use to test

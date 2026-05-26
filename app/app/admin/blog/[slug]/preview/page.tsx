@@ -79,7 +79,6 @@ export default async function PreviewBlogPostPage({
     publish_time: "",   // preview surface; SEO checklist doesn't read it
     cover_image_url: post.cover_image_url ?? "",
     cover_image_alt: post.cover_image_alt ?? "",
-    featured: post.featured,
     lead_magnet_enabled: post.lead_magnet_enabled,
     meta_title: post.meta_title ?? "",
     meta_description: post.meta_description ?? "",

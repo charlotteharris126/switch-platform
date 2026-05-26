@@ -49,7 +49,6 @@ function emptyInput(): PostFormInput {
     publish_time: "",
     cover_image_url: "",
     cover_image_alt: "",
-    featured: false,
     lead_magnet_enabled: true,
     meta_title: "",
     meta_description: "",
@@ -92,7 +91,6 @@ function fromPost(post: Post, tagSlugs: string[]): PostFormInput {
     publish_time: pubTime,
     cover_image_url: post.cover_image_url ?? "",
     cover_image_alt: post.cover_image_alt ?? "",
-    featured: post.featured,
     lead_magnet_enabled: post.lead_magnet_enabled,
     meta_title: post.meta_title ?? "",
     meta_description: post.meta_description ?? "",
@@ -360,40 +358,64 @@ function ContentTab({
 }) {
   return (
     <div className="space-y-8">
+      {/* Status banner — full-width row at the top of the form. Coloured pill
+          shows the current state at a glance; the selector right next to it
+          changes it. Sits above every other field so it's never missed. */}
+      <section className="flex flex-wrap items-center gap-3 bg-white rounded-xl border border-[#e5dfd8] p-4">
+        <span
+          className={
+            "inline-block px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-[0.12em] border " +
+            (input.status === "published"
+              ? "bg-[#dcefea] text-[#1f5f5e] border-[#bcdfd8]"
+              : input.status === "scheduled"
+              ? "bg-[#fbe5cb] text-[#92651c] border-[#e9c46a]"
+              : input.status === "archived"
+              ? "bg-[#eee9e0] text-[#5a6a72] border-[#d4ccc0]"
+              : "bg-[#f5f2eb] text-[#11242e] border-[#d4ccc0]")
+          }
+        >
+          {input.status}
+        </span>
+        <div className="flex items-center gap-2">
+          <Label htmlFor="status" className="text-[12px] text-[#5a6a72] m-0">Change to:</Label>
+          <select
+            id="status"
+            value={input.status}
+            onChange={(e) => update("status", e.target.value as PostStatus)}
+            disabled={pending}
+            className="h-9 px-3 rounded-md border border-input bg-white text-sm font-bold"
+          >
+            <option value="draft">Draft</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="published">Published</option>
+            <option value="archived">Archived</option>
+          </select>
+        </div>
+        <p className="text-[11px] text-[#5a6a72] basis-full">
+          {input.status === "draft" && "Not on the live site. Visible only in admin + at /preview/the-switch/<slug>/."}
+          {input.status === "scheduled" && "Will auto-flip to published when the publish date+time hits. Cron runs every 15 min."}
+          {input.status === "published" && "Live on switchable.org.uk/the-switch/<slug>/. Any save fires a Netlify rebuild."}
+          {input.status === "archived" && "Removed from the live site. Still in the DB for restore. Old URL 301s preserved via slug history."}
+        </p>
+      </section>
+
       <section className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Label htmlFor="slug">URL slug</Label>
-            <Input
-              id="slug"
-              value={input.slug}
-              onChange={(e) => onSlugChange(e.target.value)}
-              placeholder="how-to-change-career-uk"
-              required
-              disabled={pending}
-            />
-            <p className="text-[11px] text-[#5a6a72] mt-1">
-              {slugAutoFilled
-                ? <>Auto-generated from the title. Edit to lock it.</>
-                : <>Becomes <code className="font-mono">/the-switch/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.</>
-              }
-            </p>
-          </div>
-          <div>
-            <Label htmlFor="status">Status</Label>
-            <select
-              id="status"
-              value={input.status}
-              onChange={(e) => update("status", e.target.value as PostStatus)}
-              disabled={pending}
-              className="w-full h-9 px-3 rounded-md border border-input bg-white text-sm"
-            >
-              <option value="draft">Draft</option>
-              <option value="scheduled">Scheduled</option>
-              <option value="published">Published</option>
-              <option value="archived">Archived</option>
-            </select>
-          </div>
+        <div>
+          <Label htmlFor="slug">URL slug</Label>
+          <Input
+            id="slug"
+            value={input.slug}
+            onChange={(e) => onSlugChange(e.target.value)}
+            placeholder="how-to-change-career-uk"
+            required
+            disabled={pending}
+          />
+          <p className="text-[11px] text-[#5a6a72] mt-1">
+            {slugAutoFilled
+              ? <>Auto-generated from the title. Edit to lock it.</>
+              : <>Becomes <code className="font-mono">/the-switch/{input.slug || "your-slug"}/</code>. Lowercase, hyphens, no spaces.</>
+            }
+          </p>
         </div>
 
         <div>
@@ -566,21 +588,15 @@ function ContentTab({
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
-                checked={input.featured}
-                onChange={(e) => update("featured", e.target.checked)}
-                disabled={pending}
-              />
-              Feature on The Switch home (only one can be featured at a time)
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
                 checked={input.lead_magnet_enabled}
                 onChange={(e) => update("lead_magnet_enabled", e.target.checked)}
                 disabled={pending}
               />
               Show lead-magnet CTA in the bottom-of-post stack
             </label>
+            <p className="text-[11px] text-[#5a6a72]">
+              To feature this post on The Switch home, visit <a href="/admin/blog/featured" className="underline text-[#287271]">/admin/blog/featured</a>. Up to 3 ranked slots, managed centrally.
+            </p>
           </div>
         </div>
       </section>
