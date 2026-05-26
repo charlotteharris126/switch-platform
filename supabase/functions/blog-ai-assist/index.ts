@@ -201,7 +201,7 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
     buildUser: (r) => {
       const p = r.post;
       return [
-        "Suggest 5 title variants for this blog post.",
+        "Suggest 5 title variants for THIS specific post. Read the body excerpt below before writing anything — every variant must genuinely fit what the post actually covers. Do not widen the topic to generic career-change content; do not drop key subjects that the current title or body anchors to.",
         "",
         p.title ? `Current draft title: ${p.title}` : "",
         p.dek ? `Dek: ${p.dek}` : "",
@@ -209,10 +209,20 @@ const SURFACES: Record<Kind, SurfaceConfig> = {
           ? `Target keywords: ${p.target_keywords.join(", ")}`
           : "",
         p.body
-          ? `First paragraph of body:\n${p.body.split("\n\n").slice(0, 1).join("\n\n").slice(0, 400)}`
+          ? `Body excerpt (start + end so you see the actual angle, not just the intro):\n${sample(p.body, 1500)}`
           : "",
         "",
-        "Each title 40-60 characters. Action-shaped. Names the outcome. Plain UK English. No clickbait, no exclamation marks. Mix angles: 1 plain literal, 1 question-shaped, 1 contrarian, 1 outcome-focused, 1 with a number where it fits naturally.",
+        "RULES:",
+        "- 40-60 characters each.",
+        "- Plain UK English. No clickbait. No exclamation marks. No em dashes.",
+        "- If the current title or body names specific subjects (e.g. 'pensions', 'savings', 'self-employed', a specific funding route), at least 3 of your 5 variants MUST keep those specifics. Don't quietly generalise.",
+        "- Mix angles across the 5: 1 plain-literal, 1 question-shaped, 1 contrarian-but-honest, 1 outcome-focused, 1 with a real number/year/cohort where it fits naturally.",
+        "",
+        "BANNED PATTERNS (these will be rejected — never use):",
+        "- 'X is not Y' / 'X isn't Y. It's Z.' setup-and-reveal pairs.",
+        "- Clipped emphasis fragments after a positive setup ('Worth knowing.', 'Different problem.', 'Three reasons.').",
+        "- Rhetorical triples ('real numbers, real learners, real results').",
+        "- 'Here's the thing' / 'What surprised me most was' tics.",
       ].filter(Boolean).join("\n");
     },
     // NB: Anthropic's json_schema validator only supports minItems values
