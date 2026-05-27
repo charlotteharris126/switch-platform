@@ -27,11 +27,15 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 const LEAD_STATUSES: Array<{ value: string; label: string }> = [
   // Learner statuses
-  { value: "open",              label: "Open" },
-  { value: "enrolled",          label: "Enrolled" },
-  { value: "presumed_enrolled", label: "Presumed enrolled" },
-  { value: "cannot_reach",      label: "Cannot reach" },
-  { value: "lost",              label: "Lost" },
+  { value: "open",                    label: "Open" },
+  { value: "attempt_1_no_answer",     label: "1st attempt — no answer" },
+  { value: "attempt_2_no_answer",     label: "2nd attempt — no answer" },
+  { value: "attempt_3_no_answer",     label: "3rd attempt — no answer" },
+  { value: "cannot_reach",            label: "Cannot reach" },
+  { value: "enrolment_meeting_booked",label: "Enrolment meeting booked" },
+  { value: "enrolled",                label: "Enrolled" },
+  { value: "presumed_enrolled",       label: "Presumed enrolled" },
+  { value: "lost",                    label: "Lost" },
   // Employer statuses (Switchable for Business v1)
   { value: "engaged",                  label: "Engaged (B2B)" },
   { value: "in_progress",              label: "In progress (B2B)" },
@@ -217,7 +221,7 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Routed to</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Matched to</span>
         <select
           className={selectClass}
           value={current.provider ?? ""}
@@ -233,15 +237,28 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Status</span>
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Matched</span>
         <select
           className={selectClass}
           value={current.routed ?? ""}
           onChange={(e) => updateParam("routed", e.target.value)}
         >
           <option value="">Any</option>
-          <option value="yes">Routed</option>
-          <option value="no">Unrouted</option>
+          <option value="yes">Matched</option>
+          <option value="no">Not matched</option>
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Chased</span>
+        <select
+          className={selectClass}
+          value={current.chased ?? ""}
+          onChange={(e) => updateParam("chased", e.target.value)}
+        >
+          <option value="">Any</option>
+          <option value="yes">Chased</option>
+          <option value="no">Not chased</option>
         </select>
       </label>
 
@@ -255,19 +272,6 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
           <option value="">Any</option>
           <option value="no">Qualified</option>
           <option value="yes">DQ'd</option>
-        </select>
-      </label>
-
-      <label className="flex flex-col gap-1">
-        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Has phone</span>
-        <select
-          className={selectClass}
-          value={current.has_phone ?? ""}
-          onChange={(e) => updateParam("has_phone", e.target.value)}
-        >
-          <option value="">Any</option>
-          <option value="yes">Yes</option>
-          <option value="no">No</option>
         </select>
       </label>
 
