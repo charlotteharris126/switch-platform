@@ -439,7 +439,14 @@ export default async function LeadsPage({
 
   return (
     <div>
-      <RealtimeRefresh tables={[{ schema: "leads", table: "submissions" }]} />
+      <RealtimeRefresh
+        tables={[
+          { schema: "leads", table: "submissions" },
+          { schema: "crm",   table: "enrolments" },
+          { schema: "crm",   table: "email_log" },
+          { schema: "crm",   table: "sms_log" },
+        ]}
+      />
       <PageHeader
         eyebrow="Leads"
         title="Lead submissions"
