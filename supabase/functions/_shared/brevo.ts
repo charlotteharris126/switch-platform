@@ -662,8 +662,13 @@ function stripHtml(html: string): string {
 // sendSms is the canonical helper for utility SMS under the spec at
 // switchable/email/docs/sms-utility-design.md (Wren, locked 2026-05-21).
 // Three comm types: call_reminder_fastrack_link, call_reminder_save_number,
-// chaser_call_attempt. Each fires once per (submission_id, comm_type) — no
-// force-resend pattern, no chaser-style re-fire.
+// chaser_call_attempt. Default dedup is once-ever per (submission_id,
+// comm_type) — the auto-fire path (attempt_1_no_answer trigger) relies on
+// this. The bulk admin chaser path passes cooldownHours=24 to window the
+// dedup check, letting Charlotte re-push a learner the next day. The
+// partial unique index sms_log_submission_type_uniq was dropped in
+// migration 0176 because it couldn't express the time-windowed semantic;
+// dedup is now purely application-side via the SELECT below.
 //
 // Bodies are template-literal in the calling code (NOT Brevo-templated). The
 // rendered string is passed in and stored in crm.sms_log.body_rendered for
