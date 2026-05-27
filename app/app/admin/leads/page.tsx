@@ -287,8 +287,15 @@ export default async function LeadsPage({
       data = [];
       count = 0;
     } else {
-      // Latest chaser triggered_at per submission across healthy statuses.
-      const HEALTHY = ["queued", "sent", "delivered"];
+      // Latest chaser triggered_at per submission. Status sets must match the
+      // "Last email chaser" / "Last SMS chaser" COLUMN definitions below —
+      // if they diverge, leads with a visible timestamp in the column get
+      // treated as never-chased by the sort and sink to the bottom, which
+      // makes the sort look random. Email column includes Brevo's lifecycle
+      // statuses (opened/clicked) on top of sent/delivered; SMS doesn't
+      // have open/click webhooks wired so it stops at sent/delivered.
+      const HEALTHY_EMAIL_CHASER = ["sent", "delivered", "opened", "clicked"];
+      const HEALTHY_SMS_CHASER = ["sent", "delivered"];
       const chaserAtBySubId = new Map<number, string>();
       if (sort === "last_email_chaser") {
         const { data: rows } = await supabase
@@ -297,7 +304,7 @@ export default async function LeadsPage({
           .select("submission_id, triggered_at")
           .in("submission_id", allIds)
           .in("email_type", ["chaser_funded", "chaser_self", "s4b_employer_chaser"])
-          .in("status", HEALTHY)
+          .in("status", HEALTHY_EMAIL_CHASER)
           .order("triggered_at", { ascending: false });
         for (const r of (rows ?? []) as Array<{ submission_id: number; triggered_at: string }>) {
           if (!chaserAtBySubId.has(r.submission_id)) {
@@ -311,7 +318,7 @@ export default async function LeadsPage({
           .select("submission_id, triggered_at")
           .in("submission_id", allIds)
           .eq("comm_type", "chaser_call_attempt")
-          .in("status", HEALTHY)
+          .in("status", HEALTHY_SMS_CHASER)
           .order("triggered_at", { ascending: false });
         for (const r of (rows ?? []) as Array<{ submission_id: number; triggered_at: string }>) {
           if (!chaserAtBySubId.has(r.submission_id)) {
