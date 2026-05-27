@@ -320,24 +320,23 @@ export default async function LeadsPage({
         }
       }
 
-      // asc: nulls first (never-chased at top), then oldest → newest.
-      //      Chase-priority order.
-      // desc: nulls last (never-chased at bottom), then newest → oldest.
-      //       "What did I just do" order.
-      // Ties broken by id ascending for stability in both directions.
+      // Never-chased leads (null timestamp) always sort to the bottom in
+      // both directions. Keeping them at the top of asc was confusing —
+      // the column displayed "—" for the entire first page, making the
+      // sort look broken even though it was working. Charlotte uses the
+      // "No SMS chased" / "No email chased" filter to surface never-chased
+      // leads explicitly. Within the chased bucket:
+      //   asc  = oldest first
+      //   desc = newest first
+      // Ties broken by id ascending for stability.
       const sortedIds = [...allIds].sort((a, b) => {
         const ta = chaserAtBySubId.get(a);
         const tb = chaserAtBySubId.get(b);
         if (!ta && !tb) return a - b;
-        if (sortDir === "asc") {
-          if (!ta) return -1;
-          if (!tb) return 1;
-          if (ta === tb) return a - b;
-          return ta < tb ? -1 : 1;
-        }
-        if (!ta) return 1;
-        if (!tb) return -1;
+        if (!ta) return 1;  // a has no chaser → goes after b
+        if (!tb) return -1; // b has no chaser → a goes before b
         if (ta === tb) return a - b;
+        if (sortDir === "asc") return ta < tb ? -1 : 1;
         return ta < tb ? 1 : -1;
       });
 
