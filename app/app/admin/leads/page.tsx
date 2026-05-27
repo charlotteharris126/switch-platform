@@ -44,7 +44,15 @@ type SearchParams = {
   // Comma-separated list of emails to filter by (e.g. pasted from a provider's
   // outcome report). Case-insensitive, exact match. Empty entries ignored.
   emails?: string;
+  /** Sort mode. submitted (default, newest first) | last_email_chaser |
+   *  last_sms_chaser. The chaser sorts order oldest-first with never-chased
+   *  leads at the top — chase priority. App-side sort: pre-fetches matching
+   *  IDs, orders by chaser timestamp, paginates in JS. Fine at pilot scale. */
+  sort?: string;
 };
+
+type SortMode = "submitted" | "last_email_chaser" | "last_sms_chaser";
+const VALID_SORTS: ReadonlyArray<SortMode> = ["submitted", "last_email_chaser", "last_sms_chaser"];
 
 // Status values accepted by the ?lead_status= URL filter. Covers both
 // learner and employer state machines.
@@ -153,79 +161,156 @@ export default async function LeadsPage({
   const demoIds = await getDemoProviderIds(supabase);
   const demoInClause = demoProviderInClause(demoIds);
 
-  let q = supabase
-    .schema("leads")
-    .from("submissions")
-    .select(
-      "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign,re_submission_count",
-      { count: "exact" }
-    )
-    .order("submitted_at", { ascending: false })
-    .range(offset, offset + PAGE_SIZE - 1);
+  const sort: SortMode = (VALID_SORTS as readonly string[]).includes(sp.sort ?? "")
+    ? (sp.sort as SortMode)
+    : "submitted";
 
-  if (demoInClause) {
-    q = q.or(`primary_routed_to.is.null,primary_routed_to.not.in.${demoInClause}`);
-  }
-
-  // Default: show one row per unique person. Re-application children and
-  // waitlist-enrichment children are hidden so the list isn't cluttered with
-  // what looks like duplicates. Drill into a parent's lead detail page to
-  // see all child submissions in the re-application banner.
-  // Pass ?show_children=yes to override for audit / debugging.
-  if (sp.show_children !== "yes") {
-    q = q.is("parent_submission_id", null);
-  }
-
-  // Archived leads are always hidden from this list (pre-pills the only way to
-  // see them was the "Archived" stage pill, removed 2026-05-26). If a need for
-  // viewing archived leads resurfaces, add an explicit ?archived=yes toggle.
-  q = q.is("archived_at", null);
-
-  if (sp.funding_category) q = q.eq("funding_category", sp.funding_category);
-  if (sp.funding_route) q = q.eq("funding_route", sp.funding_route);
-  if (sp.course_id) q = q.eq("course_id", sp.course_id);
-  if (sp.provider) q = q.eq("primary_routed_to", sp.provider);
-  if (sp.dq === "yes") q = q.eq("is_dq", true);
-  if (sp.dq === "no") q = q.eq("is_dq", false);
-  if (sp.routed === "yes") q = q.not("primary_routed_to", "is", null);
-  if (sp.routed === "no") q = q.is("primary_routed_to", null);
-  if (leadStatusIds !== null) {
-    if (leadStatusIds.length > 0) {
-      q = q.in("id", leadStatusIds);
-    } else {
-      q = q.eq("id", -1); // no matching enrolments -> empty result
+  // Apply every filter (except pagination and ordering) to a query builder.
+  // Reused for the main paginated query AND the all-filtered-ids query that
+  // drives chaser-sort.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function applyFilters<T extends { eq: any; is: any; not: any; in: any; or: any; gte: any; lte: any }>(query: T): T {
+    let qq: T = query;
+    if (demoInClause) {
+      qq = (qq as { or: (s: string) => T }).or(`primary_routed_to.is.null,primary_routed_to.not.in.${demoInClause}`);
     }
-  }
-  if (chasedIds !== null) {
-    const ids = Array.from(chasedIds);
-    if (sp.chased === "yes") {
-      if (ids.length > 0) q = q.in("id", ids);
-      else q = q.eq("id", -1);
-    } else if (sp.chased === "no" && ids.length > 0) {
-      q = q.not("id", "in", `(${ids.join(",")})`);
+    if (sp.show_children !== "yes") qq = (qq as { is: (c: string, v: null) => T }).is("parent_submission_id", null);
+    qq = (qq as { is: (c: string, v: null) => T }).is("archived_at", null);
+
+    if (sp.funding_category) qq = (qq as { eq: (c: string, v: string) => T }).eq("funding_category", sp.funding_category);
+    if (sp.funding_route)    qq = (qq as { eq: (c: string, v: string) => T }).eq("funding_route", sp.funding_route);
+    if (sp.course_id)        qq = (qq as { eq: (c: string, v: string) => T }).eq("course_id", sp.course_id);
+    if (sp.provider)         qq = (qq as { eq: (c: string, v: string) => T }).eq("primary_routed_to", sp.provider);
+    if (sp.dq === "yes")     qq = (qq as { eq: (c: string, v: boolean) => T }).eq("is_dq", true);
+    if (sp.dq === "no")      qq = (qq as { eq: (c: string, v: boolean) => T }).eq("is_dq", false);
+    if (sp.routed === "yes") qq = (qq as { not: (c: string, op: string, v: null) => T }).not("primary_routed_to", "is", null);
+    if (sp.routed === "no")  qq = (qq as { is: (c: string, v: null) => T }).is("primary_routed_to", null);
+
+    if (leadStatusIds !== null) {
+      if (leadStatusIds.length > 0) {
+        qq = (qq as { in: (c: string, v: number[]) => T }).in("id", leadStatusIds);
+      } else {
+        qq = (qq as { eq: (c: string, v: number) => T }).eq("id", -1);
+      }
     }
+    if (chasedIds !== null) {
+      const ids = Array.from(chasedIds);
+      if (sp.chased === "yes") {
+        if (ids.length > 0) qq = (qq as { in: (c: string, v: number[]) => T }).in("id", ids);
+        else                qq = (qq as { eq: (c: string, v: number) => T }).eq("id", -1);
+      } else if (sp.chased === "no" && ids.length > 0) {
+        qq = (qq as { not: (c: string, op: string, v: string) => T }).not("id", "in", `(${ids.join(",")})`);
+      }
+    }
+
+    if (sp.from) qq = (qq as { gte: (c: string, v: string) => T }).gte("submitted_at", sp.from);
+    if (sp.to)   qq = (qq as { lte: (c: string, v: string) => T }).lte("submitted_at", sp.to);
+    if (sp.q) {
+      const needle = sp.q.trim();
+      qq = (qq as { or: (s: string) => T }).or(
+        `email.ilike.%${needle}%,first_name.ilike.%${needle}%,last_name.ilike.%${needle}%`
+      );
+    }
+    if (emailList.length > 0) {
+      const orClauses = emailList.map((e) => `email.ilike.${e}`).join(",");
+      qq = (qq as { or: (s: string) => T }).or(orClauses);
+    }
+    return qq;
   }
 
-  if (sp.from) q = q.gte("submitted_at", sp.from);
-  if (sp.to) q = q.lte("submitted_at", sp.to);
-  if (sp.q) {
-    const needle = sp.q.trim();
-    q = q.or(
-      `email.ilike.%${needle}%,first_name.ilike.%${needle}%,last_name.ilike.%${needle}%`
+  const SUBMISSION_COLS =
+    "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign,re_submission_count";
+
+  let data: LeadRow[] | null = null;
+  let count: number | null = null;
+  let error: { message: string } | null = null;
+
+  if (sort === "submitted") {
+    // Default path: SQL ORDER BY submitted_at DESC + range pagination.
+    const q = applyFilters(
+      supabase
+        .schema("leads")
+        .from("submissions")
+        .select(SUBMISSION_COLS, { count: "exact" })
+        .order("submitted_at", { ascending: false })
+        .range(offset, offset + PAGE_SIZE - 1)
     );
-  }
+    const res = await q;
+    data = (res.data ?? null) as LeadRow[] | null;
+    count = res.count ?? null;
+    error = res.error ? { message: res.error.message } : null;
+  } else {
+    // Chaser-sort path: fetch all matching IDs, order by chaser timestamp
+    // (nulls first → never-chased at the top = needs chasing soonest),
+    // paginate in JS, then fetch full submission rows for the page slice.
+    const idsRes = await applyFilters(
+      supabase.schema("leads").from("submissions").select("id", { count: "exact" })
+    );
+    const allIds = ((idsRes.data ?? []) as Array<{ id: number }>).map((r) => r.id);
 
-  // Email paste list: case-insensitive exact match against lower(email).
-  // Honoured at every stage so the owner can grab a list from anywhere.
-  if (emailList.length > 0) {
-    // Supabase doesn't expose ilike-IN; fall back to a series of OR ilike
-    // matches. Each value already lowercased; ilike is case-insensitive on
-    // the column too.
-    const orClauses = emailList.map((e) => `email.ilike.${e}`).join(",");
-    q = q.or(orClauses);
-  }
+    if (allIds.length === 0) {
+      data = [];
+      count = 0;
+    } else {
+      // Latest chaser triggered_at per submission across healthy statuses.
+      const HEALTHY = ["queued", "sent", "delivered"];
+      const chaserAtBySubId = new Map<number, string>();
+      if (sort === "last_email_chaser") {
+        const { data: rows } = await supabase
+          .schema("crm")
+          .from("email_log")
+          .select("submission_id, triggered_at")
+          .in("submission_id", allIds)
+          .in("email_type", ["chaser_funded", "chaser_self", "s4b_employer_chaser"])
+          .in("status", HEALTHY)
+          .order("triggered_at", { ascending: false });
+        for (const r of (rows ?? []) as Array<{ submission_id: number; triggered_at: string }>) {
+          if (!chaserAtBySubId.has(r.submission_id)) {
+            chaserAtBySubId.set(r.submission_id, r.triggered_at);
+          }
+        }
+      } else {
+        const { data: rows } = await supabase
+          .schema("crm")
+          .from("sms_log")
+          .select("submission_id, triggered_at")
+          .in("submission_id", allIds)
+          .eq("comm_type", "chaser_call_attempt")
+          .in("status", HEALTHY)
+          .order("triggered_at", { ascending: false });
+        for (const r of (rows ?? []) as Array<{ submission_id: number; triggered_at: string }>) {
+          if (!chaserAtBySubId.has(r.submission_id)) {
+            chaserAtBySubId.set(r.submission_id, r.triggered_at);
+          }
+        }
+      }
 
-  const { data, count, error } = await q;
+      // ascending order with nulls first: never-chased at the top, then
+      // oldest chaser, then newest. Ties broken by id ascending for stability.
+      const sortedIds = [...allIds].sort((a, b) => {
+        const ta = chaserAtBySubId.get(a);
+        const tb = chaserAtBySubId.get(b);
+        if (!ta && !tb) return a - b;
+        if (!ta) return -1;
+        if (!tb) return 1;
+        if (ta === tb) return a - b;
+        return ta < tb ? -1 : 1;
+      });
+
+      const pageIds = sortedIds.slice(offset, offset + PAGE_SIZE);
+      const { data: subData, error: subErr } = await supabase
+        .schema("leads")
+        .from("submissions")
+        .select(SUBMISSION_COLS)
+        .in("id", pageIds);
+
+      const bySubId = new Map<number, LeadRow>();
+      for (const r of (subData ?? []) as LeadRow[]) bySubId.set(r.id, r);
+      data = pageIds.map((id) => bySubId.get(id)).filter((r): r is LeadRow => !!r);
+      count = sortedIds.length;
+      error = subErr ? { message: subErr.message } : null;
+    }
+  }
 
   // Load filter dropdown options + enrolment statuses + email_log status for the rows on this page in parallel.
   const submissionIdsOnPage = (data ?? []).map((r: { id: number }) => r.id);
@@ -359,15 +444,21 @@ export default async function LeadsPage({
                 <BulkSelectionMasterCheckbox />
               </TableHead>
               <TableHead className="w-16">ID</TableHead>
-              <TableHead>Submitted</TableHead>
+              <TableHead>
+                <SortHeader currentSort={sort} target="submitted" sp={sp}>Submitted</SortHeader>
+              </TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Course</TableHead>
               <TableHead>Funding</TableHead>
               <TableHead>Lead status</TableHead>
               <TableHead>U1</TableHead>
-              <TableHead>Last email chaser</TableHead>
-              <TableHead>Last SMS chaser</TableHead>
+              <TableHead>
+                <SortHeader currentSort={sort} target="last_email_chaser" sp={sp}>Last email chaser</SortHeader>
+              </TableHead>
+              <TableHead>
+                <SortHeader currentSort={sort} target="last_sms_chaser" sp={sp}>Last SMS chaser</SortHeader>
+              </TableHead>
               <TableHead>Campaign</TableHead>
               <TableHead>Matched to</TableHead>
             </TableRow>
@@ -522,6 +613,40 @@ export default async function LeadsPage({
       <BulkActionBar />
       </BulkSelectionProvider>
     </div>
+  );
+}
+
+function SortHeader({
+  currentSort,
+  target,
+  sp,
+  children,
+}: {
+  currentSort: SortMode;
+  target: SortMode;
+  sp: SearchParams;
+  children: React.ReactNode;
+}) {
+  const isActive = currentSort === target;
+  // Clicking an active sort returns to default (submitted). Otherwise switches.
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (k !== "page" && k !== "sort" && v) params.set(k, v);
+  }
+  if (!isActive && target !== "submitted") params.set("sort", target);
+  const href = params.toString() ? `/leads?${params.toString()}` : "/leads";
+  return (
+    <Link
+      href={href}
+      className={
+        isActive
+          ? "inline-flex items-center gap-1 text-[#cd8b76] font-semibold"
+          : "inline-flex items-center gap-1 hover:text-[#cd8b76]"
+      }
+    >
+      {children}
+      <span className="text-[10px]">{isActive ? "▲" : "↕"}</span>
+    </Link>
   );
 }
 
