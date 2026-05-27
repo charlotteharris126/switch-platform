@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -76,17 +76,35 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
   const inputClass =
     "h-9 text-xs border border-[#dad4cb] rounded-lg bg-white px-3 text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76]";
 
-  const selectedStatuses = parseLeadStatusList(current.lead_status);
+  // Lead status is kept in local React state and only committed to the URL
+  // when the dropdown closes. Committing on every checkbox click triggers a
+  // router.push, which re-renders the server tree and closes the Radix
+  // dropdown mid-interaction — so it appeared single-select even though the
+  // backend supported multi. Pattern: local state for the open session, sync
+  // to URL on close. Local state syncs back when the URL changes externally
+  // (e.g. Clear all button).
+  const urlStatuses = parseLeadStatusList(current.lead_status);
+  const [draftStatuses, setDraftStatuses] = useState<string[]>(urlStatuses);
+  const urlStatusesKey = urlStatuses.join(",");
+  useEffect(() => {
+    setDraftStatuses(parseLeadStatusList(urlStatusesKey));
+  }, [urlStatusesKey]);
   const activeEmails = parseEmails(current.emails);
 
   function toggleLeadStatus(value: string, checked: boolean) {
-    const next = checked
-      ? Array.from(new Set([...selectedStatuses, value]))
-      : selectedStatuses.filter((s) => s !== value);
-    updateParam("lead_status", next.join(","));
+    setDraftStatuses((prev) =>
+      checked ? Array.from(new Set([...prev, value])) : prev.filter((s) => s !== value),
+    );
+  }
+
+  function commitLeadStatuses() {
+    const next = draftStatuses.join(",");
+    if (next === (current.lead_status ?? "")) return;
+    updateParam("lead_status", next);
   }
 
   function clearLeadStatus() {
+    setDraftStatuses([]);
     updateParam("lead_status", "");
   }
 
@@ -95,22 +113,25 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
     updateParam("emails", cleaned);
   }
 
-  const triggerLabel = selectedStatuses.length === 0
+  const triggerLabel = draftStatuses.length === 0
     ? "Any"
-    : selectedStatuses.length === 1
-      ? (LEAD_STATUSES.find((s) => s.value === selectedStatuses[0])?.label ?? selectedStatuses[0])
-      : `${selectedStatuses.length} selected`;
+    : draftStatuses.length === 1
+      ? (LEAD_STATUSES.find((s) => s.value === draftStatuses[0])?.label ?? draftStatuses[0])
+      : `${draftStatuses.length} selected`;
 
   return (
     <div className="flex flex-wrap gap-3 items-end bg-white border border-[#dad4cb] rounded-xl p-4 shadow-[0_1px_2px_rgba(17,36,46,0.04)]">
       <label className="flex flex-col gap-1">
         <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Lead status</span>
-        <DropdownMenu>
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (!open) commitLeadStatuses();
+          }}
+        >
           <DropdownMenuTrigger
-            disabled={pending}
             className={selectClass + " text-left flex items-center justify-between gap-2 cursor-pointer"}
           >
-            <span className={selectedStatuses.length === 0 ? "text-[#5a6a72]" : "text-[#11242e] font-semibold"}>
+            <span className={draftStatuses.length === 0 ? "text-[#5a6a72]" : "text-[#11242e] font-semibold"}>
               {triggerLabel}
             </span>
             <span className="text-[#5a6a72]">▾</span>
@@ -119,14 +140,14 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
             {LEAD_STATUSES.map((s) => (
               <DropdownMenuCheckboxItem
                 key={s.value}
-                checked={selectedStatuses.includes(s.value)}
+                checked={draftStatuses.includes(s.value)}
                 onCheckedChange={(checked) => toggleLeadStatus(s.value, Boolean(checked))}
                 onSelect={(e) => e.preventDefault()}
               >
                 {s.label}
               </DropdownMenuCheckboxItem>
             ))}
-            {selectedStatuses.length > 0 && (
+            {draftStatuses.length > 0 && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={clearLeadStatus}>Clear</DropdownMenuItem>
