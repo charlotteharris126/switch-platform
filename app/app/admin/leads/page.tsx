@@ -46,13 +46,18 @@ type SearchParams = {
   // outcome report). Case-insensitive, exact match. Empty entries ignored.
   emails?: string;
   /** Sort mode. submitted (default, newest first) | last_email_chaser |
-   *  last_sms_chaser. The chaser sorts order oldest-first with never-chased
-   *  leads at the top — chase priority. App-side sort: pre-fetches matching
-   *  IDs, orders by chaser timestamp, paginates in JS. Fine at pilot scale. */
+   *  last_sms_chaser. The chaser sorts toggle direction via the `dir` param:
+   *  asc = oldest chaser first with never-chased at the top (= chase
+   *  priority); desc = newest chaser first with never-chased at the
+   *  bottom. App-side sort: pre-fetches matching IDs, orders by chaser
+   *  timestamp, paginates in JS. Fine at pilot scale. */
   sort?: string;
+  /** Sort direction (chaser sorts only). asc (default) | desc. */
+  dir?: string;
 };
 
 type SortMode = "submitted" | "last_email_chaser" | "last_sms_chaser";
+type SortDir = "asc" | "desc";
 const VALID_SORTS: ReadonlyArray<SortMode> = ["submitted", "last_email_chaser", "last_sms_chaser"];
 
 // Status values accepted by the ?lead_status= URL filter. Covers both
@@ -187,6 +192,7 @@ export default async function LeadsPage({
   const sort: SortMode = (VALID_SORTS as readonly string[]).includes(sp.sort ?? "")
     ? (sp.sort as SortMode)
     : "submitted";
+  const sortDir: SortDir = sp.dir === "desc" ? "desc" : "asc";
 
   // Apply every filter (except pagination and ordering) to a query builder.
   // Reused for the main paginated query AND the all-filtered-ids query that
@@ -314,16 +320,25 @@ export default async function LeadsPage({
         }
       }
 
-      // ascending order with nulls first: never-chased at the top, then
-      // oldest chaser, then newest. Ties broken by id ascending for stability.
+      // asc: nulls first (never-chased at top), then oldest → newest.
+      //      Chase-priority order.
+      // desc: nulls last (never-chased at bottom), then newest → oldest.
+      //       "What did I just do" order.
+      // Ties broken by id ascending for stability in both directions.
       const sortedIds = [...allIds].sort((a, b) => {
         const ta = chaserAtBySubId.get(a);
         const tb = chaserAtBySubId.get(b);
         if (!ta && !tb) return a - b;
-        if (!ta) return -1;
-        if (!tb) return 1;
+        if (sortDir === "asc") {
+          if (!ta) return -1;
+          if (!tb) return 1;
+          if (ta === tb) return a - b;
+          return ta < tb ? -1 : 1;
+        }
+        if (!ta) return 1;
+        if (!tb) return -1;
         if (ta === tb) return a - b;
-        return ta < tb ? -1 : 1;
+        return ta < tb ? 1 : -1;
       });
 
       const pageIds = sortedIds.slice(offset, offset + PAGE_SIZE);
@@ -481,7 +496,7 @@ export default async function LeadsPage({
               </TableHead>
               <TableHead className="w-16">ID</TableHead>
               <TableHead>
-                <SortHeader currentSort={sort} target="submitted" sp={sp}>Submitted</SortHeader>
+                <SortHeader currentSort={sort} currentDir={sortDir} target="submitted" sp={sp}>Submitted</SortHeader>
               </TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Email</TableHead>
@@ -490,10 +505,10 @@ export default async function LeadsPage({
               <TableHead>Lead status</TableHead>
               <TableHead>U1</TableHead>
               <TableHead>
-                <SortHeader currentSort={sort} target="last_email_chaser" sp={sp}>Last email chaser</SortHeader>
+                <SortHeader currentSort={sort} currentDir={sortDir} target="last_email_chaser" sp={sp}>Last email chaser</SortHeader>
               </TableHead>
               <TableHead>
-                <SortHeader currentSort={sort} target="last_sms_chaser" sp={sp}>Last SMS chaser</SortHeader>
+                <SortHeader currentSort={sort} currentDir={sortDir} target="last_sms_chaser" sp={sp}>Last SMS chaser</SortHeader>
               </TableHead>
               <TableHead>Campaign</TableHead>
               <TableHead>Matched to</TableHead>
@@ -654,22 +669,39 @@ export default async function LeadsPage({
 
 function SortHeader({
   currentSort,
+  currentDir,
   target,
   sp,
   children,
 }: {
   currentSort: SortMode;
+  currentDir: SortDir;
   target: SortMode;
   sp: SearchParams;
   children: React.ReactNode;
 }) {
   const isActive = currentSort === target;
-  // Clicking an active sort returns to default (submitted). Otherwise switches.
+  // Three-state cycle on repeat clicks of the same column:
+  //   inactive  → asc  → desc  → default (clears sort)
+  // "submitted" header just clears the sort param (no toggle direction).
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(sp)) {
-    if (k !== "page" && k !== "sort" && v) params.set(k, v);
+    if (k !== "page" && k !== "sort" && k !== "dir" && v) params.set(k, v);
   }
-  if (!isActive && target !== "submitted") params.set("sort", target);
+  let nextArrow = "↕";
+  if (target === "submitted") {
+    nextArrow = isActive ? "▼" : "↕"; // submitted is desc by default in SQL
+  } else if (!isActive) {
+    params.set("sort", target); // 1st click → asc
+    nextArrow = "↕";
+  } else if (currentDir === "asc") {
+    params.set("sort", target);
+    params.set("dir", "desc"); // 2nd click → desc
+    nextArrow = "▲";
+  } else {
+    // 3rd click → clear sort
+    nextArrow = "▼";
+  }
   const href = params.toString() ? `/leads?${params.toString()}` : "/leads";
   return (
     <Link
@@ -681,7 +713,7 @@ function SortHeader({
       }
     >
       {children}
-      <span className="text-[10px]">{isActive ? "▲" : "↕"}</span>
+      <span className="text-[10px]">{nextArrow}</span>
     </Link>
   );
 }
