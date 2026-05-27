@@ -25,6 +25,18 @@ const CATEGORY_LABELS: Record<string, string> = {
   loan: "Loan-funded",
 };
 
+const CHASED_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "email_yes", label: "Email chased" },
+  { value: "email_no",  label: "No email chased" },
+  { value: "sms_yes",   label: "SMS chased" },
+  { value: "sms_no",    label: "No SMS chased" },
+];
+
+function parseChasedList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(",").map((s) => s.trim()).filter((s) => CHASED_OPTIONS.some((c) => c.value === s));
+}
+
 const LEAD_STATUSES: Array<{ value: string; label: string }> = [
   // Learner statuses
   { value: "open",                    label: "Open" },
@@ -107,6 +119,36 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
     setDraftStatuses([]);
     updateParam("lead_status", "");
   }
+
+  // Same local-state-then-commit-on-close pattern for the Chased multi-select.
+  // Picking multiple criteria AND-chains them in the backend query (e.g.
+  // "Email chased" + "No SMS chased" = leads emailed but not SMSed).
+  const urlChased = parseChasedList(current.chased);
+  const [draftChased, setDraftChased] = useState<string[]>(urlChased);
+  const urlChasedKey = urlChased.join(",");
+  useEffect(() => {
+    setDraftChased(parseChasedList(urlChasedKey));
+  }, [urlChasedKey]);
+
+  function toggleChased(value: string, checked: boolean) {
+    setDraftChased((prev) =>
+      checked ? Array.from(new Set([...prev, value])) : prev.filter((s) => s !== value),
+    );
+  }
+  function commitChased() {
+    const next = draftChased.join(",");
+    if (next === (current.chased ?? "")) return;
+    updateParam("chased", next);
+  }
+  function clearChased() {
+    setDraftChased([]);
+    updateParam("chased", "");
+  }
+  const chasedTriggerLabel = draftChased.length === 0
+    ? "Any"
+    : draftChased.length === 1
+      ? (CHASED_OPTIONS.find((c) => c.value === draftChased[0])?.label ?? draftChased[0])
+      : `${draftChased.length} selected`;
 
   function applyEmails(raw: string) {
     const cleaned = parseEmails(raw).join(",");
@@ -272,15 +314,38 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
 
       <label className="flex flex-col gap-1">
         <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Chased</span>
-        <select
-          className={selectClass}
-          value={current.chased ?? ""}
-          onChange={(e) => updateParam("chased", e.target.value)}
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (!open) commitChased();
+          }}
         >
-          <option value="">Any</option>
-          <option value="yes">Chased</option>
-          <option value="no">Not chased</option>
-        </select>
+          <DropdownMenuTrigger
+            className={selectClass + " text-left flex items-center justify-between gap-2 cursor-pointer"}
+          >
+            <span className={draftChased.length === 0 ? "text-[#5a6a72]" : "text-[#11242e] font-semibold"}>
+              {chasedTriggerLabel}
+            </span>
+            <span className="text-[#5a6a72]">▾</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            {CHASED_OPTIONS.map((c) => (
+              <DropdownMenuCheckboxItem
+                key={c.value}
+                checked={draftChased.includes(c.value)}
+                onCheckedChange={(checked) => toggleChased(c.value, Boolean(checked))}
+                onSelect={(e) => e.preventDefault()}
+              >
+                {c.label}
+              </DropdownMenuCheckboxItem>
+            ))}
+            {draftChased.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={clearChased}>Clear</DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </label>
 
       <label className="flex flex-col gap-1">

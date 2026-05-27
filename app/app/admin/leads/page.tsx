@@ -30,8 +30,9 @@ type SearchParams = {
   provider?: string;
   dq?: string;
   routed?: string;
-  /** chased = at least one chaser email or chaser SMS sent (status in
-   *  queued/sent/delivered). yes | no. */
+  /** Chaser filter, split per channel. Values:
+   *    email_yes | email_no | sms_yes | sms_no
+   *  "yes" = at least one healthy chaser of that channel sent. "no" = none. */
   chased?: string;
   q?: string;
   from?: string;
@@ -116,33 +117,53 @@ export default async function LeadsPage({
     );
   }
 
-  // Chased filter. "Chased" = at least one chaser email OR chaser SMS sent
-  // (queued/sent/delivered) for the submission, any time. Pre-fetch the
-  // chased submission_ids; the main query filters via .in("id", [...]) for
-  // chased=yes or .not("id", "in", ...) for chased=no.
-  let chasedIds: Set<number> | null = null;
-  if (sp.chased === "yes" || sp.chased === "no") {
+  // Chaser filter. Multi-select, comma-separated list, AND across selected
+  // criteria. Values: email_yes (has healthy chaser email) | email_no (none)
+  // | sms_yes (has healthy chaser SMS) | sms_no (none). Picking email_yes +
+  // sms_no = leads we email-chased but never SMS-chased.
+  const VALID_CHASED = ["email_yes", "email_no", "sms_yes", "sms_no"] as const;
+  type ChasedCriterion = typeof VALID_CHASED[number];
+  const chasedCriteria: ChasedCriterion[] = sp.chased
+    ? (sp.chased
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s): s is ChasedCriterion => (VALID_CHASED as readonly string[]).includes(s)))
+    : [];
+  let emailChasedIds: Set<number> | null = null;
+  let smsChasedIds: Set<number> | null = null;
+  const needsEmailChased = chasedCriteria.includes("email_yes") || chasedCriteria.includes("email_no");
+  const needsSmsChased = chasedCriteria.includes("sms_yes") || chasedCriteria.includes("sms_no");
+  if (needsEmailChased || needsSmsChased) {
     const HEALTHY = ["queued", "sent", "delivered"];
     const [chasedEmailRes, chasedSmsRes] = await Promise.all([
-      supabase
-        .schema("crm")
-        .from("email_log")
-        .select("submission_id")
-        .in("email_type", ["chaser_funded", "chaser_self", "s4b_employer_chaser"])
-        .in("status", HEALTHY),
-      supabase
-        .schema("crm")
-        .from("sms_log")
-        .select("submission_id")
-        .eq("comm_type", "chaser_call_attempt")
-        .in("status", HEALTHY),
+      needsEmailChased
+        ? supabase
+            .schema("crm")
+            .from("email_log")
+            .select("submission_id")
+            .in("email_type", ["chaser_funded", "chaser_self", "s4b_employer_chaser"])
+            .in("status", HEALTHY)
+        : Promise.resolve({ data: [] as Array<{ submission_id: number }>, error: null }),
+      needsSmsChased
+        ? supabase
+            .schema("crm")
+            .from("sms_log")
+            .select("submission_id")
+            .eq("comm_type", "chaser_call_attempt")
+            .in("status", HEALTHY)
+        : Promise.resolve({ data: [] as Array<{ submission_id: number }>, error: null }),
     ]);
-    chasedIds = new Set<number>();
-    for (const r of (chasedEmailRes.data ?? []) as Array<{ submission_id: number }>) {
-      chasedIds.add(r.submission_id);
+    if (needsEmailChased) {
+      emailChasedIds = new Set<number>();
+      for (const r of (chasedEmailRes.data ?? []) as Array<{ submission_id: number }>) {
+        emailChasedIds.add(r.submission_id);
+      }
     }
-    for (const r of (chasedSmsRes.data ?? []) as Array<{ submission_id: number }>) {
-      chasedIds.add(r.submission_id);
+    if (needsSmsChased) {
+      smsChasedIds = new Set<number>();
+      for (const r of (chasedSmsRes.data ?? []) as Array<{ submission_id: number }>) {
+        smsChasedIds.add(r.submission_id);
+      }
     }
   }
 
@@ -193,15 +214,21 @@ export default async function LeadsPage({
         qq = (qq as { eq: (c: string, v: number) => T }).eq("id", -1);
       }
     }
-    if (chasedIds !== null) {
-      const ids = Array.from(chasedIds);
-      if (sp.chased === "yes") {
-        if (ids.length > 0) qq = (qq as { in: (c: string, v: number[]) => T }).in("id", ids);
-        else                qq = (qq as { eq: (c: string, v: number) => T }).eq("id", -1);
-      } else if (sp.chased === "no" && ids.length > 0) {
-        qq = (qq as { not: (c: string, op: string, v: string) => T }).not("id", "in", `(${ids.join(",")})`);
+    // Each chaser criterion AND-chains as its own filter clause.
+    function applyChaserCriterion(qIn: T, ids: Set<number> | null, want: "yes" | "no"): T {
+      if (ids === null) return qIn;
+      const arr = Array.from(ids);
+      if (want === "yes") {
+        if (arr.length > 0) return (qIn as { in: (c: string, v: number[]) => T }).in("id", arr);
+        return (qIn as { eq: (c: string, v: number) => T }).eq("id", -1);
       }
+      if (arr.length > 0) return (qIn as { not: (c: string, op: string, v: string) => T }).not("id", "in", `(${arr.join(",")})`);
+      return qIn;
     }
+    if (chasedCriteria.includes("email_yes")) qq = applyChaserCriterion(qq, emailChasedIds, "yes");
+    if (chasedCriteria.includes("email_no"))  qq = applyChaserCriterion(qq, emailChasedIds, "no");
+    if (chasedCriteria.includes("sms_yes"))   qq = applyChaserCriterion(qq, smsChasedIds, "yes");
+    if (chasedCriteria.includes("sms_no"))    qq = applyChaserCriterion(qq, smsChasedIds, "no");
 
     if (sp.from) qq = (qq as { gte: (c: string, v: string) => T }).gte("submitted_at", sp.from);
     if (sp.to)   qq = (qq as { lte: (c: string, v: string) => T }).lte("submitted_at", sp.to);
