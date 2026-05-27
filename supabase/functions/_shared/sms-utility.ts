@@ -296,16 +296,22 @@ async function renderAndSend(args: RenderAndSendArgs): Promise<SendSmsResult> {
 
 // UK-centric. Pilot volume is all-UK; revisit if any non-UK lead lands
 // (no current path for that — form geofences UK). Strategy:
-//   - Strip spaces.
+//   - Strip spaces, hyphens, parentheses.
 //   - "+44..." stays as-is.
 //   - "0044..." → "+44..."
-//   - "07..." → "+447..."
+//   - "44XXXXXXXXXX" (12 digits, no leading +) → "+44..."
+//   - "07XXX XXX XXX" (11 digits) → "+447..."
+//   - "7XXX XXX XXX" (bare 10 digits, leading 0 stripped by Netlify numeric
+//     coercion — see memory: feedback_netlify_forms_numeric_coercion.md) →
+//     "+447..."
 //   - Anything else returns as-is (sendSms will surface Brevo's reject if
 //     the format's wrong — better than silent failure).
 export function normaliseUkPhoneToE164(raw: string): string {
-  const trimmed = raw.replace(/\s+/g, "");
+  const trimmed = raw.replace(/[\s\-()]/g, "");
   if (trimmed.startsWith("+")) return trimmed;
   if (trimmed.startsWith("0044")) return "+" + trimmed.slice(2);
-  if (trimmed.startsWith("07")) return "+44" + trimmed.slice(1);
+  if (trimmed.startsWith("44") && trimmed.length === 12) return "+" + trimmed;
+  if (trimmed.startsWith("07") && trimmed.length === 11) return "+44" + trimmed.slice(1);
+  if (trimmed.startsWith("7") && trimmed.length === 10) return "+44" + trimmed;
   return trimmed;
 }

@@ -134,7 +134,11 @@ export default async function LeadsPage({
   const needsEmailChased = chasedCriteria.includes("email_yes") || chasedCriteria.includes("email_no");
   const needsSmsChased = chasedCriteria.includes("sms_yes") || chasedCriteria.includes("sms_no");
   if (needsEmailChased || needsSmsChased) {
-    const HEALTHY = ["queued", "sent", "delivered"];
+    // Count ANY log row regardless of status. A failed chaser attempt is
+    // still a chase — it means we tried. Treating failed as "not chased"
+    // creates a closed loop where leads with bad phones / bounced emails
+    // never leave "No chased" because the retry always fails. Charlotte's
+    // chase queue stays accurate: she only ever sees leads we haven't tried.
     const [chasedEmailRes, chasedSmsRes] = await Promise.all([
       needsEmailChased
         ? supabase
@@ -142,7 +146,6 @@ export default async function LeadsPage({
             .from("email_log")
             .select("submission_id")
             .in("email_type", ["chaser_funded", "chaser_self", "s4b_employer_chaser"])
-            .in("status", HEALTHY)
         : Promise.resolve({ data: [] as Array<{ submission_id: number }>, error: null }),
       needsSmsChased
         ? supabase
@@ -150,7 +153,6 @@ export default async function LeadsPage({
             .from("sms_log")
             .select("submission_id")
             .eq("comm_type", "chaser_call_attempt")
-            .in("status", HEALTHY)
         : Promise.resolve({ data: [] as Array<{ submission_id: number }>, error: null }),
     ]);
     if (needsEmailChased) {
