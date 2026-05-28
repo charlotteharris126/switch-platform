@@ -505,6 +505,8 @@ function ContentTab({
             // Non-empty body: append at end so Charlotte can re-arrange
             // without losing existing content. The button label flags this
             // up-front so the behaviour isn't a surprise.
+            // Note: scoped to be moved to the idea-approval stage in a
+            // future session — see platform/docs/editorial-ai-assist-stage-move.md.
             if (!input.body.trim()) update("body", v);
             else update("body", `${input.body.trim()}\n\n${v}`);
           }}
