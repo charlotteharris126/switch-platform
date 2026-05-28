@@ -1,5 +1,27 @@
 # Platform Handoff, Session 60, 2026-05-28
 
+## ⚡ PUSH FROM Mira 2026-05-28: AI tool builds + bespoke conversion-optimised funnels for the learner-side 10-SKU portfolio
+
+Mira strategy Session 19 consolidated the learner-side product stack into a 10-SKU portfolio. Two AI-tool builds and a bespoke-funnel architecture decision sit with Sasha on top of the Phase 1 Builds 2-4 already in-flight.
+
+**Build 5: Eligibility Checker free tool + Pro tier (£8/mo subscription).** AI tool that asks 5-10 questions about the learner's profile (age, employment status, residency, prior quals, sector interest, funding history) and outputs personalised matches to UK funded routes (Skills Bootcamps, FCFJ, Advanced Learner Loans, apprenticeships). Free tier drives Lane 1 funded course traffic directly. Pro tier adds: personalised funded-course recommendations beyond the free output, saved profile + change-notification ("a new Skills Bootcamp matching your profile opened in your area"), eligibility-coach AI chat. Build via Claude/Cursor, 2-3 weeks. Hosted on the existing Switchable infrastructure (NOT on the new Provider OS platform). FIRE-scored as highest-priority tool because the underlying problem (UC + No Level 3 + non-UK quals confusion about what's free) scored 11-12/12 across the buyer-problem matrix.
+
+**Build 6: AI Career Pathfinder freemium + Pro tier (£8-12/mo subscription).** Profile-to-career-matching tool. Free tier matches existing skills to UK funded courses (audience: career changers). Pro tier adds longer pathways + career history mapping + sector-transition coaching via AI chat. Build via Claude/Cursor, 3-4 weeks. Ships months 3-5.
+
+**Build 7: Bespoke conversion-optimised funnel pattern for SLO landing pages.** Mira's recalibrated conversion assumptions explicitly require bespoke-funnel architecture rather than generic Stripe checkout. Two SLO candidates ship across months 1-4 (UC + Funded Study Decision Tool £15, Skills Translator £20), plus two more in months 2-3 (Quals Recogniser £15-20, Bootcamp Application Coach £25). Each needs: custom landing page with personalisation (e.g. acknowledges the visitor's referring niche page or community), Stripe payment integration, instant delivery (PDF download OR access link to gated content), abandoned-cart recovery (3-email sequence triggered on landing-without-purchase), urgency mechanics (notify-me waitlist conversion when pre-sell signal proves PMF), post-purchase upsell to Pro-tier AI tool subscription. Conversion target: 5-12% warm-audience visit-to-paid (vs the 3-5% industry-standard on generic platforms). Pattern needs to be re-usable across the 4 SLOs without re-building per product.
+
+**Build 8: Pre-sell-before-build infrastructure (mandatory gating event for every SLO and AI tool).** Before any product gets built, a one-page pre-sell landing ships and gets posted to 3-5 niche communities for a 7-day intent measurement window. Pre-sell pages need: simple email capture for "notify me when ready" signups, optional £5 pre-order with Stripe (the strongest commitment signal), simple tracking of intent volume per community. Re-usable component template, not per-product custom build. Decides which product to ship first across simultaneous pre-sells (e.g. UC Tool vs Skills Translator SLO pre-sells running in parallel weeks 1-2).
+
+**Build 9 (carries from S18 push): blog cadence agentification.** Already in-flight per S18 Build 4. No change to scope.
+
+**Recalibrated conversion assumptions Sasha needs to design against:** SLO warm conversion target 5-12% (vs 3-5% industry-standard); affiliate per-visitor monetisation target 0.5-3% (vs 0.1-0.5% generic); freemium-to-paid AI tool target 2-12% on free-tier-to-paid (not 1-2% visitor-level). Charlotte explicitly pushed for "think bigger, be bigger" on assumptions; portfolio approach concentrates probability that 2-3 of 8 products hit PMF at the upper end.
+
+Sequencing for these new builds: pre-sell infrastructure (Build 8) ships first as it gates everything else. Bespoke SLO funnel pattern (Build 7) ships in parallel with SLO #1 product build (whichever wins pre-sell). Eligibility Checker (Build 5) and Career Pathfinder (Build 6) sequence after SLO #1 ships and pre-sell discipline is operating. Build 9 unchanged from S18.
+
+Full picture: `strategy/docs/current-handoff.md` Session 19.
+
+---
+
 ## Current state
 
 Continuation session built on top of S59. Three discrete pieces shipped: drift surfaces triaged + Brevo list-ID secret rotated (cuts ~70% of the morning drift email volume); Mira's Build 1 lane hierarchy wired into the existing `/admin/roadmap` MVP (migration 0177, EF + UI extended); admin lead outcome forms now expose the full learner state machine (lead #438 unstuck). All four Phase-1 Mira PUSHes from S58 still open beyond Build 1; Wren's broadcast-gating PUSH still owed.
