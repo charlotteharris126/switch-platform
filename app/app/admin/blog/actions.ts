@@ -382,7 +382,7 @@ export async function updatePostAction(
   }
 
 
-  const patch: Record<string, unknown> = {
+  const patch = {
     slug: input.slug.trim(),
     title: input.title.trim(),
     dek: input.dek.trim() || null,
@@ -407,13 +407,6 @@ export async function updatePostAction(
     updated_at: new Date().toISOString(),
   };
 
-  // Featured slots are for live posts only. Moving off published clears
-  // the slot so a published post can claim it. (Featured pill in listings
-  // is also guarded by status, but data should match the rule.)
-  if (input.status !== "published") {
-    patch.featured_position = null;
-  }
-
   const { error } = await gate.supabase
     .schema("editorial")
     .from("posts")
@@ -421,6 +414,17 @@ export async function updatePostAction(
     .eq("id", existing.id);
 
   if (error) return { ok: false, error: friendlyDbError(error.message) };
+
+  // Featured slots are for live posts only. Moving off published clears
+  // the slot so a published post can claim it. (Featured pill in listings
+  // is also guarded by status, but data should match the rule.)
+  if (input.status !== "published") {
+    await gate.supabase
+      .schema("editorial")
+      .from("posts")
+      .update({ featured_position: null })
+      .eq("id", existing.id);
+  }
 
   const tagSlugs = parseCsv(input.tags);
   const tagErr = await syncTags(gate.supabase, existing.id as number, tagSlugs);
