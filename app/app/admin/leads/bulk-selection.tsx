@@ -117,11 +117,15 @@ export function BulkSelectionRowCheckbox({ id }: { id: number }) {
 // -----------------------------------------------------------------------------
 
 const STATUSES: Array<{ value: EnrolmentStatus; label: string; description: string }> = [
-  { value: "open",              label: "Open",              description: "No outcome yet." },
-  { value: "enrolled",          label: "Enrolled",          description: "Learner started the course." },
-  { value: "presumed_enrolled", label: "Presumed enrolled", description: "Provider hasn't confirmed after 14 days." },
-  { value: "cannot_reach",      label: "Cannot reach",      description: "Provider tried but couldn't reach." },
-  { value: "lost",              label: "Lost",              description: "Made contact but learner won't enrol. Pick a reason." },
+  { value: "open",                     label: "Open",                     description: "No outcome yet." },
+  { value: "attempt_1_no_answer",      label: "1st no answer",            description: "Provider tried, no response." },
+  { value: "attempt_2_no_answer",      label: "2nd no answer",            description: "Second attempt, no response." },
+  { value: "attempt_3_no_answer",      label: "3rd no answer",            description: "Third attempt, no response." },
+  { value: "cannot_reach",             label: "Cannot reach",             description: "Three attempts, no response." },
+  { value: "enrolment_meeting_booked", label: "Enrolment meeting booked", description: "Provider booked an enrolment call." },
+  { value: "enrolled",                 label: "Enrolled",                 description: "Learner started the course." },
+  { value: "presumed_enrolled",        label: "Presumed enrolled",        description: "Provider hasn't confirmed after 14 days." },
+  { value: "lost",                     label: "Lost",                     description: "Made contact but learner won't enrol. Pick a reason." },
 ];
 
 const LOST_REASONS: Array<{ value: LostReason; label: string }> = [

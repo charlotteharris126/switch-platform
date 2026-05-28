@@ -20,11 +20,15 @@ interface Props {
 }
 
 const LEARNER_STATUSES: Array<{ value: EnrolmentStatus; label: string; description: string }> = [
-  { value: "open",              label: "Open",              description: "No outcome yet. Provider hasn't confirmed contact." },
-  { value: "enrolled",          label: "Enrolled",          description: "Learner started the course. Counts toward billing." },
-  { value: "presumed_enrolled", label: "Presumed enrolled", description: "Provider hasn't confirmed after 14 days. Auto-set by cron normally." },
-  { value: "cannot_reach",      label: "Cannot reach",      description: "Provider tried to contact but no response after multiple attempts." },
-  { value: "lost",              label: "Lost",              description: "Provider made contact but learner won't enrol. Pick a reason." },
+  { value: "open",                     label: "Open",                     description: "No outcome yet. Provider hasn't confirmed contact." },
+  { value: "attempt_1_no_answer",      label: "1st no answer",            description: "Provider tried calling once, no response." },
+  { value: "attempt_2_no_answer",      label: "2nd no answer",            description: "Second attempt, no response." },
+  { value: "attempt_3_no_answer",      label: "3rd no answer",            description: "Third attempt, no response." },
+  { value: "cannot_reach",             label: "Cannot reach",             description: "Three attempts over a fortnight, no response. Closure." },
+  { value: "enrolment_meeting_booked", label: "Enrolment meeting booked", description: "Provider's booked the learner in for an enrolment call." },
+  { value: "enrolled",                 label: "Enrolled",                 description: "Learner started the course. Counts toward billing." },
+  { value: "presumed_enrolled",        label: "Presumed enrolled",        description: "Provider hasn't confirmed after 14 days. Auto-set by cron normally." },
+  { value: "lost",                     label: "Lost",                     description: "Provider made contact but learner won't enrol. Pick a reason." },
 ];
 
 const EMPLOYER_STATUSES: Array<{ value: EnrolmentStatus; label: string; description: string }> = [
