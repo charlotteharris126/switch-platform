@@ -743,7 +743,7 @@ export async function removeTagFromPostsAction(
 // editorial.post_ideas is the topic queue. Mira drops ideas in via the
 // /blog-content-plan skill; Charlotte approves / edits / rejects via
 // /admin/blog/content-plan; the agentified drafter EF picks the next
-// queued row Mon/Wed/Fri and drafts it. tier=A/B/C per migration 0174
+// queued row Mon/Wed/Fri and drafts it. tier=A/B/C per migration 0178
 // (see .claude/rules/editorial-rules.md §2).
 
 export type PostIdeaTier = "A" | "B" | "C";

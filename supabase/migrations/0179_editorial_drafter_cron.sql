@@ -1,4 +1,4 @@
--- Migration 0175 — pg_cron schedule for the blog drafter EF
+-- Migration 0179 — pg_cron schedule for the blog drafter EF
 -- Date: 2026-05-28
 -- Author: Claude (Sasha, platform session) with owner sign-off
 -- Reason:

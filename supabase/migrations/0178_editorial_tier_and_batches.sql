@@ -1,4 +1,4 @@
--- Migration 0174 — editorial.post_ideas.tier + editorial.draft_batches
+-- Migration 0178 — editorial.post_ideas.tier + editorial.draft_batches
 -- Date: 2026-05-28
 -- Author: Claude (Sasha, platform session) with owner sign-off
 -- Reason:
