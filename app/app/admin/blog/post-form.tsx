@@ -495,15 +495,16 @@ function ContentTab({
         </p>
         <AiSuggestButton
           kind="outline"
-          label="Suggest H2 outline"
+          label={input.body.trim() ? "Suggest H2 outline (appends to end)" : "Suggest H2 outline (scaffold)"}
           input={input}
           postId={postId}
           postSlug={postSlug}
           currentValue={input.body}
           onApply={(v) => {
-            // If the body is empty, drop the outline in as scaffolding.
-            // If it already has content, append the outline at the bottom so
-            // Charlotte can re-arrange rather than losing her work.
+            // Empty body: drop the outline in as scaffolding.
+            // Non-empty body: append at end so Charlotte can re-arrange
+            // without losing existing content. The button label flags this
+            // up-front so the behaviour isn't a surprise.
             if (!input.body.trim()) update("body", v);
             else update("body", `${input.body.trim()}\n\n${v}`);
           }}

@@ -153,13 +153,15 @@ Return ONLY a JSON object — no prose, no preamble, no markdown code fences aro
 \`\`\`
 {
   "body": "<the post body in Markdown — H2 sections only, no H1>",
-  "excerpt": "<2-3 sentence summary used in /switchguides/ listing cards and as meta-description fallback. Under 200 chars.>",
-  "meta_title": "<SEO title for Google tab. 50-60 chars ideal.>",
-  "meta_description": "<SEO description for Google snippet. 140-160 chars ideal.>",
+  "excerpt": "<2-3 sentence summary used in /switchguides/ listing cards and as meta-description fallback. 150-195 chars (HARD CEILING 195). MUST contain the primary keyword.>",
+  "meta_title": "<SEO title for Google tab. 50-60 chars (HARD: ≥50, ≤60). MUST contain the primary keyword.>",
+  "meta_description": "<SEO description for Google snippet. 140-158 chars (HARD CEILING 158). MUST contain the primary keyword.>",
   "dek": "<one-sentence standfirst that sits under the H1 on the rendered post. Optional; null if no obvious one.>",
   "suggested_tags": ["<existing tag slug>", "<existing tag slug>"]
 }
 \`\`\`
+
+Length and keyword rules are STRICT — count characters before submitting. The audit checks length and rejects drafts that bust the ceiling. If you can't fit the primary keyword inside the limit, restructure the sentence; don't go over.
 
 \`suggested_tags\` MUST be picked from the list of known tags you'll be given. Do NOT invent new tag slugs — unknown slugs are dropped at insert. Pick 2-4 tags whose slug genuinely matches the topic.`;
 
