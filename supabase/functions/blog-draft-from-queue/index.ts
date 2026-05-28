@@ -114,7 +114,20 @@ Every H2 section must contain at least one of: a named scheme (allowed — schem
 
 The excerpt is the listing-card summary and meta description fallback. Both excerpt and meta_description MUST reflect the FULL SPINE of the post, not just the funding/routes section. For "How to retrain as a [job]": the excerpt should signal that the post covers what the job is, what skills/training you need, AND how to land the first role. Not just "Skills Bootcamps and ALLs fund this — here's how to pick." That's one section; readers want the whole answer.
 
-Both excerpt and meta_description MUST include the primary keyword (you'll be told what it is).
+# Primary keyword placement (hard rules — the build audit grades these)
+
+You'll be told the post's primary keyword in the user prompt. It MUST appear (verbatim where natural, otherwise as close to verbatim as reads cleanly) in:
+
+1. \`meta_title\` — at least once.
+2. \`meta_description\` — at least once.
+3. \`excerpt\` — at least once.
+4. The opening paragraph of the body (first 50-100 words).
+5. At least one H2 heading.
+6. The body overall — 3-6 times across the post. Don't stuff; weave naturally.
+
+If the primary keyword is "how to retrain as a digital marketer", you don't have to use the exact phrase six times — small variants ("retraining as a digital marketer", "switching to digital marketing") count toward variety, but the verbatim phrase should still appear in slots 1-5 above.
+
+The post's TITLE is fixed by the editor and you cannot change it. If the title doesn't contain the primary keyword, that's the editor's call — don't try to fix it in the body, just make sure your meta_title and headings do their job.
 
 # Sources (link discipline — STRICT)
 
@@ -361,6 +374,23 @@ async function insertDraft(
   const metaDescription = draft.meta_description || null;
   const dek = draft.dek || null;
 
+  // Convention: target_keywords[0] is the primary keyword. Seed it from
+  // the post_idea's primary_keyword field (if set) so the SEO checklist
+  // grades placement against the right term. Dedup if the idea already
+  // listed the primary in target_keywords.
+  const targetKeywords = (() => {
+    const merged: string[] = [];
+    if (idea.primary_keyword && idea.primary_keyword.trim()) {
+      merged.push(idea.primary_keyword.trim());
+    }
+    for (const kw of idea.target_keywords) {
+      if (kw && !merged.some((m) => m.toLowerCase() === kw.toLowerCase())) {
+        merged.push(kw);
+      }
+    }
+    return merged;
+  })();
+
   const [inserted] = await sql<Array<{ id: number; slug: string }>>`
     INSERT INTO editorial.posts (
       slug, title, dek, excerpt, body, category_id, status,
@@ -368,7 +398,7 @@ async function insertDraft(
       meta_title, meta_description, author_id
     ) VALUES (
       ${finalSlug}, ${title}, ${dek}, ${excerpt}, ${draft.body}, ${idea.category_id}, 'draft',
-      ${readingTime}, TRUE, ${sql.array(idea.target_keywords)},
+      ${readingTime}, TRUE, ${sql.array(targetKeywords)},
       ${metaTitle}, ${metaDescription}, NULL
     )
     RETURNING id, slug

@@ -382,7 +382,7 @@ export async function updatePostAction(
   }
 
 
-  const patch = {
+  const patch: Record<string, unknown> = {
     slug: input.slug.trim(),
     title: input.title.trim(),
     dek: input.dek.trim() || null,
@@ -406,6 +406,13 @@ export async function updatePostAction(
     last_modified: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
+
+  // Featured slots are for live posts only. Moving off published clears
+  // the slot so a published post can claim it. (Featured pill in listings
+  // is also guarded by status, but data should match the rule.)
+  if (input.status !== "published") {
+    patch.featured_position = null;
+  }
 
   const { error } = await gate.supabase
     .schema("editorial")
