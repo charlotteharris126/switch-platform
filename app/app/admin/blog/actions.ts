@@ -739,6 +739,167 @@ export async function removeTagFromPostsAction(
 }
 
 
+// ── Post ideas / content plan ────────────────────────────────────────────────
+// editorial.post_ideas is the topic queue. Mira drops ideas in via the
+// /blog-content-plan skill; Charlotte approves / edits / rejects via
+// /admin/blog/content-plan; the agentified drafter EF picks the next
+// queued row Mon/Wed/Fri and drafts it. tier=A/B/C per migration 0174
+// (see .claude/rules/editorial-rules.md §2).
+
+export type PostIdeaTier = "A" | "B" | "C";
+export type PostIdeaStatus = "queued" | "drafted" | "published" | "killed";
+
+export type PostIdea = {
+  id: number;
+  slug: string | null;
+  working_title: string;
+  category_id: string | null;
+  primary_keyword: string | null;
+  target_keywords: string[];
+  proposed_publish_date: string | null;
+  series_id: string | null;
+  status: PostIdeaStatus;
+  notes: string | null;
+  sort_order: number;
+  tier: PostIdeaTier;
+  variant_axis: string | null;
+  variants: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type PostIdeaInput = {
+  working_title: string;
+  category_id: string;
+  primary_keyword: string;
+  target_keywords: string;     // CSV
+  proposed_publish_date: string;
+  series_id: string;
+  notes: string;
+  tier: PostIdeaTier;
+  variant_axis: string;
+  variants: string;            // CSV (Tier B only)
+};
+
+export async function listPostIdeasAction(): Promise<ActionResult<PostIdea[]>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+  const { data, error } = await gate.supabase
+    .schema("editorial")
+    .from("post_ideas")
+    .select("*")
+    .order("status", { ascending: true })
+    .order("proposed_publish_date", { ascending: true, nullsFirst: false })
+    .order("sort_order", { ascending: true });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: (data ?? []) as PostIdea[] };
+}
+
+function validateIdeaInput(input: PostIdeaInput): string | null {
+  if (!input.working_title.trim()) return "Working title is required";
+  if (input.working_title.length > 200) return "Working title too long (200 char max)";
+  if (!["A", "B", "C"].includes(input.tier)) return "Tier must be A, B, or C";
+  if (input.tier === "B" && !input.variant_axis.trim()) {
+    return "Tier B needs a variant axis (e.g. 'town', 'demographic', 'job')";
+  }
+  if (input.tier === "B" && parseCsv(input.variants).length < 2) {
+    return "Tier B needs at least 2 variants in the variants list";
+  }
+  return null;
+}
+
+export async function createPostIdeaAction(input: PostIdeaInput): Promise<ActionResult<{ id: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+  const validation = validateIdeaInput(input);
+  if (validation) return { ok: false, error: validation };
+
+  const row = {
+    working_title: input.working_title.trim(),
+    category_id: input.category_id || null,
+    primary_keyword: input.primary_keyword.trim() || null,
+    target_keywords: parseCsv(input.target_keywords),
+    proposed_publish_date: input.proposed_publish_date || null,
+    series_id: input.series_id.trim() || null,
+    notes: input.notes.trim() || null,
+    tier: input.tier,
+    variant_axis: input.variant_axis.trim() || null,
+    variants: parseCsv(input.variants),
+    status: "queued" as const,
+  };
+  const { data, error } = await gate.supabase
+    .schema("editorial")
+    .from("post_ideas")
+    .insert(row)
+    .select("id")
+    .single();
+  if (error) return { ok: false, error: friendlyDbError(error.message) };
+  revalidatePath("/admin/blog/content-plan");
+  return { ok: true, data: { id: data.id as number } };
+}
+
+export async function updatePostIdeaAction(
+  id: number,
+  patch: Partial<PostIdeaInput>,
+): Promise<ActionResult<{ id: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+
+  const dbPatch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (patch.working_title !== undefined) dbPatch.working_title = patch.working_title.trim();
+  if (patch.category_id !== undefined) dbPatch.category_id = patch.category_id || null;
+  if (patch.primary_keyword !== undefined) dbPatch.primary_keyword = patch.primary_keyword.trim() || null;
+  if (patch.target_keywords !== undefined) dbPatch.target_keywords = parseCsv(patch.target_keywords);
+  if (patch.proposed_publish_date !== undefined) dbPatch.proposed_publish_date = patch.proposed_publish_date || null;
+  if (patch.series_id !== undefined) dbPatch.series_id = patch.series_id.trim() || null;
+  if (patch.notes !== undefined) dbPatch.notes = patch.notes.trim() || null;
+  if (patch.tier !== undefined) dbPatch.tier = patch.tier;
+  if (patch.variant_axis !== undefined) dbPatch.variant_axis = patch.variant_axis.trim() || null;
+  if (patch.variants !== undefined) dbPatch.variants = parseCsv(patch.variants);
+
+  const { error } = await gate.supabase
+    .schema("editorial")
+    .from("post_ideas")
+    .update(dbPatch)
+    .eq("id", id);
+  if (error) return { ok: false, error: friendlyDbError(error.message) };
+  revalidatePath("/admin/blog/content-plan");
+  return { ok: true, data: { id } };
+}
+
+// Kill (soft-delete) a post idea — flips to status='killed' with a note for audit.
+// Per editorial rules, killed rows are kept (not deleted) so Mira can see what was
+// rejected and not regenerate the same topic next quarter.
+export async function killPostIdeaAction(id: number, reason: string): Promise<ActionResult<{ id: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+  const { error } = await gate.supabase
+    .schema("editorial")
+    .from("post_ideas")
+    .update({
+      status: "killed",
+      notes: reason.trim() || "Killed by editor",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/admin/blog/content-plan");
+  return { ok: true, data: { id } };
+}
+
+export async function restorePostIdeaAction(id: number): Promise<ActionResult<{ id: number }>> {
+  const gate = await getAdminSupabase();
+  if (!gate.ok) return gate;
+  const { error } = await gate.supabase
+    .schema("editorial")
+    .from("post_ideas")
+    .update({ status: "queued", updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/admin/blog/content-plan");
+  return { ok: true, data: { id } };
+}
+
 // ── Featured slots ──────────────────────────────────────────────────────────
 // Up to 3 ranked featured slots on /switchguides/. Slot 1 = lead hero card;
 // slots 2 + 3 = secondary cards. Managed centrally from /admin/blog/featured
