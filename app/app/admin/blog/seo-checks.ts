@@ -18,7 +18,7 @@
 import type { PostFormInput } from "./actions";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "info";
-export type CheckGroup = "required" | "on_page" | "social" | "defaults";
+export type CheckGroup = "required" | "on_page" | "keyword_usage" | "social" | "defaults";
 
 export type SeoCheck = {
   id: string;
@@ -170,6 +170,73 @@ export function checkSeo(input: PostFormInput, knownTagSlugs: Set<string>): SeoC
     } else {
       checks.push({ id: "tags", label: "Tags", status: "pass", message: `${tagSlugs.length} (${tagSlugs.join(", ")})`, group: "on_page" });
     }
+  }
+
+  // ---- Keyword usage (does the primary keyword actually appear?) -----------
+  // Presence beats density. We don't enforce a density target (over-optimisation
+  // is a 2010s game). We do enforce that the primary keyword shows up in the
+  // places Google parses hardest: title, meta, headings, opening.
+
+  const primaryKw = (kw[0] ?? "").trim().toLowerCase();
+  if (primaryKw) {
+    const titleLower = title.toLowerCase();
+    const metaTitleLower = effectiveMetaTitle(input).toLowerCase();
+    const metaDescLower = effectiveMetaDescription(input).toLowerCase();
+    const excerptLower = input.excerpt.toLowerCase();
+    const bodyLower = input.body.toLowerCase();
+
+    // First paragraph = body up to the first blank line (or first 400 chars
+    // if the body has no break). Google weights early-body terms heavily.
+    const firstParaEnd = bodyLower.search(/\n\s*\n/);
+    const firstPara = firstParaEnd > -1 ? bodyLower.slice(0, firstParaEnd) : bodyLower.slice(0, 400);
+
+    // H2 lines.
+    const h2Lines = input.body.split("\n").filter((l) => /^##\s/.test(l)).map((l) => l.toLowerCase());
+
+    if (titleLower.includes(primaryKw)) {
+      checks.push({ id: "kw_title", label: "Keyword in title", status: "pass", message: `"${primaryKw}" appears in the page title.`, group: "keyword_usage" });
+    } else {
+      checks.push({ id: "kw_title", label: "Keyword in title", status: "warn", message: `Primary keyword "${primaryKw}" missing from the title. Google weights titles heavily — fold it in if natural.`, group: "keyword_usage" });
+    }
+
+    if (metaTitleLower.includes(primaryKw)) {
+      checks.push({ id: "kw_meta_title", label: "Keyword in meta title", status: "pass", message: `Appears in the effective meta title.`, group: "keyword_usage" });
+    } else {
+      checks.push({ id: "kw_meta_title", label: "Keyword in meta title", status: "warn", message: `Primary keyword missing from the effective meta title.`, group: "keyword_usage" });
+    }
+
+    if (metaDescLower.includes(primaryKw)) {
+      checks.push({ id: "kw_meta_desc", label: "Keyword in meta description", status: "pass", message: `Appears in the effective meta description.`, group: "keyword_usage" });
+    } else {
+      checks.push({ id: "kw_meta_desc", label: "Keyword in meta description", status: "warn", message: `Primary keyword missing from the effective meta description.`, group: "keyword_usage" });
+    }
+
+    if (excerptLower.includes(primaryKw)) {
+      checks.push({ id: "kw_excerpt", label: "Keyword in excerpt", status: "pass", message: `Appears in the excerpt.`, group: "keyword_usage" });
+    } else {
+      checks.push({ id: "kw_excerpt", label: "Keyword in excerpt", status: "warn", message: `Primary keyword missing from the excerpt.`, group: "keyword_usage" });
+    }
+
+    if (firstPara.includes(primaryKw)) {
+      checks.push({ id: "kw_first_para", label: "Keyword in opening paragraph", status: "pass", message: `Appears in the first paragraph.`, group: "keyword_usage" });
+    } else {
+      checks.push({ id: "kw_first_para", label: "Keyword in opening paragraph", status: "warn", message: `Primary keyword missing from the opening paragraph. Google weights early-body terms — work it into the first 50-100 words.`, group: "keyword_usage" });
+    }
+
+    const h2WithKw = h2Lines.filter((l) => l.includes(primaryKw)).length;
+    if (h2Lines.length === 0) {
+      // separately flagged elsewhere
+    } else if (h2WithKw >= 1) {
+      checks.push({ id: "kw_h2", label: "Keyword in an H2", status: "pass", message: `Appears in ${h2WithKw} of ${h2Lines.length} H2 headings.`, group: "keyword_usage" });
+    } else {
+      checks.push({ id: "kw_h2", label: "Keyword in an H2", status: "warn", message: `Primary keyword missing from every H2. At least one section heading should carry it (or a close variant).`, group: "keyword_usage" });
+    }
+
+    // Body presence count (light density signal — no threshold, just info).
+    const bodyMatches = (bodyLower.match(new RegExp(primaryKw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length;
+    checks.push({ id: "kw_body_count", label: "Keyword body mentions", status: "info", message: `"${primaryKw}" appears ${bodyMatches}× in the body.`, group: "keyword_usage" });
+  } else {
+    checks.push({ id: "kw_none_set", label: "Keyword usage checks", status: "info", message: "Set a target keyword to enable keyword-placement checks.", group: "keyword_usage" });
   }
 
   // ---- Social / OG ---------------------------------------------------------

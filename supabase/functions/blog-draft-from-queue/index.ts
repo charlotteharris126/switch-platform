@@ -39,17 +39,32 @@ const PROOF_BACKLOG_CAP = 5;
 const NOTIFY_TO_EMAIL = Deno.env.get("EDITORIAL_NOTIFY_EMAIL") ?? "hello@switchable.careers";
 
 // Admin app base URL — used in the Brevo email's "open draft" link.
-const ADMIN_BASE = Deno.env.get("ADMIN_BASE_URL") ?? "https://app.switchleads.co.uk";
+// The Next.js admin platform lives at admin.switchleads.co.uk. NOT app.
+const ADMIN_BASE = Deno.env.get("ADMIN_BASE_URL") ?? "https://admin.switchleads.co.uk";
 
-const SYSTEM_PROMPT = `You are the editorial drafter for Switchguides, the learner-facing publication of Switchable Ltd. You write blog posts in Charlotte Harris's voice for UK adults considering retraining, career change, business starts, or career progression.
+// Curated source allowlist. The drafter is HARD-BANNED from fabricating
+// a gov.uk / ONS / Skills England URL because Claude routinely guesses
+// retired or never-existed paths. Whitelist of root domains it may link
+// to; anything else gets cited by name + year, no link.
+const SAFE_LINK_DOMAINS = [
+  "gov.uk", "ons.gov.uk", "skillsengland.education.gov.uk",
+  "officeforstudents.org.uk", "explore-education-statistics.service.gov.uk",
+  "find-postgraduate-study.service.gov.uk",
+  "nationalcareers.service.gov.uk", "careers.thefederationofawardingbodies.org",
+  "ifate.education.gov.uk", "find-employer-schemes.education.gov.uk",
+  "instituteforapprenticeships.org", "gov.scot", "gov.wales", "nidirect.gov.uk",
+];
 
-The editorial rules are in .claude/rules/editorial-rules.md. The voice rules are in .claude/rules/copy.md and .claude/rules/charlotte-voice.md. The audience + business context is in .claude/rules/business.md. You have those rules in your prompt; you do not need to invent.
+const SYSTEM_PROMPT = `You are the editorial drafter for Switchguides — the learner-facing publication of Switchable Ltd. You write for UK adults considering retraining, career change, starting a business, or getting promoted.
 
-# Voice (Charlotte's; strict)
+You write IN THE VOICE OF SWITCHABLE THE COMPANY. Plural "we" / "us" / "Switchable" / "our team". NEVER first-person singular ("I", "I've", "my"). This is a publication, not a personal blog.
 
-Plain UK English. Confident but not pushy. Conversational flow — short sentences mixed with longer ones, never stiff. Direct answers but leaves room for dialogue. Uses contractions naturally. Adds a useful extra thought at the end of a point.
+# Voice
 
-HARD BANS:
+Plain UK English. Confident but not pushy. Warm but not gushing. Clear over clever. Conversational flow — short sentences mixed with longer ones. Contractions natural. Direct answers. Adds a useful extra thought at the end of a point.
+
+HARD BANS (every one of these gets caught by the build audit and fails the draft):
+- No first-person singular. "I think...", "I've found...", "In my experience..." — none of it. Use "we" or rewrite to remove the pronoun.
 - No em dashes anywhere. Use commas, full stops, or parentheses.
 - No "X isn't Y. It's Z." setup-and-reveal pairs. No "Not X, not Y, but Z." No "Z. Not Y." inversions.
 - No clipped emphasis fragments after a positive setup ("Different problem.", "Worth knowing.", "Three reasons.").
@@ -58,27 +73,82 @@ HARD BANS:
 - No exclamation marks.
 - No filler openers ("In today's fast-paced world", "When it comes to...", "Have you ever wondered...").
 
-# Structure
+# Structure (this is the most important rule — read it twice)
 
-Exactly one H1 (the title). 4-8 H2 sections, each 4-9 words. Opening paragraph subverts a common assumption with a real fact, not a generic intro. Closing names a concrete next step (course finder, specific tool, sign-up). 800-2500 words for Tier A; 600-1200 for Tier B variants.
+The post must ANSWER THE QUESTION THE TITLE PROMISES. The title is the contract with the reader. Build the spine around what the title implies, NOT around Switchable's product (funding routes / course finder).
 
-# Sources
+For a "How to retrain as a [job]" title, the spine is roughly:
+1. What the job actually is (what the day-to-day looks like; common misconceptions)
+2. Types of roles inside it (specialisms, employer types, freelance vs employed)
+3. Salary and demand reality (entry / mid / experienced bands; what's hot, what's saturated)
+4. Skills and qualifications you need (what's actually expected; what employers screen for)
+5. Training routes (THIS is where funding goes — ONE section, not the spine. Cover the realistic options.)
+6. Portfolio / experience building (how to be hireable before having the job title)
+7. How to land the first role (where to apply, what to put on a CV, what interviews look like)
 
-Every numeric claim has an inline source link to gov.uk / ONS / official UK source. Format: \`[claim](https://source.url/path)\`. No claim without a source.
+For other topic shapes (eligibility explainer, scheme deep-dive, sector outlook, comparison), build a different spine that fits. Always: answer the reader's question, then weave in Switchable's services naturally.
+
+4-8 H2 sections, each 4-9 words. (The page H1 is the post title and rendered by the build — DO NOT include an H1 in the body.) Opening paragraph subverts a common assumption with a real fact, not a generic intro. Closing names a concrete next step. 800-2500 words for Tier A; 600-1200 for Tier B variants.
+
+# Funding routes (when funding is in scope)
+
+If the post needs to cover training routes, Switchable supports learners onto courses via three routes (plus apprenticeships as a separate product line):
+
+1. Government-funded (free at the point of use to the learner). Includes Skills Bootcamps, Free Courses for Jobs (FCFJ), Adult Education Budget (AEB) provision, Sector-Based Work Academy Programme (SWAP), Multiply (numeracy), and devolved-authority schemes (GLA, GMCA, WMCA, Tees Valley, Liverpool City Region, etc). Name the SPECIFIC scheme that fits the post's scenario, not "Skills Bootcamps" as shorthand.
+2. Loan-funded. Primarily Advanced Learner Loans for Level 3-6 qualifications.
+3. Self-funded. Learner or employer pays directly.
+
+This is reference for ONE section of the post (where relevant), not the spine.
+
+# Anti-fabrication (strict)
+
+NEVER name specific training providers, employers, brands, courses, or platforms by name unless you have been explicitly given that name in the context (published posts list, course list, affiliate stack, editor's notes). DO NOT write phrases like "providers we see learners go through" or "providers we work with include X" — that fabricates a commercial relationship Switchable does not have. If you need to refer to providers generically, say "accredited bootcamp providers", "independent training providers", or "an ESFA-approved provider" WITHOUT naming any.
+
+The same rule applies to employer names, software tools, courses, statistics, and case studies. If you didn't get it from the prompt, you don't know it — leave it out or describe the category generically.
+
+# Specificity rule (anti-slop)
+
+Every H2 section must contain at least one of: a named scheme (allowed — schemes are public), a specific number (with a citable source), a real worked example (using generic personas, not named individuals), or a concrete step. Generic life advice ("consider your options", "think about what motivates you") is rejected. The reader should finish each section knowing one new concrete thing.
+
+# Excerpt + meta_description (must capture the whole post, not one section)
+
+The excerpt is the listing-card summary and meta description fallback. Both excerpt and meta_description MUST reflect the FULL SPINE of the post, not just the funding/routes section. For "How to retrain as a [job]": the excerpt should signal that the post covers what the job is, what skills/training you need, AND how to land the first role. Not just "Skills Bootcamps and ALLs fund this — here's how to pick." That's one section; readers want the whole answer.
+
+Both excerpt and meta_description MUST include the primary keyword (you'll be told what it is).
+
+# Sources (link discipline — STRICT)
+
+You MUST NOT fabricate URLs. Claude routinely guesses gov.uk / ONS / Skills England paths that have been retired or never existed. The build audit checks every link; broken links fail the draft.
+
+Rules:
+- You may inline-link to a URL ONLY if the root domain is on this allowlist: ${SAFE_LINK_DOMAINS.join(", ")}.
+- Even on the allowlist, do not guess the path. If you don't know the exact URL of the source, cite it by name and year WITHOUT a link: e.g. "ONS Labour Force Survey, 2024" or "DfE Employer Skills Survey 2022". A clean cite-by-name beats a dead link every time.
+- Internal links to switchable.org.uk paths (which you'll be given) — always safe to link, those are known to exist.
+- If you genuinely cannot back up a numeric claim with a source you're confident in, drop the number. Don't bluff.
 
 # Link insertion (required)
 
-You will be given the list of currently published Switchguides posts and a list of funded course pages. Insert:
-- 2-3 internal links to other Switchguides posts (pick by topic / tag overlap)
-- 1-2 internal links to a relevant funded course page or /course-finder/
+You'll be given a list of currently published Switchguides posts and funded course pages. Insert:
+- 2-3 internal links to other Switchguides posts (pick by topic / category overlap). Format: \`/switchguides/<slug>/\`
+- 1-2 internal links to a relevant funded course page or /course-finder/. Format: \`/funded/<slug>/\` or \`/course-finder/\`
 - If an affiliate-stack entry matches the topic, insert up to 3 affiliate links (you'll be told the entries; refuse to invent merchants not on the list)
-- If a lead-magnet matches the topic, insert one inline
 
-# Format
+# Output format
 
-Return ONLY the post body in Markdown. No frontmatter, no preamble, no commentary. Start with an H2 (not the H1 — the H1 lives in the post title field elsewhere). End with the call-to-action paragraph.
+Return ONLY a JSON object — no prose, no preamble, no markdown code fences around the JSON. Shape:
 
-Do not return a JSON wrapper or any explanation — pure Markdown body only.`;
+\`\`\`
+{
+  "body": "<the post body in Markdown — H2 sections only, no H1>",
+  "excerpt": "<2-3 sentence summary used in /switchguides/ listing cards and as meta-description fallback. Under 200 chars.>",
+  "meta_title": "<SEO title for Google tab. 50-60 chars ideal.>",
+  "meta_description": "<SEO description for Google snippet. 140-160 chars ideal.>",
+  "dek": "<one-sentence standfirst that sits under the H1 on the rendered post. Optional; null if no obvious one.>",
+  "suggested_tags": ["<existing tag slug>", "<existing tag slug>"]
+}
+\`\`\`
+
+\`suggested_tags\` MUST be picked from the list of known tags you'll be given. Do NOT invent new tag slugs — unknown slugs are dropped at insert. Pick 2-4 tags whose slug genuinely matches the topic.`;
 
 type Idea = {
   id: number;
@@ -140,6 +210,7 @@ async function loadContext(): Promise<{
   publishedPosts: PublishedSummary[];
   courses: Array<{ slug: string; title: string; category: string | null }>;
   affiliateStack: Array<{ id: string; name: string; topics: string[]; url_template: string }>;
+  knownTags: Array<{ slug: string; name: string }>;
 }> {
   const publishedPosts = (await sql<Array<{ slug: string; title: string; category_id: string | null }>>`
     SELECT slug, title, category_id
@@ -149,11 +220,6 @@ async function loadContext(): Promise<{
     LIMIT 50
   `).map((r) => ({ slug: r.slug, title: r.title, category_id: r.category_id, tags: [] as string[] }));
 
-  // Course list — pulled from crm.providers + their YAML manifest would be cleaner,
-  // but the canonical list lives in switchable/site/deploy/data/courses/*.yml which
-  // isn't accessible from the EF runtime. For v1, query a simple registry view if
-  // it exists, else empty list (drafter falls back to /course-finder/ as the only
-  // course-side internal link).
   let courses: Array<{ slug: string; title: string; category: string | null }> = [];
   try {
     courses = await sql<Array<{ slug: string; title: string; category: string | null }>>`
@@ -163,25 +229,31 @@ async function loadContext(): Promise<{
     courses = [];
   }
 
-  // Affiliate stack — same — lives in YAML on the site repo. Drafter for v1
-  // skips affiliate insertion unless the queue row's notes explicitly name one.
+  const knownTags = await sql<Array<{ slug: string; name: string }>>`
+    SELECT slug, name FROM editorial.tags ORDER BY slug
+  `;
+
   const affiliateStack: Array<{ id: string; name: string; topics: string[]; url_template: string }> = [];
 
-  return { publishedPosts, courses, affiliateStack };
+  return { publishedPosts, courses, affiliateStack, knownTags };
 }
 
 function buildUserPrompt(idea: Idea, variant: string | null, ctx: Awaited<ReturnType<typeof loadContext>>): string {
   const tierLine = idea.tier === "A"
-    ? "Tier A — single bespoke post."
-    : `Tier B — variant ${variant} of axis "${idea.variant_axis}".`;
+    ? "Tier A, single bespoke post."
+    : `Tier B, variant ${variant} of axis "${idea.variant_axis}".`;
 
   const pubList = ctx.publishedPosts.length === 0
-    ? "(no posts published yet — skip the internal-link requirement this round; surface that in the output)"
+    ? "(no posts published yet, skip the internal-link requirement this round.)"
     : ctx.publishedPosts.map((p) => `- [${p.title}](/switchguides/${p.slug}/) — category: ${p.category_id ?? "?"}`).join("\n");
 
   const courseList = ctx.courses.length === 0
-    ? "(no course registry available — use /course-finder/ as the single internal link)"
+    ? "(no course registry available, use /course-finder/ as the single course-side internal link.)"
     : ctx.courses.slice(0, 30).map((c) => `- [${c.title}](/funded/${c.slug}/) — ${c.category ?? "?"}`).join("\n");
+
+  const tagList = ctx.knownTags.length === 0
+    ? "(no tags exist yet; return suggested_tags as an empty array.)"
+    : ctx.knownTags.map((t) => `- ${t.slug} (${t.name})`).join("\n");
 
   return [
     `Topic: ${idea.working_title}${variant ? ` (for ${variant})` : ""}`,
@@ -197,15 +269,27 @@ function buildUserPrompt(idea: Idea, variant: string | null, ctx: Awaited<Return
     "Funded course pages (link 1-2 of these where relevant; otherwise link /course-finder/):",
     courseList,
     "",
-    "Draft the post body in Markdown per the system prompt rules. Pure Markdown body only — no frontmatter, no commentary, no JSON wrapper.",
+    "Known tag slugs (pick 2-4 for suggested_tags; ONLY use slugs from this list):",
+    tagList,
+    "",
+    "Return the JSON object specified in the system prompt. No prose, no preamble, no markdown fences around it.",
   ].filter(Boolean).join("\n");
 }
 
-async function callClaude(apiKey: string, userPrompt: string): Promise<string> {
+type DraftPayload = {
+  body: string;
+  excerpt: string;
+  meta_title: string;
+  meta_description: string;
+  dek: string | null;
+  suggested_tags: string[];
+};
+
+async function callClaude(apiKey: string, userPrompt: string): Promise<DraftPayload> {
   const client = new Anthropic({ apiKey });
   const params: Record<string, unknown> = {
     model: MODEL,
-    max_tokens: 4096,
+    max_tokens: 6144,
     output_config: { effort: "high" },
     cache_control: { type: "ephemeral" },
     system: SYSTEM_PROMPT,
@@ -217,43 +301,94 @@ async function callClaude(apiKey: string, userPrompt: string): Promise<string> {
     if (block.type === "text" && typeof block.text === "string") text += block.text;
   }
   if (!text.trim()) throw new Error("Empty response from Claude");
-  return text.trim();
+
+  // Strip code fences if the model wrapped despite instruction.
+  const stripped = text.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+
+  let parsed: DraftPayload;
+  try {
+    parsed = JSON.parse(stripped) as DraftPayload;
+  } catch (err) {
+    throw new Error(`Claude returned non-JSON output: ${(err as Error).message}. First 500 chars: ${stripped.slice(0, 500)}`);
+  }
+  if (!parsed.body || typeof parsed.body !== "string") {
+    throw new Error("Claude response missing `body`");
+  }
+  // Defensive defaults for the optional fields.
+  parsed.excerpt = (parsed.excerpt ?? "").trim();
+  parsed.meta_title = (parsed.meta_title ?? "").trim();
+  parsed.meta_description = (parsed.meta_description ?? "").trim();
+  parsed.dek = parsed.dek ? String(parsed.dek).trim() : null;
+  parsed.suggested_tags = Array.isArray(parsed.suggested_tags) ? parsed.suggested_tags.filter((t) => typeof t === "string") : [];
+  return parsed;
 }
 
 async function insertDraft(
   idea: Idea,
-  body: string,
+  draft: DraftPayload,
   variant: string | null,
 ): Promise<{ id: number; slug: string }> {
   const baseSlug = slugify(idea.working_title);
   const slug = variant ? `${baseSlug}-${slugify(variant)}` : baseSlug;
   const title = variant ? `${idea.working_title} in ${variant.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}` : idea.working_title;
-  const readingTime = readingTimeFromBody(body);
+  const readingTime = readingTimeFromBody(draft.body);
 
-  // Slug collision check — append -2, -3 if needed.
+  // Slug collision check. Archived posts get their slug auto-suffixed at
+  // collision time so the live slug is freed for the next draft. This
+  // matches Charlotte's intuition: a published URL should never carry a
+  // `-2` / `-3` suffix because the same idea was redrafted.
   let finalSlug = slug;
   let suffix = 2;
   while (true) {
-    const existing = await sql<Array<{ id: number }>>`
-      SELECT id FROM editorial.posts WHERE slug = ${finalSlug} LIMIT 1
+    const existing = await sql<Array<{ id: number; status: string }>>`
+      SELECT id, status FROM editorial.posts WHERE slug = ${finalSlug} LIMIT 1
     `;
     if (existing.length === 0) break;
+    // If the colliding row is archived, rename it out of the way and reuse the slug.
+    if (existing[0].status === "archived") {
+      const archivedSlug = `${finalSlug}-archived-${existing[0].id}`;
+      await sql`UPDATE editorial.posts SET slug = ${archivedSlug} WHERE id = ${existing[0].id}`;
+      // Fall through and try the same slug again — should now be free.
+      continue;
+    }
     finalSlug = `${slug}-${suffix}`;
     suffix++;
     if (suffix > 20) throw new Error("Could not find unique slug after 20 attempts");
   }
 
+  const excerpt = draft.excerpt || null;
+  const metaTitle = draft.meta_title || null;
+  const metaDescription = draft.meta_description || null;
+  const dek = draft.dek || null;
+
   const [inserted] = await sql<Array<{ id: number; slug: string }>>`
     INSERT INTO editorial.posts (
-      slug, title, body, category_id, status,
-      reading_time_minutes, lead_magnet_enabled, target_keywords, author_id
+      slug, title, dek, excerpt, body, category_id, status,
+      reading_time_minutes, lead_magnet_enabled, target_keywords,
+      meta_title, meta_description, author_id
     ) VALUES (
-      ${finalSlug}, ${title}, ${body}, ${idea.category_id}, 'draft',
-      ${readingTime}, TRUE, ${sql.array(idea.target_keywords)}, NULL
+      ${finalSlug}, ${title}, ${dek}, ${excerpt}, ${draft.body}, ${idea.category_id}, 'draft',
+      ${readingTime}, TRUE, ${sql.array(idea.target_keywords)},
+      ${metaTitle}, ${metaDescription}, NULL
     )
     RETURNING id, slug
   `;
-  return { id: Number(inserted.id), slug: inserted.slug };
+  const postId = Number(inserted.id);
+
+  // Attach suggested tags. Only those whose slug exists in editorial.tags
+  // get linked; the rest are silently dropped (drafter was told the
+  // allowlist; anything off-list is its fault).
+  if (draft.suggested_tags.length > 0) {
+    await sql`
+      INSERT INTO editorial.post_tags (post_id, tag_id)
+      SELECT ${postId}::BIGINT, t.id
+      FROM editorial.tags t
+      WHERE t.slug = ANY(${sql.array(draft.suggested_tags)})
+      ON CONFLICT DO NOTHING
+    `;
+  }
+
+  return { id: postId, slug: inserted.slug };
 }
 
 async function notifyCharlotte(args: {
@@ -356,8 +491,8 @@ serve(async (req) => {
   for (const variant of targets) {
     try {
       const userPrompt = buildUserPrompt(idea, variant, ctx);
-      const body = await callClaude(apiKey, userPrompt);
-      const inserted = await insertDraft(idea, body, variant);
+      const draft = await callClaude(apiKey, userPrompt);
+      const inserted = await insertDraft(idea, draft, variant);
       draftedPosts.push({ id: inserted.id, slug: inserted.slug, title: idea.working_title + (variant ? ` (${variant})` : "") });
       // Track progress on the batch row.
       await sql`
