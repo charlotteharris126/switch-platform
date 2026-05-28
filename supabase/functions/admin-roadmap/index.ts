@@ -45,12 +45,15 @@ type RoadmapTask = {
   id: string;
   title: string;
   description: string | null;
+  lane: string;
+  lane_sort_order: number;
   revenue_model: string;
   phase: string;
   agent_tags: string[];
   status: string;
   notes: string | null;
   sort_order: number;
+  target_milestone: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -59,22 +62,38 @@ type RoadmapTask = {
 type UpdatePatch = {
   title?: string;
   description?: string | null;
+  lane?: string;
+  lane_sort_order?: number;
   status?: string;
   notes?: string | null;
   agent_tags?: string[];
   sort_order?: number;
+  target_milestone?: string | null;
 };
 
 type CreateTask = {
   title: string;
   description?: string | null;
+  lane: string;
+  lane_sort_order: number;
   revenue_model: string;
   phase: string;
   agent_tags?: string[];
   status?: string;
   notes?: string | null;
   sort_order: number;
+  target_milestone?: string | null;
 };
+
+const VALID_LANES = [
+  "per-enrolment-scale",
+  "provider-os",
+  "affiliate-stack",
+  "audience-build",
+  "operational-backbone",
+  "deferred-phase-2",
+  "complete",
+] as const;
 
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") {
@@ -143,20 +162,24 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
 async function handleList(filters: ListFilters): Promise<Response> {
   const rows = await sql<RoadmapTask[]>`
-    SELECT id, title, description, revenue_model, phase, agent_tags, status,
-           notes, sort_order, created_at, updated_at, completed_at
+    SELECT id, title, description, lane, lane_sort_order, revenue_model, phase,
+           agent_tags, status, notes, sort_order, target_milestone,
+           created_at, updated_at, completed_at
     FROM strategy.roadmap_tasks
     WHERE ${filters.revenue_model ? sql`revenue_model = ${filters.revenue_model}` : sql`TRUE`}
       AND ${filters.phase ? sql`phase = ${filters.phase}` : sql`TRUE`}
       AND ${filters.status ? sql`status = ${filters.status}` : sql`TRUE`}
       AND ${filters.agent ? sql`${filters.agent} = ANY(agent_tags)` : sql`TRUE`}
-    ORDER BY revenue_model, phase, sort_order
+    ORDER BY lane_sort_order, revenue_model, phase, sort_order
   `;
   return json({ tasks: rows, count: rows.length });
 }
 
 async function handleUpdate(id: string, patch: UpdatePatch): Promise<Response> {
-  const allowedKeys = ['title', 'description', 'status', 'notes', 'agent_tags', 'sort_order'] as const;
+  const allowedKeys = [
+    'title', 'description', 'lane', 'lane_sort_order',
+    'status', 'notes', 'agent_tags', 'sort_order', 'target_milestone',
+  ] as const;
   const updates: Record<string, unknown> = {};
   for (const k of allowedKeys) {
     if (k in patch) updates[k] = (patch as Record<string, unknown>)[k];
@@ -173,12 +196,33 @@ async function handleUpdate(id: string, patch: UpdatePatch): Promise<Response> {
     }
   }
 
+  // Validate lane if provided. If lane changes and lane_sort_order is not
+  // supplied, derive it from the canonical mapping so the row sorts correctly.
+  if (updates.lane !== undefined) {
+    if (typeof updates.lane !== 'string' || !(VALID_LANES as readonly string[]).includes(updates.lane)) {
+      return json({ error: `invalid lane; must be one of ${VALID_LANES.join(', ')}` }, 400);
+    }
+    if (updates.lane_sort_order === undefined) {
+      const sortMap: Record<string, number> = {
+        "per-enrolment-scale": 1,
+        "provider-os": 2,
+        "affiliate-stack": 3,
+        "audience-build": 4,
+        "operational-backbone": 5,
+        "deferred-phase-2": 99,
+        "complete": 100,
+      };
+      updates.lane_sort_order = sortMap[updates.lane as string];
+    }
+  }
+
   const [row] = await sql<RoadmapTask[]>`
     UPDATE strategy.roadmap_tasks
     SET ${sql(updates)}
     WHERE id = ${id}
-    RETURNING id, title, description, revenue_model, phase, agent_tags, status,
-              notes, sort_order, created_at, updated_at, completed_at
+    RETURNING id, title, description, lane, lane_sort_order, revenue_model, phase,
+              agent_tags, status, notes, sort_order, target_milestone,
+              created_at, updated_at, completed_at
   `;
   if (!row) {
     return json({ error: "task not found" }, 404);
@@ -192,7 +236,8 @@ async function handleCreate(task: CreateTask): Promise<Response> {
     return json({ error: "task.title required" }, 400);
   }
   const validModels = ['foundation', 'provider', 'apprenticeship', 'affiliate', 'ppl',
-                       'app', 'newsletter-sponsorship', 'placements', 'report', 'whitelabel'];
+                       'app', 'newsletter-sponsorship', 'placements', 'report',
+                       'whitelabel', 'whitelabel-consumer-tools', 'whitelabel-provider-os'];
   if (!validModels.includes(task.revenue_model)) {
     return json({ error: `invalid revenue_model; must be one of ${validModels.join(', ')}` }, 400);
   }
@@ -200,25 +245,36 @@ async function handleCreate(task: CreateTask): Promise<Response> {
   if (!validPhases.includes(task.phase)) {
     return json({ error: `invalid phase; must be one of ${validPhases.join(', ')}` }, 400);
   }
+  if (typeof task.lane !== 'string' || !(VALID_LANES as readonly string[]).includes(task.lane)) {
+    return json({ error: `invalid lane; must be one of ${VALID_LANES.join(', ')}` }, 400);
+  }
+  if (typeof task.lane_sort_order !== 'number') {
+    return json({ error: "task.lane_sort_order required (number)" }, 400);
+  }
   if (typeof task.sort_order !== 'number') {
     return json({ error: "task.sort_order required (number)" }, 400);
   }
 
   const [row] = await sql<RoadmapTask[]>`
     INSERT INTO strategy.roadmap_tasks
-      (title, description, revenue_model, phase, agent_tags, status, notes, sort_order)
+      (title, description, lane, lane_sort_order, revenue_model, phase,
+       agent_tags, status, notes, sort_order, target_milestone)
     VALUES (
       ${task.title},
       ${task.description ?? null},
+      ${task.lane},
+      ${task.lane_sort_order},
       ${task.revenue_model},
       ${task.phase},
       ${task.agent_tags ?? []},
       ${task.status ?? 'to_do'},
       ${task.notes ?? null},
-      ${task.sort_order}
+      ${task.sort_order},
+      ${task.target_milestone ?? null}
     )
-    RETURNING id, title, description, revenue_model, phase, agent_tags, status,
-              notes, sort_order, created_at, updated_at, completed_at
+    RETURNING id, title, description, lane, lane_sort_order, revenue_model, phase,
+              agent_tags, status, notes, sort_order, target_milestone,
+              created_at, updated_at, completed_at
   `;
   return json({ task: row });
 }

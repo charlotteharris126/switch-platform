@@ -11,18 +11,22 @@ export type RoadmapTask = {
   id: string;
   title: string;
   description: string | null;
+  lane: string;
+  lane_sort_order: number;
   revenue_model: string;
   phase: string;
   agent_tags: string[];
   status: "to_do" | "in_progress" | "blocked" | "review" | "complete";
   notes: string | null;
   sort_order: number;
+  target_milestone: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
 };
 
 export type ListFilters = {
+  lane?: string;
   revenue_model?: string;
   phase?: string;
   status?: string;
@@ -32,10 +36,13 @@ export type ListFilters = {
 export type UpdatePatch = {
   title?: string;
   description?: string | null;
+  lane?: string;
+  lane_sort_order?: number;
   status?: RoadmapTask["status"];
   notes?: string | null;
   agent_tags?: string[];
   sort_order?: number;
+  target_milestone?: string | null;
 };
 
 export type ListResult = { ok: true; tasks: RoadmapTask[]; count: number } | { ok: false; error: string };
@@ -57,12 +64,15 @@ export async function updateRoadmapTaskAction(id: string, patch: UpdatePatch): P
 export async function createRoadmapTaskAction(task: {
   title: string;
   description?: string | null;
+  lane: string;
+  lane_sort_order: number;
   revenue_model: string;
   phase: string;
   agent_tags?: string[];
   status?: RoadmapTask["status"];
   notes?: string | null;
   sort_order: number;
+  target_milestone?: string | null;
 }): Promise<CreateResult> {
   const result = await callRoadmap({ action: "create", task });
   if (!result.ok) return result;

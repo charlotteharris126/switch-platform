@@ -13,7 +13,21 @@ const REVENUE_MODELS = [
   { key: "newsletter-sponsorship", label: "Newsletter sponsorship" },
   { key: "placements", label: "Sponsored placements" },
   { key: "report", label: "Consumer quarterly report" },
-  { key: "whitelabel", label: "White-label B2B SaaS" },
+  { key: "whitelabel", label: "White-label B2B SaaS (legacy)" },
+  { key: "whitelabel-consumer-tools", label: "Whitelabel — consumer tools" },
+  { key: "whitelabel-provider-os", label: "Whitelabel — Provider OS" },
+] as const;
+
+// Top-tier Phase 1 lanes. Order + labels + goals come from
+// platform/docs/admin-roadmap-spec.md (Mira, 2026-05-25 hierarchy update).
+const LANES = [
+  { key: "per-enrolment-scale",   sort: 1,   label: "Per-enrolment + apprenticeship scale", goal: "£5-7k/mo combined by month 9" },
+  { key: "provider-os",           sort: 2,   label: "Whitelabel Provider OS",                 goal: "£1.5-3k MRR (5-10 customers) by month 9" },
+  { key: "affiliate-stack",       sort: 3,   label: "Affiliate + PPL stack",                  goal: "£700-1.4k/mo by month 9" },
+  { key: "audience-build",        sort: 4,   label: "Audience build (minimum-viable)",        goal: "3-5.5k newsletter subs by month 9" },
+  { key: "operational-backbone",  sort: 5,   label: "Operational backbone",                   goal: "Live by end of Phase 1 week 2" },
+  { key: "deferred-phase-2",      sort: 99,  label: "Deferred to Phase 2",                    goal: "Activated after £6k profit holds" },
+  { key: "complete",              sort: 100, label: "Already shipped",                        goal: "" },
 ] as const;
 
 const PHASES = [
@@ -44,29 +58,50 @@ const STATUS_COLOURS: Record<Status, string> = {
 
 export function RoadmapClient({ initialTasks }: { initialTasks: RoadmapTask[] }) {
   const [tasks, setTasks] = useState<RoadmapTask[]>(initialTasks);
+  const [filterLane, setFilterLane] = useState<string>("");
   const [filterModel, setFilterModel] = useState<string>("");
   const [filterPhase, setFilterPhase] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
-  const [hideComplete, setHideComplete] = useState<boolean>(false);
+  const [hideComplete, setHideComplete] = useState<boolean>(true);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {
+      if (filterLane && t.lane !== filterLane) return false;
       if (filterModel && t.revenue_model !== filterModel) return false;
       if (filterPhase && t.phase !== filterPhase) return false;
       if (filterStatus && t.status !== filterStatus) return false;
-      if (hideComplete && t.status === "complete") return false;
+      if (hideComplete && (t.status === "complete" || t.lane === "complete")) return false;
       return true;
     });
-  }, [tasks, filterModel, filterPhase, filterStatus, hideComplete]);
+  }, [tasks, filterLane, filterModel, filterPhase, filterStatus, hideComplete]);
 
-  const groupedByModel = useMemo(() => {
-    const groups = new Map<string, RoadmapTask[]>();
+  // Two-tier grouping: top by lane (sorted via lane_sort_order from LANES),
+  // second by revenue_model within each lane. Drives the section layout.
+  const groupedByLaneThenModel = useMemo(() => {
+    const groups = new Map<string, Map<string, RoadmapTask[]>>();
     for (const t of filteredTasks) {
-      if (!groups.has(t.revenue_model)) groups.set(t.revenue_model, []);
-      groups.get(t.revenue_model)!.push(t);
+      if (!groups.has(t.lane)) groups.set(t.lane, new Map());
+      const laneGroup = groups.get(t.lane)!;
+      if (!laneGroup.has(t.revenue_model)) laneGroup.set(t.revenue_model, []);
+      laneGroup.get(t.revenue_model)!.push(t);
     }
     return groups;
   }, [filteredTasks]);
+
+  // Per-lane stats — sit under each lane header so Charlotte can scan
+  // progress without expanding the section.
+  const laneCounts = useMemo(() => {
+    const counts = new Map<string, { total: number; complete: number; inProgress: number; blocked: number }>();
+    for (const t of tasks) {
+      const entry = counts.get(t.lane) ?? { total: 0, complete: 0, inProgress: 0, blocked: 0 };
+      entry.total += 1;
+      if (t.status === "complete") entry.complete += 1;
+      else if (t.status === "in_progress") entry.inProgress += 1;
+      else if (t.status === "blocked") entry.blocked += 1;
+      counts.set(t.lane, entry);
+    }
+    return counts;
+  }, [tasks]);
 
   const counts = useMemo(() => {
     const total = tasks.length;
@@ -90,6 +125,16 @@ export function RoadmapClient({ initialTasks }: { initialTasks: RoadmapTask[] })
       </header>
 
       <div className="mb-6 flex flex-wrap gap-3 items-center text-sm">
+        <select
+          value={filterLane}
+          onChange={(e) => setFilterLane(e.target.value)}
+          className="border rounded px-2 py-1"
+        >
+          <option value="">All lanes</option>
+          {LANES.map((l) => (
+            <option key={l.key} value={l.key}>{l.label}</option>
+          ))}
+        </select>
         <select
           value={filterModel}
           onChange={(e) => setFilterModel(e.target.value)}
@@ -130,17 +175,39 @@ export function RoadmapClient({ initialTasks }: { initialTasks: RoadmapTask[] })
         </label>
       </div>
 
-      {REVENUE_MODELS.map((m) => {
-        const modelTasks = groupedByModel.get(m.key);
-        if (!modelTasks || modelTasks.length === 0) return null;
+      {LANES.map((lane) => {
+        const laneGroup = groupedByLaneThenModel.get(lane.key);
+        if (!laneGroup || laneGroup.size === 0) return null;
+        const cnt = laneCounts.get(lane.key) ?? { total: 0, complete: 0, inProgress: 0, blocked: 0 };
         return (
-          <section key={m.key} className="mb-8">
-            <h2 className="text-lg font-semibold mb-3 border-b pb-1">{m.label}</h2>
-            <ul className="space-y-2">
-              {modelTasks.map((t) => (
-                <TaskRow key={t.id} task={t} onUpdate={applyUpdate} />
-              ))}
-            </ul>
+          <section key={lane.key} className="mb-10">
+            <header className="mb-4 border-b-2 border-gray-800 pb-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-3">
+                <h2 className="text-xl font-bold">{lane.label}</h2>
+                <p className="text-xs text-gray-500">
+                  {cnt.complete}/{cnt.total} complete
+                  {cnt.inProgress > 0 ? ` · ${cnt.inProgress} in progress` : ""}
+                  {cnt.blocked > 0 ? ` · ${cnt.blocked} blocked` : ""}
+                </p>
+              </div>
+              {lane.goal && (
+                <p className="text-xs text-gray-600 mt-1">Goal: {lane.goal}</p>
+              )}
+            </header>
+            {REVENUE_MODELS.map((m) => {
+              const modelTasks = laneGroup.get(m.key);
+              if (!modelTasks || modelTasks.length === 0) return null;
+              return (
+                <div key={m.key} className="mb-6 ml-2">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">{m.label}</h3>
+                  <ul className="space-y-2">
+                    {modelTasks.map((t) => (
+                      <TaskRow key={t.id} task={t} onUpdate={applyUpdate} />
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
           </section>
         );
       })}
@@ -205,6 +272,19 @@ function TaskRow({
 
   const isComplete = localStatus === "complete";
 
+  function moveLane(nextLane: string) {
+    if (nextLane === task.lane) return;
+    startTransition(async () => {
+      const result = await updateRoadmapTaskAction(task.id, { lane: nextLane });
+      if (result.ok) {
+        onUpdate(task.id, result.task);
+        setSavedAt(Date.now());
+      } else {
+        console.error("update failed:", result.error);
+      }
+    });
+  }
+
   return (
     <li className={`border rounded p-3 ${isComplete ? "bg-gray-50" : "bg-white"}`}>
       <div className="flex items-start gap-3">
@@ -226,11 +306,26 @@ function TaskRow({
           {task.description && (
             <div className="text-xs text-gray-600 mt-1">{task.description}</div>
           )}
-          <div className="text-xs text-gray-400 mt-1 flex flex-wrap gap-2">
+          {task.target_milestone && (
+            <div className="text-xs text-amber-700 mt-1">→ {task.target_milestone}</div>
+          )}
+          <div className="text-xs text-gray-400 mt-1 flex flex-wrap gap-2 items-center">
             <span>{task.phase.toUpperCase()}</span>
             {task.agent_tags.length > 0 && (
               <span>· {task.agent_tags.join(", ")}</span>
             )}
+            <span>·</span>
+            <select
+              value={task.lane}
+              onChange={(e) => moveLane(e.target.value)}
+              disabled={isPending}
+              title="Move task to a different lane"
+              className="text-xs border rounded px-1 py-0.5 text-gray-600"
+            >
+              {LANES.map((l) => (
+                <option key={l.key} value={l.key}>{l.label}</option>
+              ))}
+            </select>
             {savedAt && (
               <span className="text-green-600">· saved</span>
             )}
