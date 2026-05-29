@@ -15,13 +15,14 @@ import { checkSeoSummary } from "./seo-checks";
 
 const GROUP_LABELS: Record<CheckGroup, string> = {
   required: "Required",
-  on_page: "On-page SEO",
   keyword_usage: "Keyword placement",
+  on_page: "On-page SEO",
+  readability: "Readability",
   social: "Social + media",
   defaults: "What will actually render",
 };
 
-const GROUP_ORDER: CheckGroup[] = ["required", "on_page", "keyword_usage", "social", "defaults"];
+const GROUP_ORDER: CheckGroup[] = ["required", "keyword_usage", "on_page", "readability", "social", "defaults"];
 
 const STATUS_STYLE: Record<CheckStatus, { dot: string; text: string; bg: string }> = {
   pass: { dot: "bg-[#1f5f5e]", text: "text-[#1f5f5e]", bg: "bg-[#dcefea]" },

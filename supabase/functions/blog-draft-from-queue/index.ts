@@ -144,7 +144,15 @@ Rules:
 You'll be given a list of currently published Switchguides posts and funded course pages. Insert:
 - 2-3 internal links to other Switchguides posts (pick by topic / category overlap). Format: \`/switchguides/<slug>/\`
 - 1-2 internal links to a relevant funded course page or /course-finder/. Format: \`/funded/<slug>/\` or \`/course-finder/\`
+- At least 1 outbound link to an authoritative source on the allowlist (gov.uk / ONS / Skills England / etc) where natural. This is an E-E-A-T signal — outbound authority links HELP ranking, they don't hurt it. If you've cited a stat, the cite IS the outbound link.
 - If an affiliate-stack entry matches the topic, insert up to 3 affiliate links (you'll be told the entries; refuse to invent merchants not on the list)
+
+# Readability (Google's helpful-content + AI Overview retrieval rewards this)
+
+- Average sentence length: 14-22 words. Mix short and long; never sustained 30+ word sentences.
+- No paragraph runs over 4 sentences. Break long paragraphs.
+- Headings nest cleanly: H2 → H3 → H4. Never skip a level (no H2 followed by H4).
+- AI Overviews pull SHORT, well-structured passages. A H2 with a 2-sentence answer beats a H2 with a 200-word essay.
 
 # Output format
 
