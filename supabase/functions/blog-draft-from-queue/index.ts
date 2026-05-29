@@ -121,13 +121,26 @@ You'll be told the post's primary keyword in the user prompt. It MUST appear (ve
 1. \`meta_title\` — at least once.
 2. \`meta_description\` — at least once.
 3. \`excerpt\` — at least once.
-4. The opening paragraph of the body (first 50-100 words).
-5. At least one H2 heading.
-6. The body overall — 3-6 times across the post. Don't stuff; weave naturally.
+4. The opening paragraph of the body (first 50-100 words). MUST be in the **definitional opener** — see AEO rule 3.
+5. At least TWO H2 headings (one of which should be a question-style H2 — see "AEO vs SEO tension" below).
+6. The body overall — primary + variants combined should appear **10-25 times** across a 1500-2500 word post (0.5%-1.5% density). Mix the primary phrase with the variants you'll be given. This is a hard target — count before submitting.
 
-If the primary keyword is "how to retrain as a digital marketer", you don't have to use the exact phrase six times — small variants ("retraining as a digital marketer", "switching to digital marketing") count toward variety, but the verbatim phrase should still appear in slots 1-5 above.
+If the primary keyword is "how to retrain as a digital marketer", you don't have to use the exact phrase 10 times — small variants ("retraining as a digital marketer", "switch to digital marketing", "becoming a digital marketer") count toward the body density target, but the verbatim phrase should still appear in slots 1-5 above.
 
 The post's TITLE is fixed by the editor and you cannot change it. If the title doesn't contain the primary keyword, that's the editor's call — don't try to fix it in the body, just make sure your meta_title and headings do their job.
+
+# AEO vs classical SEO — the H2 tension (READ TWICE)
+
+AEO wants question-style H2s. Classical SEO wants the keyword in H2s. These pull in opposite directions IF you treat them as separate. They don't have to.
+
+**Resolve the tension by combining them.** A question-style H2 that contains the primary keyword satisfies BOTH rules:
+
+  - "How do I retrain as a digital marketer?" ✓ question-style ✓ contains primary keyword
+  - "Who pays for retraining as a digital marketer?" ✓ question-style ✓ contains variant
+  - "How much does it cost to retrain as a digital marketer?" ✓ both
+  - "What digital marketing courses qualify for funding?" ✓ both (uses a variant)
+
+**Of your 4-8 H2s, at least 2 must be question-style AND contain a target keyword.** The other H2s can be statement-style or pure question. Aim for 3+ question-style H2s total (per AEO) and 2+ keyword-containing H2s (per SEO).
 
 # Sources (link discipline — STRICT)
 
@@ -149,8 +162,9 @@ You'll be given a list of currently published Switchguides posts and funded cour
 
 # Readability (Google's helpful-content + AI Overview retrieval rewards this)
 
-- Average sentence length: 14-22 words. Mix short and long; never sustained 30+ word sentences.
-- No paragraph runs over 4 sentences. Break long paragraphs.
+- Average sentence length: 14-22 words. Mix short and long.
+- **HARD rule: zero sentences over 30 words.** Re-read every sentence; if it's over 30 words, split it.
+- **HARD rule: zero paragraphs run 5+ sentences.** If a paragraph hits 5 sentences, split it.
 - Headings nest cleanly: H2 → H3 → H4. Never skip a level (no H2 followed by H4).
 - AI Overviews pull SHORT, well-structured passages. A H2 with a 2-sentence answer beats a H2 with a 200-word essay.
 
@@ -201,7 +215,21 @@ Return ONLY a JSON object — no prose, no preamble, no markdown code fences aro
 
 Length and keyword rules are STRICT — count characters before submitting. The audit checks length and rejects drafts that bust the ceiling. If you can't fit the primary keyword inside the limit, restructure the sentence; don't go over.
 
-\`suggested_tags\` MUST be picked from the list of known tags you'll be given. Do NOT invent new tag slugs — unknown slugs are dropped at insert. Pick 2-4 tags whose slug genuinely matches the topic.`;
+\`suggested_tags\` MUST be picked from the list of known tags you'll be given. Do NOT invent new tag slugs — unknown slugs are dropped at insert. Pick 2-4 tags whose slug genuinely matches the topic.
+
+# BEFORE RETURNING — self-check (do this — drafts that skip it fail the audit)
+
+Before you emit the JSON, run this checklist over your draft:
+
+1. **Definitional opener:** is the FIRST PARAGRAPH ≤3 sentences AND does it contain the primary keyword verbatim? If not, rewrite it.
+2. **H2 keyword coverage:** count H2s containing the primary keyword or a target-keyword variant. If fewer than 2, rewrite one or two H2s to include it (use question-style + keyword form — see "AEO vs SEO tension").
+3. **Body density:** count occurrences of (primary + variants) in the body. Target 10-25 in a 1500-2500 word post. Below 10 = thin; rewrite a few sentences to weave the term back in. Above 25 = stuffing; trim.
+4. **Long sentences:** scan for sentences over 30 words. Split them.
+5. **Long paragraphs:** scan for paragraphs with 5+ sentences. Split them.
+6. **Field lengths:** count characters in meta_title (50-60), meta_description (140-158 HARD), excerpt (150-195 HARD). Trim or pad to fit.
+7. **No fabricated names:** scan for any proper noun (provider, employer, product, person). If you didn't see it in the prompt, remove it.
+
+Only emit the JSON after all 7 pass.`;
 
 type Idea = {
   id: number;
