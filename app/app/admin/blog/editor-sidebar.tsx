@@ -18,11 +18,12 @@ const GROUP_LABELS: Record<CheckGroup, string> = {
   keyword_usage: "Keyword placement",
   on_page: "On-page SEO",
   readability: "Readability",
+  aeo: "AEO + AI retrieval",
   social: "Social + media",
   defaults: "What will actually render",
 };
 
-const GROUP_ORDER: CheckGroup[] = ["required", "keyword_usage", "on_page", "readability", "social", "defaults"];
+const GROUP_ORDER: CheckGroup[] = ["required", "keyword_usage", "on_page", "readability", "aeo", "social", "defaults"];
 
 const STATUS_STYLE: Record<CheckStatus, { dot: string; text: string; bg: string }> = {
   pass: { dot: "bg-[#1f5f5e]", text: "text-[#1f5f5e]", bg: "bg-[#dcefea]" },

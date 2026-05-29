@@ -26,7 +26,7 @@
 import type { PostFormInput } from "./actions";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "info";
-export type CheckGroup = "required" | "keyword_usage" | "on_page" | "readability" | "social" | "defaults";
+export type CheckGroup = "required" | "keyword_usage" | "on_page" | "readability" | "aeo" | "social" | "defaults";
 
 // Authoritative outbound domains. A post citing one of these signals
 // "this content is connected to authoritative sources" — Google likes
@@ -498,6 +498,200 @@ export function checkSeo(input: PostFormInput, knownTagSlugs: Set<string>): SeoC
       status: "pass",
       message: `Clean H2 → H3 nesting (${h2Count(input.body)} H2s, ${h3Count} H3s).`,
       group: "readability",
+    });
+  }
+
+  // ---- AEO + retrieval ----------------------------------------------------
+  // How well-shaped this post is for AI search engines (Google AI Overview,
+  // Perplexity, ChatGPT search) to retrieve and CITE as their answer. The
+  // signals here aren't classical SEO — they're whether the page is built
+  // as a series of self-contained, structured answer passages.
+
+  const h2Headings = input.body
+    .split("\n")
+    .filter((l) => /^##\s/.test(l))
+    .map((l) => l.replace(/^##\s+/, "").trim());
+
+  // Question-style H2s. AI engines pattern-match queries against headings.
+  // Question phrasing ("What is X?", "How do I Y?", "How much does Z cost?")
+  // wins.
+  const questionH2Re = /^(what|how|why|when|where|who|which|can|should|does|do|is|are|will)\b|\?$/i;
+  const questionH2Count = h2Headings.filter((h) => questionH2Re.test(h)).length;
+  if (h2Headings.length === 0) {
+    // separately flagged
+  } else if (questionH2Count >= 3) {
+    checks.push({
+      id: "question_h2",
+      label: "Question-style H2s",
+      status: "pass",
+      message: `${questionH2Count} of ${h2Headings.length} H2s are question-style. Strong AI Overview signal.`,
+      group: "aeo",
+    });
+  } else if (questionH2Count >= 1) {
+    checks.push({
+      id: "question_h2",
+      label: "Question-style H2s",
+      status: "warn",
+      message: `${questionH2Count} of ${h2Headings.length} H2s are question-style. Aim for 3+ to boost AI Overview + Perplexity retrieval.`,
+      group: "aeo",
+    });
+  } else {
+    checks.push({
+      id: "question_h2",
+      label: "Question-style H2s",
+      status: "warn",
+      message: `No H2s are phrased as questions. AI engines match natural-language queries against headings — switch 3+ H2s to question form ("How does X work?", "Who qualifies for Y?") where natural.`,
+      group: "aeo",
+    });
+  }
+
+  // Direct-answer snippet after each H2 — the 1-3 sentences immediately after
+  // an H2 should be short and self-contained. AI Overviews lift these.
+  const h2Blocks = (() => {
+    const lines = input.body.split("\n");
+    const blocks: Array<{ heading: string; firstParagraph: string }> = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (/^##\s/.test(lines[i])) {
+        const heading = lines[i].replace(/^##\s+/, "").trim();
+        // Walk forward to find the first non-empty, non-heading paragraph.
+        let para = "";
+        for (let j = i + 1; j < lines.length; j++) {
+          const l = lines[j].trim();
+          if (l === "" && para !== "") break;
+          if (/^#{2,6}\s/.test(l)) break;
+          if (l !== "") para += (para ? " " : "") + l;
+        }
+        blocks.push({ heading, firstParagraph: stripMarkdown(para) });
+      }
+    }
+    return blocks;
+  })();
+  if (h2Blocks.length > 0) {
+    const concise = h2Blocks.filter((b) => {
+      const sc = sentencesOf(b.firstParagraph).length;
+      return sc >= 1 && sc <= 3;
+    }).length;
+    const ratio = concise / h2Blocks.length;
+    if (ratio >= 0.75) {
+      checks.push({
+        id: "answer_snippet",
+        label: "Direct-answer snippet after each H2",
+        status: "pass",
+        message: `${concise} of ${h2Blocks.length} H2s open with a 1-3 sentence answer. AI Overviews can lift these verbatim.`,
+        group: "aeo",
+      });
+    } else {
+      checks.push({
+        id: "answer_snippet",
+        label: "Direct-answer snippet after each H2",
+        status: "warn",
+        message: `${concise} of ${h2Blocks.length} H2s open with a concise 1-3 sentence answer. Rewrite long openers so the first 1-3 sentences answer the heading on their own (then expand below).`,
+        group: "aeo",
+      });
+    }
+  }
+
+  // Definitional opener — first paragraph short + contains the primary entity.
+  const firstBodyPara = paragraphs[0] ?? "";
+  if (firstBodyPara && primaryKw) {
+    const sentCount = sentencesOf(stripMarkdown(firstBodyPara)).length;
+    const containsKw = firstBodyPara.toLowerCase().includes(primaryKw);
+    if (sentCount <= 3 && containsKw) {
+      checks.push({
+        id: "definitional_opener",
+        label: "Definitional opener",
+        status: "pass",
+        message: `Opening paragraph is ${sentCount} sentence${sentCount === 1 ? "" : "s"} and names the primary entity. Good fit for AI definitional retrieval.`,
+        group: "aeo",
+      });
+    } else {
+      const why: string[] = [];
+      if (sentCount > 3) why.push(`${sentCount} sentences (aim for ≤3)`);
+      if (!containsKw) why.push(`primary keyword absent`);
+      checks.push({
+        id: "definitional_opener",
+        label: "Definitional opener",
+        status: "warn",
+        message: `Opening paragraph: ${why.join("; ")}. The first paragraph should define the primary entity in ≤3 sentences — that's what AI engines lift for definitional queries.`,
+        group: "aeo",
+      });
+    }
+  }
+
+  // TL;DR / Quick answer block at the top.
+  const hasTldr = /^>\s*\*\*(quick answer|tl;dr|in short|summary)\*\*/im.test(input.body);
+  if (hasTldr) {
+    checks.push({
+      id: "tldr_block",
+      label: "Quick-answer block at top",
+      status: "pass",
+      message: `Quick-answer block found. AI engines surface these as the canonical short answer.`,
+      group: "aeo",
+    });
+  } else {
+    checks.push({
+      id: "tldr_block",
+      label: "Quick-answer block at top",
+      status: "info",
+      message: `No TL;DR / Quick-answer block. Optional, but a 2-3 sentence \`> **Quick answer:** ...\` at the top gets lifted by Google AI Overview + Perplexity. Recommended for posts with a short summary answer.`,
+      group: "aeo",
+    });
+  }
+
+  // Tables for comparative / numeric data.
+  const tableCount = (input.body.match(/^\|.+\|$/gm) ?? []).filter((l, i, arr) => {
+    // Only count rows that look like header rows (followed by a separator
+    // `| --- | --- |`).
+    return arr[i + 1] && /^\|[\s:-]+\|/.test(arr[i + 1] ?? "");
+  }).length;
+  if (tableCount >= 1) {
+    checks.push({
+      id: "tables_present",
+      label: "Tables present",
+      status: "pass",
+      message: `${tableCount} table${tableCount === 1 ? "" : "s"} found. AI engines retrieve structured data far more readily than prose.`,
+      group: "aeo",
+    });
+  } else {
+    checks.push({
+      id: "tables_present",
+      label: "Tables present",
+      status: "info",
+      message: `No tables in the body. If this post compares schemes, salary bands, eligibility criteria, or duration windows, add a markdown table — AI engines lift them as answers.`,
+      group: "aeo",
+    });
+  }
+
+  // FAQ block. The build script picks up ```faq fenced blocks and renders
+  // them as visible FAQ + JSON-LD FAQPage schema.
+  const hasFaqBlock = /```faq[\s\S]*?```/m.test(input.body);
+  if (hasFaqBlock) {
+    checks.push({
+      id: "faq_block",
+      label: "FAQ block (FAQPage schema)",
+      status: "pass",
+      message: `FAQ block detected. Build emits FAQPage JSON-LD — Google + AI engines surface as rich snippets.`,
+      group: "aeo",
+    });
+  } else {
+    checks.push({
+      id: "faq_block",
+      label: "FAQ block (FAQPage schema)",
+      status: "info",
+      message: `No FAQ block. If the topic has 3-5 common questions, add a \`\`\`faq fenced block — build renders it as visible FAQ + FAQPage schema (Google rich snippet).`,
+      group: "aeo",
+    });
+  }
+
+  // Numbered/HowTo lists for procedural topics.
+  const hasNumberedSteps = /^\d+\.\s/m.test(input.body) && (input.body.match(/^\d+\.\s/gm) ?? []).length >= 3;
+  if (hasNumberedSteps) {
+    checks.push({
+      id: "howto_steps",
+      label: "Numbered steps (HowTo signal)",
+      status: "pass",
+      message: `Numbered steps detected. AI engines retrieve these as HowTo schema candidates.`,
+      group: "aeo",
     });
   }
 

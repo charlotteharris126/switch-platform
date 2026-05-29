@@ -154,6 +154,36 @@ You'll be given a list of currently published Switchguides posts and funded cour
 - Headings nest cleanly: H2 → H3 → H4. Never skip a level (no H2 followed by H4).
 - AI Overviews pull SHORT, well-structured passages. A H2 with a 2-sentence answer beats a H2 with a 200-word essay.
 
+# AI Engine Optimisation (AEO) — getting retrieved by Google AI Overview, Perplexity, ChatGPT search
+
+AEO is how this post gets QUOTED in AI search engine answers, not just ranked. Rules:
+
+1. **Question-style H2 headings where natural.** AI engines match natural-language queries against headings. "What does a digital marketer do?" outperforms "What digital marketers actually do all day" for query matching. Aim for 3+ H2s phrased as questions or clear-intent statements ("How much does a Skills Bootcamp cost?", "Who qualifies for Free Courses for Jobs?").
+2. **Direct-answer snippet right after each H2.** The 1-3 sentences immediately after each H2 should be a self-contained answer to that heading. AI Overviews lift these verbatim. Even if the section continues for 200 more words afterwards, those first 1-3 sentences must answer the H2 on their own.
+3. **Definitional opener.** The first paragraph of the post must define the primary entity in 1-2 sentences. For "How to retrain as a digital marketer", that paragraph should briefly say what a digital marketer IS before getting into the retraining angle. AI engines lift these for definitional queries.
+4. **TL;DR / Quick answer block.** Optional but powerful. Where the topic has a short summary answer, emit a markdown quote block at the top of the body labelled "Quick answer" with 2-3 sentences:
+   \`\`\`
+   > **Quick answer:** [the gist, 2-3 sentences]
+   \`\`\`
+   This gets lifted by AI search engines as the canonical short answer.
+5. **Tables for comparative or numeric data.** Where the post compares schemes, salary bands, eligibility criteria, or duration windows, emit a Markdown table. AI engines retrieve tables far more readily than prose. Example shapes:
+   - Salary bands by experience tier
+   - Schemes side-by-side (Skills Bootcamp vs ALL vs SWAP)
+   - Eligibility checkboxes by demographic
+6. **FAQ block at the bottom of relevant posts.** If the post has 3-5 common questions, emit them as a markdown fenced block the build picks up as FAQPage schema:
+   \`\`\`
+   \`\`\`faq
+   Q: [question]
+   A: [answer in 1-3 sentences]
+
+   Q: [question]
+   A: [answer]
+   \`\`\`
+   \`\`\`
+   The build script renders this as a visible FAQ + JSON-LD FAQPage schema. Google + AI engines surface these as rich snippets.
+7. **Entity precision.** Name schemes, organisations, qualifications, and providers by their actual full names ("Skills Bootcamp" not "bootcamp", "Free Courses for Jobs" not "free course schemes", "Level 3 qualification" not "L3"). Helps AI engines map you into their knowledge graph.
+8. **Numbered steps for "how to" topics.** If the topic is genuinely procedural, use a numbered list. AI engines retrieve these as HowTo schema candidates.
+
 # Output format
 
 Return ONLY a JSON object — no prose, no preamble, no markdown code fences around the JSON. Shape:
