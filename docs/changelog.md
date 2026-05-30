@@ -4,6 +4,51 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-30 — B2B + B2C CAPI pipelines verified live (token rotation + custom subdomains)
+
+Follow-up execution to the 2026-05-29 spec. Both pipelines now confirmed working end-to-end. Sasha-scope summary: still **zero schema change, zero migration, zero Edge Function change** — all dashboard infrastructure (Stape, GTM, DNS, Meta access tokens).
+
+**Two silent failures resolved on the B2B pipeline:**
+1. Server URL was `kxkzcqdu.eue.stape.net` — Stape's "container identifier" UI label, not an active subdomain. Requests discarded server-side.
+2. Meta CAPI access token in the Stape Facebook Conversion API tag was invalid (Meta returned OAuthException 190 "could not be decrypted"). Even if the URL had been correct from day one, every CAPI request would have been rejected.
+
+Both fixed today. Replacement token verified working via direct curl probe to `https://graph.facebook.com/v18.0/1386293849929367/events` before being pasted into the Stape tag (`events_received: 1`, no warnings).
+
+**B2C scope added when discovered B2C was on `tetkyqyj.eue.stape.net` (also a Stape default).** Migrated to `b2c.switchable.org.uk`. Same token-verification probe against the B2C pixel (`1163964622558929`) returned `events_received: 1`. B2C External ID field typo on the Stape CAPI tag also fixed (`{Event Data — external_id}}` → `{{Event Data — external_id}}`).
+
+**Token rotation discipline now documented** in `switchable/site/docs/tracking-emq-capi.md` § "Lessons learned 2026-05-30 — silent failures on the B2B pipeline":
+- After saving any Server URL, immediately submit one test lead and watch the network panel for a request to that exact URL returning 200. If 404 or no request, URL is wrong before pushing live.
+- After saving any Meta CAPI access token, run a one-shot curl probe directly against `https://graph.facebook.com/v18.0/<pixel_id>/events` with the token. If Meta returns OAuthException, token is invalid before pushing live.
+- Rotate any token that has ever been exposed (chat log, screenshot, version control, shared inbox). Verify the replacement before pasting into Stape.
+
+**Backlog for next platform session:**
+- `lead-gate.js` ↔ `ingest.ts` OWNER_TEST_DOMAINS drift surfaced today. Currently mirrored manually. A build-time audit rule comparing the two lists would prevent recurrence (one-line script change). Owner: Sasha or Mable.
+- GTM API + Stape API MCP servers (nice-to-have). Today's debugging required Charlotte to be the eyes on every dashboard surface. Service-account-credentialled MCP would let agents read live tag/container state. Requires impact assessment per the infrastructure-change rule before standing up.
+- Stape free-tier ceiling watch on `GTM-P4KGSWSB` — now that events actually flow, % will climb. Flag at 70% sustained for paid-tier upgrade.
+
+Full conclusion + verification artefacts in `switchable/ads-business/docs/b2b-pixel-pipeline-audit-2026-05-29.md` § "Conclusion".
+
+## 2026-05-29 — B2B Stape server container provisioning spec (no DB / no migration)
+
+Triggered by Solis audit `switchable/ads-business/docs/b2b-pixel-pipeline-audit-2026-05-29.md`. The B2B Stape server container `GTM-P4KGSWSB` has no custom subdomain provisioned, no CAPI tags configured, and is receiving no production traffic. All B2B browser events are firing into the B2C web container `GTM-TFTFPL6Q` and forwarding only to the B2C Stape `tetkyqyj.eue.stape.net`, so the B2B Meta pixel runs on browser-Lead-only signal.
+
+**Platform-side state of this work (Sasha): no schema change, no migration, no Edge Function change, no `_shared/route-lead.ts` change.** This is dashboard infrastructure (Stape + DNS + GTM server container) outside the business data layer governed by `.claude/rules/data-infrastructure.md`. Logged here for the historical record only.
+
+**Deliverable shipped:** `platform/docs/b2b-stape-server-container-playbook-2026-05-29.md` — precise click-through playbook for Charlotte covering:
+- Part A: DNS CNAME for `b2b-capi.switchable.org.uk` → Stape target, Stape Custom Domain activation
+- Part B: Two CAPI tags inside `GTM-P4KGSWSB` (Lead + ViewContent) per the canonical field tables in `switchable/site/docs/tracking-emq-capi.md` § "B2B-specific overrides"
+- Part C: Post-fix verification including a readonly SQL query Solis can run from Postgres MCP to cross-check Stape request count against DB lead count
+- Part D: Forward-looking Stape free-tier ceiling watch (current 5% utilisation, projected 30% post-fix at current ad spend, 90%+ at 3x ad spend, paid-tier upgrade recommended at 70% sustained)
+
+**Why no impact assessment under § 8 of data-infrastructure.md:** this work touches no Postgres table, no n8n / Edge Function consumer, no Metabase dashboard, no agent query pattern, no external export. The Stape dashboard is not a consumer or producer of the business DB. Cookiebot consent gates remain unchanged. Privacy policy disclosure scope unchanged (already covers Meta data sharing via the existing CAPI clause).
+
+**Cross-project coordination:**
+- Site-side companion work (Mable) in `switchable/site/docs/CHANGELOG.md` (2026-05-29 header) and the M-1 / M-2 dashboard tasks in her handoff.
+- Solis owns the post-fix verification cycle.
+- No platform-side action remaining once Charlotte executes Parts A + B and Solis runs Part C verification.
+
+---
+
 ## 2026-05-26 — Manual batch SMS chaser button on /admin/leads (migration 0174)
 
 **1. Migration 0174 — `crm.fire_sms_chaser_bulk(BIGINT[])` RPC.** Sibling of `crm.fire_provider_chaser` (email bulk, migration 0086) and `crm.fire_sms_chaser_attempt_1` (singular auto-fire, migration 0157). Per-row gates: not archived, has phone, has primary_routed_to, AND no non-failed chaser SMS in `crm.sms_log` within the last 24h. Eligible rows audit (`fire_sms_chaser_bulk`) and async-fire the existing `sms-chaser-attempt-1` Edge Function with `cooldown_hours=24` in the body. SECURITY DEFINER, EXECUTE granted to `authenticated`.

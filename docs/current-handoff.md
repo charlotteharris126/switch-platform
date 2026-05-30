@@ -1,5 +1,45 @@
 # Platform Handoff, Session 60, 2026-05-28
 
+## ⚡ PUSH FROM Solis 2026-05-29: B2B Stape server container provisioning (urgent, lead-impact)
+
+Site-layer audit confirms the B2B Stape server container `GTM-P4KGSWSB` has no custom subdomain provisioned, no CAPI tags configured, and is receiving no production traffic. £493 of B2B ad spend flagged as low-data-quality affected. Full diagnosis in `switchable/ads-business/docs/b2b-pixel-pipeline-audit-2026-05-29.md`.
+
+**Sasha's read of scope (2026-05-29):** zero platform-side state change. No schema, no migration, no Edge Function, no `_shared/route-lead.ts` touch. Stape is dashboard infrastructure outside the Postgres governance perimeter set by `.claude/rules/data-infrastructure.md`. No impact assessment doc required. Logged in `platform/docs/changelog.md` (2026-05-29 entry) for the historical record only.
+
+**Status as of 2026-05-29 end of session:**
+
+- **Spec shipped:** `platform/docs/b2b-stape-server-container-playbook-2026-05-29.md` — precise click-through playbook covering DNS CNAME, Stape custom domain activation, the two CAPI tags (Lead + ViewContent) with full field-by-field mapping per the canonical doc, post-fix verification SQL Solis can run from Postgres MCP, and the forward-looking Stape free-tier ceiling watch.
+- **Changelog entry:** `platform/docs/changelog.md` (2026-05-29 header).
+
+**Sitting with Charlotte (dashboard work, NOT executable from code):**
+
+- **S-1.** Execute Part A of the playbook (DNS CNAME for `b2b-capi.switchable.org.uk` → Stape target + activate custom domain in Stape). DNS propagation 5-30 minutes. Verify with `dig b2b-capi.switchable.org.uk CNAME +short` before moving to S-2.
+- **S-2.** Execute Part B of the playbook (two CAPI tags inside `GTM-P4KGSWSB` per the field tables in `switchable/site/docs/tracking-emq-capi.md` § "B2B-specific overrides"). Pixel ID = B2B Meta pixel ID (confirm in Events Manager which ID is which before saving). All canonical-doc gotchas apply.
+- **S-3.** Coordinate Step 8 (test cycle, Part C of the playbook) with Mable + Solis once S-1, S-2, M-1, M-2 are all done. Submit a B2B test lead, verify in Meta Events Manager → B2B pixel → Test Events that a single Lead event arrives with Browser AND Server badges, deduped via `event_id`. Cross-check the Stape dashboard request count rising.
+- **S-4 (forward-looking, no immediate action).** Monitor Stape free-tier 10,000-request/month ceiling on `GTM-P4KGSWSB`. Current 5% utilisation. Projected 30% post-fix at current spend, 90%+ at 3x ad spend. Flag to Charlotte at 70% sustained for the paid-tier upgrade (~£20-30/month for 100k events).
+
+**Coordination point:** S-1 must complete BEFORE Mable's M-2 publishes — the web container's `[B2B] Stape Forwarder` tag needs the custom subdomain live to have somewhere to post events. Recommended order: S-1 → Mable M-1 (inventory in parallel with DNS propagation) → S-2 (in parallel with M-1) → Mable M-2 → Step 8 verification.
+
+## ⚡ UPDATE 2026-05-30: Both pipelines live (B2B fix + B2C cutover)
+
+Charlotte executed the dashboard work on 2026-05-30. Sasha's spec was approximately correct but the actual execution surfaced two silent failures that weren't in the original audit:
+
+1. **Invalid Meta CAPI access token** on the B2B pixel. The token in the Stape tag had been wrong since initial setup; Meta rejected every CAPI request with OAuthException 190. Discovered via Claude sending a direct CAPI probe to `https://graph.facebook.com/v18.0/<pixel_id>/events` and reading Meta's response. **Rotated** via Meta Events Manager → B2B pixel → Settings → Generate access token. New token verified working via a second direct probe before pasting into the Stape tag.
+2. **B2C External ID field typo** (`{Event Data — external_id}}` — missing one opening brace). Variable never resolved; external_id has been absent from user_data on B2C CAPI events. **Fixed** in the same publish as the B2C cutover.
+
+**Platform-side state of this work (Sasha): still zero schema change, zero migration, zero Edge Function change.** Stape + GTM dashboard infrastructure only. Token rotation is a credential change but not under Postgres governance (token lives in Stape tag config, not Supabase secrets).
+
+**Verification proof captured:**
+- Direct curl probes against both Meta pixels returned `events_received: 1` (token + pixel ID + payload format all valid)
+- Browser network panel captured the actual `generate_lead` request reaching `b2b.switchable.org.uk` with 200 OK and first-party cookies set on switchable.org.uk
+- B2C `b2c.switchable.org.uk` returned proper Stape sGTM responses (HTTP 400 + trace-id for malformed probe = container reachable and serving)
+
+**Followup discovery — `lead-gate.js` vs `ingest.ts` OWNER_TEST_DOMAINS drift.** Server-side had `charlie-harris.com`, browser-side didn't. Mirrored on 2026-05-30. Scope a build-time audit rule that compares the two lists for future-proofing (one-line server-side change emits the list as a build artefact, audit-site.js asserts equality). Backlog for next platform session.
+
+**Backlog for Sasha — GTM + Stape MCP servers (nice-to-have).** Today's debugging required Charlotte to be the eyes on every dashboard surface (GTM tag configs, Stape Domain panel, request volume, etc.). Scoping a service-account-credentialled MCP for Google Tag Manager API + Stape API would let Solis/Iris/Sasha read live tag and container state directly. Per the infrastructure-change rule, requires impact assessment + secrets management before standing up. Not urgent given the fix is in, but a future debugging session would benefit substantially.
+
+**S-4 (free-tier ceiling watch) still active.** Now that B2B events actually flow, utilisation will climb meaningfully. Currently at 9% (mostly pre-fix noise from the kxkzcqdu requests that were discarded). Real usage from 2026-05-30 onward. Flag at 70% sustained for paid-tier upgrade (~£20-30/month for 100k events).
+
 ## ⚡ PUSH FROM Mira 2026-05-28: AI tool builds + bespoke conversion-optimised funnels for the learner-side 10-SKU portfolio
 
 Mira strategy Session 19 consolidated the learner-side product stack into a 10-SKU portfolio. Two AI-tool builds and a bespoke-funnel architecture decision sit with Sasha on top of the Phase 1 Builds 2-4 already in-flight.
