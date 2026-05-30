@@ -162,13 +162,17 @@ export default async function ExperimentsPage() {
   const supabase = await createClient();
 
   // 1. Pull every submission with experiment_id (re-applications excluded
-  //    so counts reflect fresh paid impressions only).
+  //    so counts reflect fresh paid impressions only). Archived rows are
+  //    excluded so admin-marked test leads (owner-test-toggle.tsx) drop
+  //    out of the experiments view automatically, no manual SQL needed.
+  //    Added 2026-05-30 after B2B test cleanup surfaced the gap.
   const submissionsQuery = await supabase
     .schema("leads")
     .from("submissions")
     .select("id, experiment_id, experiment_variant, is_dq, submitted_at")
     .not("experiment_id", "is", null)
     .is("parent_submission_id", null)
+    .is("archived_at", null)
     .order("submitted_at", { ascending: false })
     .limit(5000);
 
