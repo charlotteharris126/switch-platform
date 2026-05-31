@@ -125,7 +125,13 @@ export function ReconcileBrevoPanel() {
   // poll, no hang. Replaces the old async-apply-then-poll flow.
   function fireApply() {
     if (!dryRunResult || !dryRunResult.ok || !("drift_list" in dryRunResult)) return;
-    const ids = dryRunResult.drift_list.map((d) => d.submission_id);
+    // Coerce submission_id to a number: it comes from a bigint column that
+    // postgres@3 serialises as a string ("216"), so the values can arrive as
+    // strings. The EF tolerates both now too, but coercing here keeps the
+    // chunk payloads clean. (2026-05-31)
+    const ids = dryRunResult.drift_list
+      .map((d) => Number(d.submission_id))
+      .filter((n) => Number.isInteger(n));
     if (ids.length === 0) return;
 
     setApplyResult(null);

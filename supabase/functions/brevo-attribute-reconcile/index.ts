@@ -576,8 +576,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // admin-brevo-resync), finishes inside the Server Action window, and returns
   // a real result immediately. No background task, no dead_letter polling.
   if (Array.isArray(body.apply_ids)) {
+    // Accept numbers AND numeric strings. drift_list's submission_id originates
+    // from a bigint column, which postgres@3 returns as a JS string ("216"),
+    // and it survives the JSON round-trip as a string. A number-only filter
+    // dropped every id → empty array → "must be a non-empty array" error. See
+    // memory: postgres@3 returns bigint as JS string. (2026-05-31)
     const ids = (body.apply_ids as unknown[])
-      .filter((v): v is number => typeof v === "number" && Number.isInteger(v));
+      .map((v) => (typeof v === "number" ? v : typeof v === "string" ? Number.parseInt(v, 10) : NaN))
+      .filter((n): n is number => Number.isInteger(n));
     if (ids.length === 0) {
       return json({ ok: false, error: "apply_ids must be a non-empty array of integers" }, 400);
     }
