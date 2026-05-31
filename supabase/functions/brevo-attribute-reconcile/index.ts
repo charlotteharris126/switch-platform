@@ -222,13 +222,26 @@ async function loadSubmissionById(id: number): Promise<SubmissionRow | null> {
 //   - null / undefined → ""
 //   - boolean → "true" / "false"
 //   - number → String(n)
-//   - string → as-is, trimmed
+//   - string → trimmed
+//
+// The trim is load-bearing, not cosmetic. Brevo trims leading/trailing
+// whitespace when it STORES a contact attribute, but the canonical projection
+// pushes the raw DB value. Our DB carries trailing spaces on many names
+// ("Obinna ", "Chloe ") and a deliberate leading space on phones
+// (" 07827492172" — the Netlify numeric-coercion guard, see
+// feedback_netlify_forms_numeric_coercion). So desired=" 07827492172" vs
+// Brevo-stored="07827492172" was flagging as permanent drift that re-applying
+// could never fix (Brevo just re-trims). Trimming both sides here collapses
+// only whitespace-only differences; a genuine value change ("Smith" vs
+// "Jones") still drifts. Fixed 2026-05-31 — was the bulk of a stuck 110-142
+// drift count (SW_PHONE 67 + FIRSTNAME 27 + LASTNAME 21). The comment always
+// said "trimmed"; the code never did.
 function normaliseForCompare(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "boolean") return v ? "true" : "false";
   if (typeof v === "number") return String(v);
-  if (typeof v === "string") return v;
-  return String(v);
+  if (typeof v === "string") return v.trim();
+  return String(v).trim();
 }
 
 // Brevo Category attributes are an asymmetric pain. GET /contacts (list)
