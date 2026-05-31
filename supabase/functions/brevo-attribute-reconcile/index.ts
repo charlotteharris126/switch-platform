@@ -92,7 +92,7 @@ const DRIFT_LIST_CAP = 5000;
 // async-apply-then-poll flow that hung ("still running after 180s") because the
 // single waitUntil task exceeded the runtime ceiling before writing its result
 // row. (2026-05-31)
-const APPLY_IDS_MAX_PER_CALL = 25;
+const APPLY_IDS_MAX_PER_CALL = 25; // hard ceiling; the panel chunks at 10 (matched contacts are slow — see panel CHUNK comment)
 
 interface BrevoContact {
   id: number;

@@ -139,7 +139,12 @@ export function ReconcileBrevoPanel() {
     setConfirmApply(false);
     setPendingMode("apply");
 
-    const CHUNK = 25;
+    // 10, not 25: matched contacts are slow (several SQL reads + Brevo upsert +
+    // 250ms throttle ≈ 650ms each), so 25 blew past Netlify's Server Action
+    // window → "unexpected response from the server". 10 ≈ 7s/call, safe. More
+    // round-trips, but each returns fast and the progress counter still moves.
+    // (2026-05-31)
+    const CHUNK = 10;
     startTransition(async () => {
       let applied = 0;
       let errors = 0;
