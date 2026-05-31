@@ -1267,6 +1267,14 @@ export async function upsertLearnerInBrevoNoMatch(
   // rationale (utility list-add is legacy, kept during 90-day retention).
   const utilityListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_UTILITY");
   const marketingListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_MARKETING");
+  // Newsletter list (id 10). Owner decision 2026-05-31: not-routed (no_match)
+  // leads who consented to marketing go straight onto the newsletter list, not
+  // only the marketing list, so they receive the newsletter without waiting on a
+  // separate Brevo graduation automation. Gated on marketing_opt_in below — the
+  // newsletter is a marketing communication, so consent applies (unlike the
+  // newsletter signup form, where the submit itself is the consent). Routed
+  // leads are deliberately excluded: their nurture sequences place them.
+  const newsletterListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_NEWSLETTER");
 
   const attributes = await buildLearnerBrevoAttributesNoMatch(sql, submission, matchStatus);
 
@@ -1289,6 +1297,9 @@ export async function upsertLearnerInBrevoNoMatch(
   if (utilityListId != null) listIds.push(utilityListId);
   if (submission.marketing_opt_in && marketingListId != null) {
     listIds.push(marketingListId);
+  }
+  if (submission.marketing_opt_in && newsletterListId != null) {
+    listIds.push(newsletterListId);
   }
 
   const upsertResult = await upsertBrevoContact({

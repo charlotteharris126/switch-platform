@@ -79,7 +79,20 @@ const BATCH_SIZE = 100;
 // concurrent route-lead.ts upserts firing on live submissions.
 const INTER_WRITE_DELAY_MS = 250;
 const HALT_ERROR_RATE = 0.05;
-const DRIFT_LIST_CAP = 50;
+// Drift list cap. Raised 50 → 5000 (2026-05-31) so a dry-run check returns
+// EVERY drifting submission id, not a 50-row sample. The panel's chunked apply
+// uses drift_list as its work queue, so it must be complete. 5000 is a safety
+// ceiling far above any real audience at pilot scale.
+const DRIFT_LIST_CAP = 5000;
+// Apply-by-ids chunk ceiling. The panel sends drifting submission ids back in
+// small batches and loops until done. Each call must finish inside Netlify's
+// ~26s Server Action window: ~25 ids × (250ms throttle + ~400ms Brevo upsert)
+// ≈ 16s, comfortable headroom. Calls above this are rejected so nothing can
+// accidentally trigger a too-long synchronous run. Replaces the old
+// async-apply-then-poll flow that hung ("still running after 180s") because the
+// single waitUntil task exceeded the runtime ceiling before writing its result
+// row. (2026-05-31)
+const APPLY_IDS_MAX_PER_CALL = 25;
 
 interface BrevoContact {
   id: number;
@@ -175,6 +188,31 @@ async function loadProvider(providerId: string): Promise<ProviderRow | null> {
            trust_line, regions, regional_contacts
       FROM crm.providers
      WHERE provider_id = ${providerId}
+  `;
+  return rows[0] ?? null;
+}
+
+// Load a submission by id (apply-by-ids path). Same column list as
+// loadSubmissionByEmail. Does NOT filter archived in SQL — the apply loop
+// decides (it skips archived rows), mirroring admin-brevo-resync.
+async function loadSubmissionById(id: number): Promise<SubmissionRow | null> {
+  const rows = await sql<SubmissionRow[]>`
+    SELECT id, submitted_at, course_id, funding_category, funding_route,
+           first_name, last_name, email, phone,
+           la, region_scheme, age_band, employment_status,
+           prior_level_3_or_higher, can_start_on_intake_date,
+           outcome_interest, why_this_course,
+           postcode, region, reason, interest, situation,
+           qualification, start_when, budget, courses_selected,
+           is_dq, dq_reason, primary_routed_to, archived_at,
+           marketing_opt_in,
+           preferred_intake_id, acceptable_intake_ids,
+           referral_code, client_nonce,
+           start_timing, interest_breadth, investment_willingness,
+           current_qualification, source_form, enriched_at,
+           fastracked_at
+      FROM leads.submissions
+     WHERE id = ${id}
   `;
   return rows[0] ?? null;
 }
@@ -355,8 +393,16 @@ async function run(apply: boolean): Promise<RunSummary> {
         if (!provider) {
           return { kind: "error", contact, message: `provider ${submission.primary_routed_to} not found` };
         }
-        if (!provider.active || provider.archived_at) {
-          return { kind: "error", contact, message: `provider ${submission.primary_routed_to} inactive/archived` };
+        // Only ARCHIVED providers gate reconcile — paused (active=false but
+        // not archived, e.g. Courses Direct / WYK between intakes) is fine.
+        // A reconcile rebuilds attributes on EXISTING learner contacts; it
+        // doesn't route a new lead. `active` is a routing concern. This
+        // mirrors admin-brevo-resync's gate exactly (which is why those CD/WYK
+        // leads resync fine there but errored here). Before this change ~52
+        // paused-provider leads errored every daily run and could never be
+        // reconciled. (2026-05-31)
+        if (provider.archived_at) {
+          return { kind: "error", contact, message: `provider ${submission.primary_routed_to} archived` };
         }
         mode = "matched";
         desired = await buildLearnerBrevoAttributes(sql, provider, submission);
@@ -498,9 +544,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ ok: false, error: "Unauthorized" }, 401);
   }
 
-  let body: { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown; list_attributes?: unknown };
+  let body: { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown; list_attributes?: unknown; apply_ids?: unknown };
   try {
-    body = await req.json() as { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown; list_attributes?: unknown };
+    body = await req.json() as { apply?: unknown; log_drift?: unknown; async_apply?: unknown; async_check?: unknown; list_attributes?: unknown; apply_ids?: unknown };
   } catch {
     return json({ ok: false, error: "invalid JSON body" }, 400);
   }
@@ -508,6 +554,81 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const logDrift = body.log_drift === true;
   const asyncApply = body.async_apply === true;
   const asyncCheck = body.async_check === true;
+
+  // Apply-by-ids (synchronous, chunked). The reliable replacement for the old
+  // full-walk async apply that hung. The panel runs a dry-run check first
+  // (drift_list now returns every drifting submission id), then sends those
+  // ids back in chunks of ≤ APPLY_IDS_MAX_PER_CALL, looping until done. Each
+  // call resyncs its ids via the canonical upsert path (identical branching to
+  // admin-brevo-resync), finishes inside the Server Action window, and returns
+  // a real result immediately. No background task, no dead_letter polling.
+  if (Array.isArray(body.apply_ids)) {
+    const ids = (body.apply_ids as unknown[])
+      .filter((v): v is number => typeof v === "number" && Number.isInteger(v));
+    if (ids.length === 0) {
+      return json({ ok: false, error: "apply_ids must be a non-empty array of integers" }, 400);
+    }
+    if (ids.length > APPLY_IDS_MAX_PER_CALL) {
+      return json({
+        ok: false,
+        error: `apply_ids capped at ${APPLY_IDS_MAX_PER_CALL} per call (got ${ids.length}); the panel chunks automatically`,
+      }, 400);
+    }
+
+    const results: Array<{ id: number; status: "ok" | "skipped" | "error"; reason?: string }> = [];
+    let appliedOk = 0;
+    let errors = 0;
+    const errorMessages: string[] = [];
+    const providerCache = new Map<string, ProviderRow | null>();
+
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      if (i > 0) await sleep(INTER_WRITE_DELAY_MS);
+      try {
+        const submission = await loadSubmissionById(id);
+        if (!submission) { results.push({ id, status: "skipped", reason: "not found" }); continue; }
+        if (submission.archived_at) { results.push({ id, status: "skipped", reason: "archived" }); continue; }
+
+        if (submission.is_dq) {
+          const r = await upsertLearnerInBrevoNoMatch(sql, id, "no_match");
+          if (!r.ok) throw new Error(r.error ?? "unknown");
+        } else if (!submission.primary_routed_to) {
+          const r = await upsertLearnerInBrevoNoMatch(sql, id, "pending");
+          if (!r.ok) throw new Error(r.error ?? "unknown");
+        } else {
+          let provider = providerCache.get(submission.primary_routed_to);
+          if (provider === undefined) {
+            provider = await loadProvider(submission.primary_routed_to);
+            providerCache.set(submission.primary_routed_to, provider);
+          }
+          if (!provider) { results.push({ id, status: "error", reason: "provider not found" }); errors++; continue; }
+          // Only archived providers gate apply — paused is fine (mirrors the
+          // dry-run gate + admin-brevo-resync).
+          if (provider.archived_at) { results.push({ id, status: "skipped", reason: "provider archived" }); continue; }
+          const r = await upsertLearnerInBrevo(sql, provider, submission);
+          if (!r.ok) throw new Error(r.error ?? "unknown");
+        }
+        appliedOk++;
+        results.push({ id, status: "ok" });
+      } catch (err) {
+        errors++;
+        const msg = `#${id}: ${err instanceof Error ? err.message : String(err)}`;
+        errorMessages.push(msg);
+        results.push({ id, status: "error", reason: msg });
+        console.error("[apply_ids]", msg);
+      }
+    }
+
+    return json({
+      ok: true,
+      mode: "apply_ids",
+      requested: ids.length,
+      applied: appliedOk,
+      errors,
+      error_messages: errorMessages,
+      results,
+    });
+  }
 
   // Diagnostic: list every attribute currently defined in the Brevo account
   // so the reconciler can cross-check whether the canonical projection's

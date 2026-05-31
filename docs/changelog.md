@@ -4,6 +4,75 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-31 — Newsletter signup → Brevo automation: DEPLOYED + backfilled
+
+Follow-up to the PENDING-DEPLOY entry below. Charlotte set the env var, deployed, and the backfill is done. All verified live.
+
+- **Env var set:** `BREVO_LIST_ID_SWITCHABLE_NEWSLETTER=10` in Supabase secrets.
+- **Deployed:** `netlify-lead-router` (newsletter signup branch + going-forward no_match list-10 add) AND `admin-brevo-resync`, both with `--no-verify-jwt`.
+- **DEPLOY GOTCHA (caught + fixed):** `_shared/route-lead.ts` is bundled into each function at deploy time. First backfill attempt ran through `admin-brevo-resync`, which had NOT been redeployed, so it ran the stale bundle: returned `ok 87` but added nobody to list 10 (utility+marketing only). Resolved by redeploying `admin-brevo-resync` then re-running. **Lesson: a change to a `_shared/*` module is not live in a function until that specific function is redeployed. When a shared-code change must apply across multiple functions (here: list-add in both the live no_match path AND the backfill tool), redeploy every function that imports it.** 17 functions import `route-lead.ts` — only the two needed for this change were redeployed; the rest run the new list-add only when next redeployed for other reasons (harmless: the newsletter add is consent-gated and idempotent).
+- **Single-contact test before fan-out:** submission 22 (kristian.brown.safc@gmail.com) resynced alone, confirmed on Brevo list 10, before running all 87.
+- **Backfill result:** `admin-brevo-resync` over the 87 not-routed + marketing-consented + non-archived + non-test contacts → `total 87, ok 87, err 0, skipped 0` (net._http_response id 20865 was the stale run; final clean run confirmed by Charlotte). All 87 now on list 10. Idempotent re-adds (e.g. kristian from the test) caused no duplication.
+- **Selection criteria** (for any future re-run): `(is_dq OR primary_routed_to IS NULL) AND marketing_opt_in AND archived_at IS NULL AND email IS NOT NULL`, excluding owner/test dq_reasons and `unknown_form:%`.
+- No schema change, migration, or schema_version bump. Brevo Contacts API only.
+- Signed off: Owner (deployed + ran + verified Brevo-side 2026-05-31).
+
+## 2026-05-31 — Newsletter signup → Brevo automation (Sasha session, PENDING DEPLOY)
+
+Newsletter signups previously did nothing past a Netlify email (manual Brevo import). Now automated, plus not-routed leads land on the newsletter list. Code written, NOT deployed (Sasha can't deploy or set secrets).
+
+- **Code:** two additive edits, both inside the `netlify-lead-router` deploy:
+  - `netlify-lead-router/index.ts`: new early-return branch for `switchable-blog-subscribers` → `handleNewsletterSignup()` adds the email to Brevo list 10 (single opt-in; submit = consent). No `leads.submissions` row. Dead-letters (source `netlify_forms`) if email missing or Brevo rejects.
+  - `_shared/route-lead.ts` → `upsertLearnerInBrevoNoMatch`: also adds list 10 to a no_match lead's `listIds` when `marketing_opt_in` is true. Routed leads excluded (nurture places them). Helper has one caller (netlify-lead-router); matched path untouched.
+- **New env required (gates effect):** `BREVO_LIST_ID_SWITCHABLE_NEWSLETTER=10` in Supabase secrets. Until set: newsletter branch dead-letters (visible, not lost); no_match path skips the newsletter add (unchanged).
+- **No** schema change, migration, schema_version bump, new role, or RLS change. Brevo Contacts API only.
+- **Existing 28 consented waitlist contacts NOT retro-added** to list 10 — change is forward-only. Optional back-fill data-op flagged, not built.
+- **Impact assessment:** `platform/docs/impact-assessment-2026-05-31-newsletter.md`.
+- **Owner deploy steps:** (1) set the env var; (2) `supabase functions deploy netlify-lead-router`; (3) test a signup from a non-owner email → appears on Brevo list 10.
+- **Cross-project (Mable):** `form-allowlist.json` purpose text for `switchable-blog-subscribers` is now stale ("manually imports") — wants a doc-only update; `webhook_url` stays null (rides the site-wide webhook).
+- Signed off: PENDING (owner sets secret + deploys).
+
+## 2026-05-31 — Brevo reconcile: paused-provider gate fix + apply-hang diagnosis
+
+Two bugs found on the /admin/errors DB↔Brevo reconcile.
+
+- **FIXED (code, pending deploy): paused-provider gate.** `brevo-attribute-reconcile` errored on `!provider.active`, so leads routed to *paused* providers (Courses Direct 37, WYK 15 — active=false, not archived) errored every run (~52 "inactive/archived" errors) and could never reconcile. `admin-brevo-resync` only gates on *archived*, which is why those leads resync fine there. Relaxed the reconcile gate to archived-only to match. One-line change in `brevo-attribute-reconcile/index.ts`. Deploy: `supabase functions deploy brevo-attribute-reconcile`. Stops the ~52 daily errors and lets those leads reconcile.
+- **FIXED (code, pending deploy): panel apply hang ("still running after 180s").** Root cause confirmed from `leads.dead_letter`: zero `brevo_attribute_reconcile_async_result` rows ever exist, only `_async_check_result`. The old apply ran as a single `EdgeRuntime.waitUntil` task that re-walked all Brevo contacts then applied with 250ms×N throttle; it exceeded the Edge runtime wall-clock before writing its completion row, so the panel polled forever and the full set never finished (drift only ticked 120→110 between runs = partial). **New design: chunked apply-by-ids.** Dry-run check now returns every drifting submission id (DRIFT_LIST_CAP 50→5000); the panel sends those ids back in ≤25-id batches and loops, each EF call resyncing via the canonical upsert path (same branching as admin-brevo-resync) and returning a real result inside the Server Action window. No background task, no poll, no hang. Changes: `brevo-attribute-reconcile/index.ts` (new `apply_ids` handler + `loadSubmissionById` + `APPLY_IDS_MAX_PER_CALL=25`), `reconcile-actions.ts` (`applyBrevoIdsAction`), `reconcile-brevo-panel.tsx` (chunk-and-loop `fireApply` + live progress counter, async-apply path removed). Type-checks clean (0 app-code errors). **Deploy: `supabase functions deploy brevo-attribute-reconcile --no-verify-jwt` AND push the Next app (Netlify) for the panel + action.** Test single-chunk before trusting at scale.
+- **Drift cleared this session** via `admin-brevo-resync` SQL over all 424 real contacts (idempotent, canonical upsert path). A single 424-id call timed out at the 150s pg_net ceiling (the EF kept running server-side but no result row), so the resync was re-run in three id-range batches: ids<180 (145 ok), 180-299 (104 ok), ≥300 (175 ok) = 424/424 ok, 0 err. **Note: ~150s is the practical pg_net synchronous ceiling for admin-brevo-resync — keep batches ≤~175 contacts.**
+- Gate fix deployed by owner this session; drift cleared via batched SQL. Apply-by-ids rewrite then built (owner asked to fix issue 1 after all) and is pending deploy.
+- Signed off: gate fix DEPLOYED; apply-by-ids rewrite PENDING deploy (owner: deploy EF + push app, then test).
+
+## 2026-05-31 — Lead 526 written off (data fix)
+
+- Lead 526 (Luke Wallace, luke@lukewallace.co.uk), real self-funded "Certificate in Psychology & Counselling", never routed, 8 days stale. Owner decided not to pursue.
+- Set `is_dq=true, dq_reason='written_off_stale_unrouted', archived_at=now()` via SQL editor (no admin-UI path exists for writing off an *unrouted* lead — the enrolment-outcome form only acts on routed leads). New descriptive dq_reason value; no CHECK constraint on the column. `marketing_opt_in=false` so no email side-effect.
+- Verified: 526 archived; unrouted-non-DQ-leads-older-than-48h now 0.
+- Undo if needed: `is_dq=false, dq_reason=null, archived_at=null` on id 526.
+- Signed off: Owner (ran 2026-05-31).
+
+## 2026-05-31 — Dead-letter cleanup data-op 048 APPLIED + orphan form deleted
+
+Follow-up to the triage entry below. Both done, verified.
+
+- **Orphan Netlify form deleted:** Charlotte deleted `switchable-newsletter` (id 6a11e8e782973500084b3e70) in the Netlify Forms dashboard. Hourly `netlify_audit` flag stops at the next tick.
+- **Data-op 048 applied (both statements):** Statement A closed ~165 confirmed-dead rows (brevo_chase list-ID-bug window, one-off SMS, async-check artefacts, etc); Statement B closed ~187 `netlify_audit` rows now the form is gone. Marked `replayed_at = now()` — no deletes, history preserved.
+- **Result:** unresolved dead_letter 439 → 87. Remaining (all intentional): `sheet_drift_detected` 71 (EMS hand-edited status cells), `brevo_attribute_drift` 12 (clears on /admin/errors Re-sync), `edge_function_partial_capture` 4 (real connection-pool signal, watch).
+- Tomorrow's 06:30 drift digest expected ~87, down from 439.
+- Signed off: Owner (ran in Supabase SQL editor 2026-05-31, result verified).
+
+## 2026-05-31 — Dead-letter triage + cleanup data-op (Sasha session, PENDING APPLY)
+
+Drift-digest email (439 unreplayed dead_letter rows) triaged to 4 distinct causes. Data-op written, NOT applied (Sasha is read-only).
+
+- **Data-op:** `data-ops/048_clear_stale_dead_letter_2026_05_31.sql` — Statement A marks 165 confirmed-dead rows `replayed_at = now()` (sources whose root cause is already fixed: `edge_function_brevo_chase` 139 = the wrong-list-ID window fixed in S60; `brevo_transactional_sms` 18 = one-off failed-phone batch; `brevo_attribute_reconcile_async_check_result` 8). Statement B (clear `netlify_audit` history) is commented out, gated on the orphan-form deletion below.
+- **Left live on purpose** (must keep surfacing): `netlify_audit` (186, see below), `sheet_drift_detected` (71, EMS hand-edited status cells), `brevo_attribute_drift` (12, daily dry-run clears on /admin/errors Re-sync), `edge_function_partial_capture` (real connection-pool exhaustion, NOT dead).
+- **Root-cause corrections vs S60 handoff:**
+  - `netlify_audit` is NOT a missing redeploy. Live site serves the correct `switchable-blog-subscribers` form and `switchable-newsletter` is in no source file. It is a lingering Netlify orphan form (Netlify keeps a form alive once it has received a submission). **Fix = delete the orphan form (id `6a11e8e782973500084b3e70`) in the Netlify Forms dashboard** (Charlotte; dashboard-only). No site/Mable change needed.
+  - `edge_function_partial_capture` was previously treated as stale/dead. It is NOT — fresh "remaining connection slots reserved for SUPERUSER / too many clients" errors on 30-31 May. Connection-pool capacity signal; watch and investigate pooling if it climbs.
+- **Owner dashboard actions (no code possible):** (1) delete the orphan Netlify form, then run Statement B; (2) run /admin/errors DB<->Brevo Re-sync to clear the 114-contact attribute drift; (3) route or write off unrouted lead 526 (Luke Wallace, self-funded, 24 May, 7 days open).
+- **Self-correction logged:** earlier in this session I misdiagnosed a `readonly_analytics` grant regression (caused by my own wrong column name in a query) and wrote a bogus migration that collided with the real `0179_editorial_drafter_cron.sql`. Deleted; no grant issue exists, full grant sweep clean.
+- Signed off: PENDING (Sasha flagged; owner applies data-op 048 + dashboard actions)
+
 ## 2026-05-30 — B2B + B2C CAPI pipelines verified live (token rotation + custom subdomains)
 
 Follow-up execution to the 2026-05-29 spec. Both pipelines now confirmed working end-to-end. Sasha-scope summary: still **zero schema change, zero migration, zero Edge Function change** — all dashboard infrastructure (Stape, GTM, DNS, Meta access tokens).

@@ -16,6 +16,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import {
   type BrevoReconcileResult,
   type BrevoReconcileSummary,
+  applyBrevoIdsAction,
   brevoAttributeReconcileAction,
   getBrevoAsyncResultAction,
 } from "./reconcile-actions";
@@ -26,6 +27,11 @@ export function ReconcileBrevoPanel() {
   const [dryRunResult, setDryRunResult] = useState<BrevoReconcileResult | null>(null);
   const [applyResult, setApplyResult] = useState<BrevoReconcileResult | null>(null);
   const [confirmApply, setConfirmApply] = useState(false);
+
+  // Chunked apply state. fireApply loops applyBrevoIdsAction over ≤25-id
+  // batches; applyProgress drives the live counter, applyFinal the result box.
+  const [applyProgress, setApplyProgress] = useState<{ done: number; total: number } | null>(null);
+  const [applyFinal, setApplyFinal] = useState<{ applied: number; errors: number; errorMessages: string[] } | null>(null);
 
   const [pollNote, setPollNote] = useState<string | null>(null);
   const pollAbort = useRef<{ cancelled: boolean } | null>(null);
@@ -47,6 +53,8 @@ export function ReconcileBrevoPanel() {
     setApplyResult(null);
     setConfirmApply(false);
     setPollNote(null);
+    setApplyProgress(null);
+    setApplyFinal(null);
   }
 
   async function pollForResult(args: { kind: "check" | "apply"; since: string }) {
@@ -110,28 +118,46 @@ export function ReconcileBrevoPanel() {
     });
   }
 
+  // Chunked apply. Takes every drifting submission id from the last dry-run
+  // (drift_list now returns all of them, not a 50-sample), sends them back in
+  // ≤25-id batches, and loops until done. Each EF call finishes inside the
+  // Server Action window and returns a real result — no background task, no
+  // poll, no hang. Replaces the old async-apply-then-poll flow.
   function fireApply() {
+    if (!dryRunResult || !dryRunResult.ok || !("drift_list" in dryRunResult)) return;
+    const ids = dryRunResult.drift_list.map((d) => d.submission_id);
+    if (ids.length === 0) return;
+
     setApplyResult(null);
+    setApplyFinal(null);
+    setConfirmApply(false);
     setPendingMode("apply");
+
+    const CHUNK = 25;
     startTransition(async () => {
+      let applied = 0;
+      let errors = 0;
+      const errorMessages: string[] = [];
       try {
-        const r = await brevoAttributeReconcileAction({ apply: true, asyncApply: true });
-        if (r.ok && "started" in r && r.started) {
-          setPollNote(
-            "Re-syncing drifted contacts in the background — usually 60-120s for a few hundred contacts.",
-          );
-          void pollForResult({ kind: "apply", since: r.started_at });
-        } else {
-          setApplyResult(r);
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          setApplyProgress({ done: i, total: ids.length });
+          const r = await applyBrevoIdsAction({ ids: ids.slice(i, i + CHUNK) });
+          if (!r.ok) {
+            setApplyResult({ ok: false, error: r.error });
+            setApplyProgress(null);
+            return;
+          }
+          applied += r.applied;
+          errors += r.errors;
+          if (r.error_messages?.length) errorMessages.push(...r.error_messages);
         }
+        setApplyProgress(null);
+        setApplyFinal({ applied, errors, errorMessages });
       } catch (err) {
-        setApplyResult({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        setApplyResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        setApplyProgress(null);
       } finally {
         setPendingMode(null);
-        setConfirmApply(false);
       }
     });
   }
@@ -180,18 +206,20 @@ export function ReconcileBrevoPanel() {
       {applyResult && !applyResult.ok && (
         <ErrorBox title="Re-sync failed" message={applyResult.error} />
       )}
-      {applyResult && applyResult.ok && "started" in applyResult && applyResult.started && (
-        <SuccessBox
-          title="Re-sync started — running in the background"
-          summary="Each contact takes ~250ms to update so 300 contacts is ~75s. Click Check drift again in ~2 minutes to confirm the drift count has dropped."
-          errors={[]}
-        />
+      {applyProgress && (
+        <div className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+          <svg className="animate-spin h-3 w-3 text-slate-500" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+          </svg>
+          <span>Re-syncing {applyProgress.done}/{applyProgress.total} drifted contacts…</span>
+        </div>
       )}
-      {applyResult && applyResult.ok && "applied_count" in applyResult && (
+      {applyFinal && (
         <SuccessBox
-          title={`Re-sync complete: ${applyResult.applied_count} contact${applyResult.applied_count === 1 ? "" : "s"} updated`}
-          summary={`${applyResult.errors} error${applyResult.errors === 1 ? "" : "s"} • canonical upsert path fired for each drifted contact`}
-          errors={applyResult.error_messages}
+          title={`Re-sync complete: ${applyFinal.applied} contact${applyFinal.applied === 1 ? "" : "s"} updated`}
+          summary={`${applyFinal.errors} error${applyFinal.errors === 1 ? "" : "s"} • canonical upsert path fired per contact. Click Check drift again to confirm it dropped.`}
+          errors={applyFinal.errorMessages}
         />
       )}
     </div>

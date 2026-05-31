@@ -1,33 +1,39 @@
 # /admin/roadmap MVP Spec
 
-**Author:** Mira | **Pushed to platform:** 2026-05-23 | **For:** Sasha (backend) + Mable (frontend, see switchable/site brief)
+**Author:** Mira | **Pushed to platform:** 2026-05-23 | **Last updated:** 2026-05-25 (5-lane top-level hierarchy added per Phase 1 sharpening) | **For:** Sasha (backend) + Mable (frontend, see switchable/site brief)
 
 Interactive roadmap tracker for Charlotte. Replaces static HTML at `strategy/roadmap.html`. ClickUp ruled out because operational task noise drowns strategic roadmap signal. Lives on platform so Charlotte has one clean tool just for tracking the strategic build.
+
+**Hierarchy update 2026-05-25:** spec now requires explicit two-tier structure — 5 top-level Phase 1 LANES, each containing granular tasks. Charlotte needs to see the big picture at a glance and drill into specifics. Matches the structure in `strategy/docs/build-map.md` "Phase 1 — top-level view" section.
 
 ## Why it exists
 
 Charlotte is building a new business model (audience-first, multi-revenue) layered on the existing Switchable lead-gen funnel. ~60-70 roadmap tasks across 10 revenue models + foundation work, ~18 months of execution. She needs a single place to tick tasks off, write notes per task as she works, see status across all revenue models. Mira reads it each weekly review for continuity.
 
-## Schema
+## Schema (revised 2026-05-25 with `lane` top-tier)
 
-New Supabase table in a new `strategy` schema (or `crm` if cleaner):
+New Supabase table in a new `strategy` schema. **Two-tier grouping:** `lane` is the top-level strategic grouping (5 Phase 1 lanes + deferred + complete-phase-2); `revenue_model` is the second-tier finer slicing; individual tasks are the granular tier.
 
 ```sql
 CREATE TABLE strategy.roadmap_tasks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   title text NOT NULL,
   description text,
-  revenue_model text NOT NULL, -- foundation, provider, apprenticeship, affiliate, ppl, app, newsletter-sponsorship, placements, report, whitelabel
+  lane text NOT NULL, -- per-enrolment-scale, provider-os, affiliate-stack, audience-build, operational-backbone, deferred-phase-2, complete
+  revenue_model text NOT NULL, -- foundation, provider, apprenticeship, affiliate, ppl, app, newsletter-sponsorship, placements, report, whitelabel-consumer-tools, whitelabel-provider-os
   phase text NOT NULL, -- p1, p2, p3, p4
   agent_tags text[] DEFAULT '{}', -- e.g. {sasha, mable, charlotte}
   status text NOT NULL DEFAULT 'to_do', -- to_do, in_progress, blocked, review, complete
   notes text,
-  sort_order integer NOT NULL,
+  lane_sort_order integer NOT NULL, -- sort lanes in UI: 1=per-enrolment-scale, 2=provider-os, 3=affiliate-stack, 4=audience-build, 5=operational-backbone, 99=deferred
+  sort_order integer NOT NULL, -- sort tasks within lane
+  target_milestone text, -- optional Phase 1 goal that task contributes to, e.g. "£5-7k/mo combined by month 9"
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
   completed_at timestamptz
 );
 
+CREATE INDEX idx_roadmap_lane ON strategy.roadmap_tasks(lane);
 CREATE INDEX idx_roadmap_revenue_model ON strategy.roadmap_tasks(revenue_model);
 CREATE INDEX idx_roadmap_status ON strategy.roadmap_tasks(status);
 CREATE INDEX idx_roadmap_phase ON strategy.roadmap_tasks(phase);
@@ -41,6 +47,20 @@ CREATE POLICY "owner_full_access" ON strategy.roadmap_tasks
 GRANT SELECT ON strategy.roadmap_tasks TO readonly_analytics;
 ```
 
+### The 5 Phase 1 lanes (top-tier grouping)
+
+| `lane` value | Display name | Phase 1 goal by month 9 | `lane_sort_order` |
+|---|---|---|---|
+| `per-enrolment-scale` | Per-enrolment + apprenticeship scale | £5-7k/mo combined | 1 |
+| `provider-os` | Whitelabel Provider OS | £1.5-3k MRR (5-10 customers) | 2 |
+| `affiliate-stack` | Affiliate + PPL stack | £700-1.4k/mo | 3 |
+| `audience-build` | Audience build (minimum-viable) | 3-5.5k newsletter subs | 4 |
+| `operational-backbone` | Operational backbone (this tracker + supporting infra) | Live by end of week 2 | 5 |
+| `deferred-phase-2` | Deferred to Phase 2 (month 6+) | Activated after £6k profit holds | 99 |
+| `complete` | Already shipped | — | 100 |
+
+The two new `revenue_model` values (`whitelabel-provider-os`, splitting from the existing `whitelabel` which becomes `whitelabel-consumer-tools` for the FE-college route) reflect the two-product whitelabel strategy locked 2026-05-24.
+
 Migration file: `platform/migrations/0<next>_admin_roadmap.sql`. Per workspace data-infrastructure rule: schema_version bump where relevant, change logged in `platform/docs/changelog.md`.
 
 ## API endpoints (Edge Functions on platform)
@@ -53,19 +73,24 @@ Simple CRUD pattern, all owner-auth-gated:
 
 Pattern: mirror existing `/admin/data-ops` endpoints for auth + error shape.
 
-## Frontend (separate brief to Mable in switchable/site)
+## Frontend (Sasha-only — Mable dropped 2026-05-25)
 
-Mable owns the UI at `/admin/roadmap`. Spec lives in switchable/site brief but key requirements:
+**Mable dropped from this build 2026-05-25.** Internal-only tool, Charlotte is the only user, plain HTML rendered directly from an Edge Function is sufficient. Mable's bandwidth preserved for Provider OS V1 frontend + light programmatic course-page extensions.
 
-- Tasks grouped by revenue model (collapsible sections)
-- Status dropdown inline per task (no modal, no page reload)
-- Notes textarea expands inline per task
-- Auto-save on change (debounced 500ms)
-- Optimistic UI (instant feedback, retry on failure)
-- Mobile-friendly (Charlotte will check from phone)
-- Filter buttons top of page: by revenue model, by phase, by agent
-- Strikethrough completed tasks but keep visible (filter "hide complete" toggle)
-- "Mira's last sync" timestamp at top so Charlotte knows when state was last reviewed strategically
+Sasha serves the page directly from an Edge Function returning HTML + minimal JS. Functional requirements (no polish):
+
+- Single page, server-rendered HTML
+- **5 Phase 1 lanes as top-level sections** with lane name, Phase 1 goal, task counts (X done / Y in progress / Z to do)
+- Tasks grouped by `revenue_model` within each lane
+- Status select dropdown per task (form submit on change, page reloads with updated state)
+- Notes textarea per task with explicit "Save" button (no debounced auto-save — keeps Edge Function simple)
+- Filter via URL params: `?lane=` `?phase=` `?status=`
+- Strikethrough completed tasks but keep visible
+- "Mira's last sync" timestamp at top
+- Mobile-friendly via responsive CSS (basic flex/grid, no framework needed)
+- Owner-auth-gated like other admin pages
+
+**Build effort revised:** Sasha 4-5 hours total (schema + Edge Function + HTML render). No Mable involvement. Ships Week 1.
 
 ## Seed data
 
@@ -85,22 +110,19 @@ Mira reads `strategy.roadmap_tasks` via Postgres MCP (`readonly_analytics` role)
 
 No write access for Mira required; Charlotte owns the state changes. Mira reads.
 
-## Build sequence
-
-Order Sasha + Mable can ship in:
+## Build sequence (Sasha-only, revised 2026-05-25)
 
 1. Sasha: schema migration + RLS + GRANT (30 mins)
-2. Sasha: 3 Edge Function endpoints (2-4 hours)
-3. Sasha: owner-auth check pattern matched to existing admin pages (1 hour)
-4. Mable: admin page UI (4-6 hours) — separate brief in switchable/site, can parallelise with Sasha's backend
-5. Mira: seed data SQL prep + handoff to Sasha (2-3 hours)
-6. Sasha: apply seed migration (15 mins)
-7. End-to-end test + handover to Charlotte (1 hour)
+2. Sasha: Edge Function for GET/PATCH (1-2 hours)
+3. Sasha: HTML render in Edge Function — lane sections + task list + status forms + notes forms (2-3 hours)
+4. Mira: seed data SQL prep + handoff to Sasha (2-3 hours)
+5. Sasha: apply seed migration (15 mins)
+6. End-to-end test + handover to Charlotte (30 mins)
 
-**Total Sasha effort: ~6-9 hours**
-**Total Mable effort: ~4-6 hours**
+**Total Sasha effort: ~4-6 hours**
+**Mable effort: 0**
 
-Should ship Week 1-2 of Phase 1 alongside affiliate stack wiring.
+Should ship Week 1 of Phase 1 alongside affiliate stack wiring.
 
 ## Constraints
 

@@ -21,7 +21,7 @@
 
 import postgres from "npm:postgres@3";
 import { signRoutingToken } from "../_shared/routing-token.ts";
-import { sendBrevoEmail } from "../_shared/brevo.ts";
+import { sendBrevoEmail, upsertBrevoContact } from "../_shared/brevo.ts";
 import {
   type CanonicalSubmission,
   insertSubmission,
@@ -102,6 +102,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // wired but the site-wide one was still active.
   if (formName === "s4b-employer-lead-v1") {
     return json({ status: "ignored", form_name: formName, reason: "employer lead routed via netlify-employer-lead-router" });
+  }
+
+  // `switchable-blog-subscribers` is the newsletter / Free Guide email-capture
+  // form (on /switchguides/ and category pages, later /free-guide/). It is NOT a
+  // lead — there is no course, no provider, no routing. The signup itself is the
+  // marketing consent (single opt-in, owner decision 2026-05-31), so we add the
+  // email straight to the Switchable newsletter list (id 10) and stop. No
+  // leads.submissions row, no nurture, no owner notification. Mirrors the
+  // contact / fastrack / s4b early-return filters above (the site-wide Netlify
+  // "Any form" webhook fires for this form too). Before this branch existed the
+  // form did nothing past a Netlify email — Charlotte was importing signups to
+  // Brevo by hand. See platform/docs/changelog.md 2026-05-31.
+  if (formName === "switchable-blog-subscribers") {
+    return await handleNewsletterSignup(body, rawBody);
   }
 
   const row = normaliseAndOverride(formName, body, rawBody);
@@ -617,6 +631,47 @@ function describeError(err: unknown): string {
   } catch {
     return String(err);
   }
+}
+
+// Newsletter signup handler. Adds the submitted email to the Switchable
+// newsletter list in Brevo (single opt-in). Returns 200 in every non-fatal
+// case so Netlify never retries a signup. A genuinely lost signup (no email in
+// payload, or Brevo rejects) is written to leads.dead_letter so it surfaces in
+// the morning drift digest and can be re-added by hand — same no-data-lost rule
+// as the lead path. List id is env-driven (BREVO_LIST_ID_SWITCHABLE_NEWSLETTER,
+// set to 10) so it is never hardcoded; if unset the function dead-letters rather
+// than silently dropping, because for this form there is no other capture path.
+async function handleNewsletterSignup(
+  body: Record<string, JsonValue>,
+  rawBody: JsonValue,
+): Promise<Response> {
+  const data =
+    body.data && typeof body.data === "object" && !Array.isArray(body.data)
+      ? (body.data as Record<string, JsonValue>)
+      : {};
+  const email = firstTopLevelString(data, "email") ?? firstTopLevelString(body, "email");
+  if (!email) {
+    return await persistDeadLetter(rawBody, "newsletter signup: no email in payload");
+  }
+
+  const listIdRaw = Deno.env.get("BREVO_LIST_ID_SWITCHABLE_NEWSLETTER");
+  const listId = listIdRaw ? Number.parseInt(listIdRaw, 10) : NaN;
+  if (!Number.isInteger(listId)) {
+    return await persistDeadLetter(
+      rawBody,
+      `newsletter signup: BREVO_LIST_ID_SWITCHABLE_NEWSLETTER unset/invalid (got ${JSON.stringify(listIdRaw)}); email=${email} not added`,
+    );
+  }
+
+  const result = await upsertBrevoContact({ email, listIds: [listId] });
+  if (!result.ok) {
+    return await persistDeadLetter(
+      rawBody,
+      `newsletter signup: Brevo upsert failed for ${email}: ${result.error ?? `status ${result.status}`}`,
+    );
+  }
+
+  return json({ status: "ok", form_name: "switchable-blog-subscribers", action: "newsletter_added", list_id: listId });
 }
 
 function firstTopLevelString(body: Record<string, JsonValue>, ...keys: string[]): string | null {

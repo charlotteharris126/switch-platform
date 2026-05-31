@@ -204,6 +204,29 @@ export async function brevoAttributeReconcileAction(args: {
   }) as Promise<BrevoReconcileResult>;
 }
 
+// Apply-by-ids: synchronous, chunked re-sync. The panel sends drifting
+// submission ids in batches of ≤25 and loops until done. Replaces the old
+// async-apply-then-poll flow that hung ("still running after 180s") because the
+// background task died before writing its result row. Each call returns a real
+// result immediately. (2026-05-31)
+export interface ApplyBrevoIdsResult {
+  ok: true;
+  mode: "apply_ids";
+  requested: number;
+  applied: number;
+  errors: number;
+  error_messages: string[];
+  results: Array<{ id: number; status: "ok" | "skipped" | "error"; reason?: string }>;
+}
+
+export async function applyBrevoIdsAction(args: {
+  ids: number[];
+}): Promise<ApplyBrevoIdsResult | { ok: false; error: string }> {
+  return callEdgeFunction("brevo-attribute-reconcile", {
+    apply_ids: args.ids,
+  }) as Promise<ApplyBrevoIdsResult | { ok: false; error: string }>;
+}
+
 // Poll for the result of an async drift check or async re-sync. Reads the
 // most recent dead_letter row written by the background task whose
 // started_at >= the `since` timestamp the EF returned when it kicked off.
