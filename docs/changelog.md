@@ -4,6 +4,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-05-31 — Brevo drift RESOLVED: 0 drifted (status pill green)
+
+Final state after the whitespace trim fix (deployed), SW_ENROL_STATUS Brevo enum values added (owner, dashboard), and a final SQL resync of the 48 remaining drifters via admin-brevo-resync (ok 48/48): **/admin/errors DB↔Brevo Check drift = 0 contacts drift, 374 aligned.** Only the 13 demo-provider-ltd (archived) leads show as "errors during check" — correct behaviour (archived provider deliberately skipped), not a fault.
+
+**Panel "Re-sync N" button is KNOWN-LIMITED — use the SQL recipe instead.** The chunked apply-by-ids rewrite (apply_ids handler + panel chunk-loop) is committed and deployed and the bigint-string id bug is fixed, BUT matched contacts are slow (~650ms each: several SQL reads + Brevo upsert + 250ms throttle) and even chunks of 10 risk Netlify's Server Action window → "unexpected response from the server". The reliable path to apply drift is the `admin-brevo-resync` SQL recipe on /admin/data-ops (self-selects drifters from the latest check's dead_letter row, batches ≤120, ~30-60s). Check drift works fine in the panel; only the apply button is limited. Proper fix (deferred, fresh session): make the EF self-chunk through all drift ids in a background task and have the panel just kick-and-poll — most robust, most code, another untested-live deploy. Not worth more cycles today.
+
 ## 2026-05-31 — Newsletter signup → Brevo automation: DEPLOYED + backfilled
 
 Follow-up to the PENDING-DEPLOY entry below. Charlotte set the env var, deployed, and the backfill is done. All verified live.

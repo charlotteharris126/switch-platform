@@ -376,6 +376,12 @@ function DriftReport({
         </div>
       )}
 
+      <div className="flex flex-col gap-2">
+        {summary.contacts_with_drift > 0 && (
+          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+            Known limit: this button can time out on matched-contact-heavy drift (Netlify Server Action window). If it fails, use the SQL resync recipe on /admin/data-ops — it self-selects the drifters and batches reliably.
+          </p>
+        )}
       <div className="flex items-center gap-3 flex-wrap">
         {!confirmApply && summary.contacts_with_drift > 0 && (
           <button
@@ -414,6 +420,7 @@ function DriftReport({
             </button>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
