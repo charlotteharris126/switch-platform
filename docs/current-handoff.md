@@ -1,48 +1,41 @@
-# Platform Handoff, Session 61, 2026-06-01
+# Platform Handoff, Session 62, 2026-06-01
 
 ## Current state
-Newsletter signups now auto-add to Brevo (no more manual import) and DB↔Brevo attribute drift is fully cleared (0 drifted, status pill green). Dead-letter cleaned from 439 to a ~87 steady-state of real signals. All Edge Function changes deployed; admin app changes pushed and live on Netlify.
+Codex security audit reviewed and triaged. The one commercially dangerous finding (providers could write their own enrolment billing columns) is fixed live and verified. A migration-history desync surfaced during the fix (0166-0180 were live but unrecorded) and is now reconciled, so `supabase db push` works cleanly again. The rest of the audit findings are lower severity and queued.
 
 ## What was done this session
-- **Newsletter → Brevo automation (shipped, verified).** `netlify-lead-router` branch: `switchable-blog-subscribers` signups auto-add to Brevo newsletter list 10 (single opt-in, submit = consent); not-routed (no_match/waitlist) leads also added to list 10 when marketing-consented. Env var `BREVO_LIST_ID_SWITCHABLE_NEWSLETTER=10` set. 87 existing not-routed + consented contacts backfilled via `admin-brevo-resync` SQL.
-- **Dead-letter cleanup.** Orphan Netlify form `switchable-newsletter` deleted (killed hourly netlify_audit noise). Data-op `048_clear_stale_dead_letter` applied (~165 dead rows + ~187 netlify_audit closed). 439 unresolved → ~87 (all real: sheet_drift, brevo_attribute_drift, partial_capture).
-- **Brevo reconcile gate fix (deployed).** `brevo-attribute-reconcile` now gates on archived-only (was active+archived), matching `admin-brevo-resync`. Killed ~52 paused-provider (CD/WYK) false errors. Only 13 demo-archived errors remain (correct).
-- **Brevo drift driven to 0.** Root causes fixed: (1) `normaliseForCompare` now trims both sides (Brevo trims on store; DB carries trailing-space names + leading-space phones) — cleared ~115 false positives; (2) SW_ENROL_STATUS Brevo Category enum extended with missing values (Charlotte, dashboard) — Brevo was silently dropping writes; (3) final SQL resync of the 48 remaining drifters (ok 48/48).
-- **Brevo reconcile panel apply rewrite (partial).** Replaced the hung async-apply-then-poll with chunked apply-by-ids; fixed the bigint-as-string id filter. Still times out on matched-heavy drift (Netlify Server Action window). Marked KNOWN-LIMITED in the UI with a pointer to the SQL recipe.
-- **Lead 526 (Luke Wallace)** written off (real self-funded, never routed, 8 days stale; archived + is_dq, dq_reason `written_off_stale_unrouted`).
-- **Self-correction:** early in session misdiagnosed a readonly_analytics grant regression (own wrong column name); deleted the bogus migration before it shipped.
+- **Reviewed the Codex platform security audit.** Verified every finding against live source, reranked severity, corrected two overstated items (build does not actually fail; migration 0179 mismatch was stale IDE context). Relayed the reviewed verdict back to Codex, who accepted it and returned a 10-point priority list.
+- **Fixed #4 (HIGH) — provider write access to enrolment billing columns.** `authenticated` held table-wide UPDATE on `crm.enrolments` (from 0108), so a provider with their JWT could PATCH PostgREST directly and rewrite `billed_amount/billed_at/paid_at/gocardless_payment_id`. Wrote migration `0180_provider_enrolment_column_level_update.sql`: REVOKE table-wide UPDATE, GRANT column-level UPDATE on the 7 columns the portal actually writes (`status, lost_reason, outcome_note, status_updated_at, updated_at, callback_requested_at, callback_requested_by`).
+- **Applied 0180 via the Supabase SQL editor** (the migration runner was broken by the desync below) and verified live with `has_column_privilege`: 4 billing cols now FALSE, 7 portal cols TRUE, table SELECT intact, `functions_writer` untouched. Confirmed nothing broke (reads, outcome writes, sheet sync, admin/service writes all unaffected).
+- **Reconciled migration-history desync.** `db push` wanted to re-run 0166-0180. Confirmed via catalog that all their objects are already live (applied out-of-band via SQL editor, not recorded). Ran `supabase migration repair --status applied 0166..0180`, then `db push` → "Remote database is up to date."
+- **Logged both** in `docs/changelog.md`. Saved a memory on the SQL-editor desync gotcha so future sessions don't repeat the confusion.
 
 ## Next steps
-1. **Proper fix for the reconcile panel apply button (deferred, fresh session).** Make the EF self-chunk through all drift ids in a background task; panel just kicks-and-polls. Most robust, most code, another untested-live deploy. Until then the SQL resync recipe on /admin/data-ops is the working path.
-2. **CMS Phase 2 carries (from S60).** Build script flip so `editorial.posts` is the live blog source (gates CMS visibility), `/admin/blog/media`, `/admin/blog/content-plan`, Netlify deploy hook on publish, draft-ready notification. Confirm DATABASE_URL on Netlify first.
-3. **Build 3 — Demand-aggregation view** (Mira PUSH, Phase 1 weeks 3-6). View at `strategy/docs/demand-aggregation-playbook.md`.
-4. **Build 2 — Provider OS V1 architecture scoping** (Mira PUSH, fresh Supabase project).
-5. **Build 4 — Blog cadence agentification** (Mira PUSH, pg_cron Anthropic drafter). Note: `0179_editorial_drafter_cron.sql` already exists.
-6. **Wren broadcast-gating PUSH** (carry S58/S60): `SW_FASTRACK_COMPLETED` per-course + `SW_PENDING_RESTART` + `SW_COURSE_OPEN`. Blocks EMS 117-lead broadcast.
-7. **Auto-flip cron + day-12 warning** (carry S51-S60). Migration 0097 unapplied. EMS has 50+ leads past 7-day SLA.
-8. **Optional:** delete the ~16 owner-test contacts (`hello+...@switchable`, `kieranwrites@`) from Brevo so they stop showing as SW_COURSE_OPEN drift on future checks.
-9. **Older carries (S55-S60):** Construction `experiment_id` at INSERT, async_apply chunking pattern, filter inactive providers from brevo-attribute-reconcile, infrastructure-manifest update (add drift-digest-daily etc.), per-provider CPL/CPE scoreboard.
+1. **DB-side audit batch (now pushes cleanly via `supabase db push`):** restrict `editorial.fire_netlify_blog_build` to admin/service execution, ie add `admin.is_admin()` inside it or revoke EXECUTE from `authenticated` (#6, migration). Add the 5 missing `verify_jwt = false` config blocks for `blog-ai-assist, blog-draft-from-queue, blog-post-create, gdpr-erase-learner, iris-daily-flags` (#8, config.toml).
+2. **Ingestion auth (#5):** first confirm Netlify outgoing-webhook JWS signature is actually emitted for our form notifications (check notification settings / capture a real payload). If yes, verify `X-Webhook-Signature` in `netlify-lead-router`, `netlify-employer-lead-router`, `fastrack-receive`. If not, use a shared-secret header/token. Do not build on an unverified signature mechanism.
+3. **Provider login binding (#1):** bind the password step to the OTP verify via a short-lived HttpOnly nonce/challenge so email-possession alone cannot log in; reduce email OTP lifetime from 3600s.
+4. **App-code batch (one branch, one Netlify deploy):** sanitize admin `next` redirect to relative-only (#3); route the flagged server actions through `requireAdminUser()/requireProviderUser()` (getUser) (#7/#11); drop `image/svg+xml` from blog upload allowed types (#13); standardize `blog-post-create` secret on Vault (#9); bulk audit via `UPDATE ... RETURNING` (#10).
+5. **Quality/docs:** clean lint (56 problems / 39 errors); README says Next 15, package is 16.2.4; optional switch to `next/font/local` (Montserrat files already local) for deterministic builds.
+6. **Carries from S61 (unchanged):** reconcile panel-apply proper fix; CMS Phase 2 build-script flip; demand-aggregation view (Mira PUSH); Provider OS V1 scoping (Mira PUSH); Wren broadcast-gating PUSH; auto-flip cron + day-12 warning (migration 0097 unapplied, EMS 50+ leads past SLA).
+7. **billing_events recording gap (carry, Nell/Mira PUSH):** `crm.billing_events` empty despite confirmed revenue (WYK £150 pulled 21 May, EMS £1,050 pulled 26 May). Not investigated this session. #4 hardened the same table's write access but the recording gap itself is still open.
 
 ## Decisions and open questions
-**Decisions made this session:**
-- **Newsletter is single opt-in** for the signup form (submit = consent); not-routed leads gated on marketing consent (newsletter is a marketing comm). Owner decision.
-- **Backfilled all 87 not-routed + consented** (not just the 25 waitlist) so existing population matches forward behaviour.
-- **Panel apply button parked as known-limited**, SQL resync is the supported path. Owner chose this over more deploy cycles.
-- **Lead 526 written off** rather than routed (self-funded, gone cold).
-- **Reconcile gate is archived-only** (paused providers still reconcile) to match admin-brevo-resync.
+**Decisions:**
+- Fixed #4 with a column-level grant (not RPC-only) as the safe minimal close. Verified the 7-column whitelist against both portal write paths before applying.
+- Applied 0180 via SQL editor because the runner was broken by the history desync, then reconciled the history so the runner is healthy. Owner ran both commands.
+- Codex's 10-point priority order adopted as the remediation plan of record.
 
 **Open questions:**
-- None blocking. The panel-apply proper fix is scoped but deferred; everything else has a working path.
+- Long-term provider-write model (column-grant kept vs RPC-only hardening). Defer to Mira if revisited; not blocking.
+- billing_events: what is meant to write to it and why nothing has (carry, owner/Mira/Nell).
 
 ## Watch items
-- **Tomorrow's 06:30 drift digest** should be ~87 rows (down from 439) and shrinking. Confirm it's not back at 160+.
-- **`edge_function_partial_capture`** — real connection-pool exhaustion errors on 30-31 May (4 rows). Not dead; watch if it climbs (free-tier connection ceiling signal).
-- **Newsletter list 10** — new signups + new not-routed-consented leads should land automatically. Spot-check Brevo list count rises with new submissions.
-- **`_shared/route-lead.ts` redeploy rule** — that file is bundled per-function at deploy; a change there is only live in functions actually redeployed. 17 functions import it; only the few touched this session run the new code.
+- **Provider portal outcome writes:** permission level verified intact post-0180, but confirm a real provider outcome write succeeds in normal use (low-volume pilot, none observed since the change yet).
+- **`crm.billing_events` still empty** despite two confirmed real payments (carry).
+- **Drift digest** should sit ~87 and shrink (carry from S61).
+- **`edge_function_partial_capture`** connection-pool errors (carry from S61, watch for climb = free-tier connection ceiling).
 
 ## Next session
-- **Folder:** `platform`
-- **First task:** Owner decides priority between the reconcile panel-apply proper fix (#1) and CMS Phase 2 build-script flip (#2). CMS flip gates blog going live on-site; panel apply has a working SQL fallback, so CMS likely wins.
-- **Cross-project:**
-  - **Mable (switchable/site):** `form-allowlist.json` purpose text for `switchable-blog-subscribers` is now stale ("Charlotte manually imports") — wants a doc-only update (webhook_url stays null; it rides the site-wide webhook). Pushed to switchable/site handoff.
-  - **Wren (switchable/email):** broadcast-gating PUSH still owed by platform (#6). EMS 117-lead broadcast remains blocked. No change this session.
+- **Folder:** platform
+- **First task:** DB-side audit batch (#6 build-hook restriction migration + #8 the five missing `verify_jwt` config blocks). Both now push cleanly via `supabase db push`.
+- **Cross-project:** None new this session. The billing_events gap remains a shared Nell/Mira ↔ platform item but generated no new push.

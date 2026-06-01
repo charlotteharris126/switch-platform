@@ -1,115 +1,88 @@
-# Platform Weekly Notes — Monday 2026-05-18
+# Platform Weekly Notes — Monday 1 June 2026 (Sasha)
 
-Sasha's Monday platform health report for Mira. Replaces the previous week.
+Window: 25 May – 1 June 2026. Read-only via `readonly_analytics`. Sasha flags; the owner implements.
+
+---
+
+## Headline
+
+`sheet_drift_detected` dead-letter rows (71 unresolved, 31 older than 7 days, oldest 21 May) now breach the 14-day dead-letter rule and are the single largest unresolved signal. These are EMS hand-edited status cells, known and benign in cause, but the policy says any row >14 days is replayed or explicitly written off. They are neither. Decide a disposition (suppress EMS from drift detection, or bulk-write-off).
+
+---
 
 ## Data flow health
 
-### `leads.submissions`
-- 110 rows added in last 7 days (parents + children). 56 non-DQ, 54 DQ. 12 children (re-submissions).
-- Top funding routes: 44 `free_courses_for_jobs` (learner), 35 with no funding_route, 21 employer apprenticeship leads, 10 self-funded.
-- 0 `switchable-funded` submissions with NULL `course_id` on a non-child row — payload contract intact.
-- 0 unrouted non-DQ parent submissions older than 48h — owner is clearing the queue.
-- session_id coverage: 65 with / 45 without (59% coverage). Acceptable in mixed funded + employer + self-funded traffic, but worth a recheck once B2B partial-tracker is wired in (Mable's outstanding `/business/` tracker fix per memory note).
-- Routing log: 73 distinct submissions routed in the 7-day window vs 54 non-DQ parents created in the same window. Healthy (older parents being routed in window pushes routed > created).
+**`leads.submissions` (last 7 days):**
+- 22 rows: 14 non-DQ, 8 DQ.
+- `funding_route` split: 7 `free_courses_for_jobs`, 15 null. The nulls are legitimate — 11 `s4b-employer-lead-v1` (B2B employer leads, no funding_route by design), 2 `switchable-waitlist`, 2 newsletter/other. Not payload drift.
+- Funded-form rows with null `course_id`: **0**. No payload drift.
+- Unrouted non-DQ leads older than 48h: **0**. Clean (lead 526 written off last session cleared the prior one).
+- Tracker coverage: 9 of 22 carry `session_id`, 13 null. The 13 nulls map to `s4b-employer-lead-v1` (11) + others — the B2B form is not wired to the session tracker the way the funded form is. Not a regression, but worth confirming with Mable whether the employer form is meant to carry session_id (partial-tracker coverage gap, same class as the 16-May `.track()` wiring miss).
 
-### `leads.partials`
-- 917 distinct sessions in last 7 days (913 partial rows, 850 incomplete / 63 complete).
-- By form: `switchable-funded` 894 sessions (60 complete / 834 abandoned), `s4b-employer-lead-v1` 10 (0/10), `switchable-self-funded` 8 (3/5), `switchable-waitlist` 1.
-- Top abandonment step on funded form: step 1 (595 sessions) — opener fall-off, expected on cold paid traffic. Step 91 (184 sessions, the consent/terms surface).
-- Max upsert_count = 39 (under the 40 warning threshold, 50 cap untouched).
-- **Growth trigger crossed: weekly partial sessions >> 200.** See Growth triggers section.
+**`leads.routing_log`:** 18 distinct submissions routed this week vs 14 non-DQ submitted this week. Gap is positive (more routed than newly arrived) because routing fired on leads submitted before the 7-day window. No unrouted backlog. Healthy.
 
-### `leads.dead_letter`
-- 186 total rows, 102 added this week, 7 unreplayed.
-- Source breakdown last 7d: `sheet_drift_detected` 78 (5 unreplayed), `netlify_audit` 14 (0), `edge_function_employer_lead_router` 3 (0), `brevo_transactional` 2 (2 unreplayed), `reconcile_backfill` 2 (0), `edge_function_brevo_chase` 1, `edge_function_brevo_upsert` 1, `fastrack_side_effect` 1.
-- Oldest unreplayed: 2026-05-17 22:27 — well under the 7-day flag threshold.
-- The 5 unreplayed `sheet_drift_detected` rows (ids 266-270) are all from this morning's 06:00 UTC drift cron — 4 are EMS re-submission children (233, 373, 415, 475) which today's `865720a` deploy now filters out, and 1 is the genuine Jyotika #127 CD-sheet drift that Charlotte manually back-filled. Tomorrow's 06:00 cron should produce zero EMS rows.
-- The 2 unreplayed `brevo_transactional` rows (ids 264, 265) are the pre-fix `u_fastrack_qualified` HTTP 400 failures (Shazia #488 + Kayleigh #489). `bdd9a4d` ships the fix; first success row in `crm.email_log` is pending.
-- No unfamiliar `source` patterns. `edge_function_partial_capture` source absent.
+**`leads.partials` (last 7 days):**
+- 537 rows across **517 distinct sessions**.
+- Completion: 10 complete of 537 (top-of-funnel abandonment, expected).
+- By form: `switchable-funded` 473 rows / top step 1 (9 complete), `s4b-employer-lead-v1` 41 / top step 3, `switchable-self-funded` 12, `fastrack-funded-v1` 5, waitlist 5.
+- Max `upsert_count` = 31. **No session at or near the 40/50 abuse cap.** Clean.
 
-### `leads.routing_log`
-- 73 routings in 7d vs 54 non-DQ parents created in 7d — gap is positive (routing draws from a wider window than submission creation). No unrouted-lead backlog.
+**`leads.dead_letter`:** 102 unresolved total, 65 added this week, 37 older than 7 days, oldest 20 May. By source:
 
-### `leads.fastrack_submissions`
-- 32 fastrack rows in 7d. 5 with `l3_mismatch_flag=true`, 1 with `cohort_confirmed=false` (cohort decline). The L3 mismatch DQ path is firing as designed.
+| source | unresolved | added 7d | >7d | note |
+|---|---|---|---|---|
+| `sheet_drift_detected` | 71 | 40 | 31 | EMS hand-edited cells. **Breaches 14-day rule.** See headline. |
+| `brevo_attribute_reconcile_async_check_result` | 14 | 14 | 0 | Check-result artefacts from the daily reconcile, not real failures. Should be auto-closed/suppressed, not left as unresolved rows. |
+| `brevo_attribute_drift` | 12 | 6 | 6 | Clears on /admin/errors Re-sync (or SQL recipe). 6 are stale (>7d). |
+| `edge_function_partial_capture` | 4 | 4 | 0 | Connection-pool exhaustion. **See automation health — connection pressure.** |
+| `brevo_transactional_sms` | 1 | 1 | 0 | Single send failure 31 May. |
+
+Dead-letter is at 102, up from the ~87 steady-state at last session close. The growth is `sheet_drift_detected` (+40 this week) and the `_async_check_result` artefacts (+14). Neither is a pipe failure, but both are noise the table is not supposed to accumulate.
+
+---
 
 ## Automation health
 
-### Cron jobs
-All 16 production crons present and active in `public.vw_cron_jobs`. Zero failed runs in the last 7 days across the lot.
+**Cron:** all 20 scheduled jobs `active=true`. All ran and succeeded in the last 24h except one isolated failure:
+- `sms-fastrack-prompt-cron` (runs every minute): 1439 succeeded, **1 failed at 31 May 23:33 with `connection failed`**. Three `connection failed` failures across 31 May (11:51, 17:16, 23:33). Self-recovered each time. This matches the `edge_function_partial_capture` connection-pool dead-letters (same date, same cause). **Free-tier Postgres connection ceiling is showing under the every-minute SMS cron + partial-capture load.** Not breaking yet; watch. If it climbs, the every-minute SMS cron cadence is the obvious first lever (does it need 1440 runs/day at pilot volume?), or upgrade to Supabase Pro (the existing upgrade trigger keys on the 500MB / 50k-MAU limit, not connections, so this is a new pressure not covered by a trigger).
+- `netlify-forms-audit-hourly` (24/24) and `netlify-leads-reconcile-hourly` (24/24) both green — webhook safety net intact.
 
-- `netlify-forms-audit-hourly` — 168/168 ok over 7d, last run 2026-05-18 11:00 UTC. Healthy.
-- `netlify-leads-reconcile-hourly` — 168/168 ok, last run 11:30 UTC.
-- `purge-stale-partials` — 7/7 ok, ran 03:00 UTC today.
-- `meta-ads-ingest-daily` — 7/7 ok, ran 08:00 today.
-- `iris-daily-flags` — 7/7 ok, ran 08:30 today.
-- `email-stalled-cron-daily` — 7/7 ok, ran 09:00 today.
-- `email-u4-cron-daily` — 7/7 ok, ran 09:30 today.
-- `email-sunset-cron-daily` — 7/7 ok, ran 03:00 today.
-- `sheet-drift-reconcile-daily` — 7/7 ok, ran 06:00 today (produced 5 new drift rows, 4 of which the morning's deploy now resolves at source).
-- `dead-letter-alert-hourly` — 124/124 ok across 7d. Live since 2026-05-13 (migration 0140).
-- `brevo-attribute-reconcile-daily`, `brevo-consent-reconcile-daily`, `email-failure-alert-daily`, `email-presumed-flipped-cron-daily`, `leads_retention_anonymise_daily`, `social-publish-15min` — all green.
+**Edge Functions:** 48 function folders in git (`platform/supabase/functions/`). No orphan-vs-deployed cross-check possible — Sasha is MCP-only, no CLI deploy-list access. Flag: the **infrastructure manifest documents ~16 functions; production git has 48** (see governance).
 
-**Auto-flip cron status:** `run_enrolment_auto_flip_per_provider` function exists (migration 0129) and per-provider `auto_flip_enabled=true` is set across all 7 active providers — but **no cron schedules it**. Migration 0097 (which would schedule it) is still written-but-not-applied per the existing carry. Current stale-lead pool that would auto-flip on first run: EMS 37 (9 open >14d + 28 cannot_reach >14d), CD 21 (19 open + 2 cannot_reach). **58 leads total = ~£8,700 of presumed-enrolment invoices if fired cold.** Charlotte's call to hold pending the day-12 warning template + cron stands.
-
-### Edge Function inventory
-40 function folders in `platform/supabase/functions/` (counting `_shared` as one). Manifest's `Last verified: 2026-05-07` is now 11 days stale and does not include several production functions that have shipped since:
-- `dead-letter-alert-cron`, `email-presumed-warning-cron`, `email-presumed-flipped-cron`, `gdpr-erase-learner`, `netlify-employer-lead-router`, `provider-invite-link`, `provider-support-notify`, `log-page-view`, plus three new `backfill-*` operational scripts and `reconcile-sheet-to-db`.
-- The "Pending first deploy" status on `sheet-drift-reconcile-daily`, `email-stalled-cron`, `email-u4-cron`, `email-sunset-cron`, `iris-daily-flags` in the manifest is stale — all are live and producing successful cron runs (see above).
-- **Recommendation:** owner refresh `platform/docs/infrastructure-manifest.md` to reflect current deployed state (catch-up entry for everything from 2026-05-08 onwards). I can draft the diff if Mira green-lights.
+---
 
 ## Governance
 
-### Migration discipline
-**Drift: migrations 0146 + 0147 are applied to production but NOT logged in `platform/docs/changelog.md`.**
-- `0146_email_log_u_fastrack_qualified.sql` (2026-05-17) — extends `crm.email_log.email_type` CHECK with `u_fastrack_qualified`. Verified live in `pg_constraint`.
-- `0147_log_system_action_v1_public_wrapper.sql` (2026-05-18) — creates `public.log_system_action_v1()` RPC wrapper. Verified live in `pg_proc`.
-- Per `.claude/rules/data-infrastructure.md` §9, every schema change requires a changelog entry. Both are mine to write (I authored both migration headers); owner action: confirm and I'll backfill the changelog rows next platform session. No production risk, governance hygiene only.
-- Migrations 0141-0145 all logged correctly.
+**Migration discipline:** files run to `0179_editorial_drafter_cron.sql`. Cannot diff against `supabase_migrations.schema_migrations` — `readonly_analytics` is denied on that schema (`permission denied for schema supabase_migrations`). Flag: Sasha has no way to verify applied-vs-git migration state. Consider a `public.vw_schema_migrations` SECURITY DEFINER view (same pattern as `vw_cron_jobs`) so the Monday scan can actually run this check.
 
-CLI migration registry drift `0141-0145` "local but not on remote" carry from S47 is now contradicted by what I see live in production (the CHECK constraint includes the latest values, the `log_system_action_v1` function exists). Either the registry has caught up since S47 or the carry was always a CLI-state oddity not an actual schema gap. Worth Charlotte re-checking `supabase migration list --linked` at the start of the next session to close the carry.
+**Changelog discipline — GAP.** Four migrations shipped with no changelog entry:
+- `0175_grant_authenticated_chaser_log_select.sql`
+- `0176_drop_sms_log_unique_index.sql` — a destructive index drop (the windowed-dedup fix); should be logged per data-infrastructure §2/§9.
+- `0177_admin_roadmap_lane_extension.sql`
+- `0178_editorial_tier_and_batches.sql`
 
-### Changelog discipline
-- 18+ entries since last Monday (2026-05-11). Sessions 40, 42, 43, 44, 45, 46, 47, 48, 49, 50 all have changelog rows. Discipline good aside from the two unlogged migrations above.
+0175 and 0176 are siblings of 0174 (the 26 May bulk-SMS-chaser work, which IS logged) — they belong to the same session and were dropped from the entry. 0177/0178 are roadmap + editorial work. Owner: backfill four changelog rows.
 
-### Secrets rotation
-Reading `platform/docs/secrets-rotation.md` against today (2026-05-18):
+**Infrastructure manifest — STALE.** `Last verified: 2026-05-07`, ~3.5 weeks old. It documents ~16 Edge Functions and ~10 crons. Production now has 48 function folders and 20 crons. Undocumented-in-manifest crons include: `drift-digest-daily`, `brevo-consent-reconcile-daily`, `editorial_auto_publish_every_15min`, `editorial_blog_drafter_mwf`, `editorial-auto-publish-scheduled-posts`, `email-presumed-flipped-cron-daily`, `leads_retention_anonymise_daily`, `social-publish-15min`, `sms-fastrack-prompt-cron`. The manifest is the critical-row verification list — if it doesn't list what's live, session-start verification can't catch a disabled critical job. Already a carry item (S60 handoff #9). Now overdue enough to flag loudly.
 
-**OVERDUE (still):**
-- `BREVO_API_KEY` — flagged "Due for rotation (plaintext in Session 3 transcript)" 2026-04-20. **28 days overdue.** Rotate via Brevo dashboard → new key → swap Supabase secret → revoke old.
-- `ROUTING_CONFIRM_SHARED_SECRET` — flagged "Due for rotation (plaintext in Session 3 transcript)" 2026-04-20. **28 days overdue.** Rotate via `openssl rand -hex 32` + Supabase secret swap. Invalidates any in-flight confirm-link emails (low impact at current volume).
+**Secrets rotation:** read `secrets-rotation.md`. Against today (1 June 2026):
+- No annual rotations due within the 60-day window (all dated April 2026, next due April 2027).
+- **Still flagged OVERDUE in the file itself:** `BREVO_API_KEY` and `ROUTING_CONFIRM_SHARED_SECRET` — both marked "Due for rotation (plaintext in Session 3 transcript)" since 20 April. Six weeks open. Low blast radius (email send / confirm-link minting at pilot volume) but the file flags them every Monday and they remain undone. Owner: rotate both, or downgrade the flag with a documented risk-accept.
+- `META_ACCESS_TOKEN`: long-lived system-user token, "set Apr 2026", 60-day renewal cadence. If set early-mid April it may be inside its 60-day expiry window now (~early June). meta-ads-ingest ran green this morning, so still valid, but confirm the exact issue date — a silent 401 mid-week would stop ads ingest.
 
-**No other secrets within the 60-day approaching window.** All other rotations due 2027.
-
-### Infrastructure manifest
-Stale — see Edge Function inventory section above. `Last verified` was 2026-05-07; needs a refresh pass. Critical rows still verifiable: hourly audit cron, hourly reconcile cron, lead-router, fastrack-receive all green via live data + cron run logs.
+---
 
 ## Growth triggers
 
-**Two triggers crossed this week (firing loudly once, not weekly noise):**
+- **`leads.partials` > 200 sessions/week: CROSSED.** 517 distinct partial sessions this week vs the 200/week threshold for prioritising Metabase. SQL-by-hand on funnel questions gets painful at this volume and Iris needs dashboards for ad optimisation. Firing loudly once. Recommend Mira slot Metabase setup (or the in-dashboard analytics module) onto the build queue. (Note: 200/week was likely first crossed earlier given paid-social volume — flagging now as the first explicit surface.)
+- New free-tier **connection** pressure (above) is not covered by any existing growth trigger — the Supabase-upgrade trigger keys on storage/MAU. Candidate new trigger: "recurring `connection failed` cron errors → review per-minute cron cadence / upgrade tier."
+- `leads.dead_letter` > 10: technically crossed at 102, but the cause is benign accumulation (sheet drift + check artefacts), not an upstream pipe failure. Disposition is the headline item, not an architecture change.
+- All other platform + data-infrastructure triggers: not crossed. Leads <100/month, no provider-dashboard demand, no 3+-providers-per-course routing.
 
-1. **`leads.submissions` exceeds 100/month.** 462 submissions in last 30 days, 254 non-DQ, 246 unique parents. Threshold from `platform/agent.md` and `.claude/rules/data-infrastructure.md` is 100/month. **Recommended action:** start Supabase query performance review (per spec: "performance-tune Supabase queries, consider read replicas"). Pilot volume has scaled.
-2. **`leads.partials` sessions/week crosses 200.** 917 distinct sessions this week, 4.5x the threshold. Threshold from `platform/agent.md`: "200 sessions/week OR Iris starts asking funnel questions weekly". **Recommended action:** prioritise Metabase setup — SQL queries against `leads.partials` are getting unwieldy and Iris's ads-optimisation flow needs funnel dashboards.
-
-Both triggers reflect that the pilot is no longer at the "quiet system" volume the agent was designed for. Capacity note implication: Mira may want to weigh in on whether Metabase setup precedes or follows the in-dashboard analytics build per the existing scoping doc (`platform/docs/admin-dashboard-scoping.md`).
-
-**Not crossed:**
-- Dead letter ≥10 unresolved — current 7 unresolved.
-- Phase 4 provider dashboard — the admin and provider portals are live, but the Phase 4 trigger as written is "provider dashboard requirement from a provider" / "5+ providers ready for self-serve" / "first credits-model provider being onboarded". Still 4 active pilot providers, no credits-model live yet.
-- Supabase free tier limits — not assessed via SQL; check Supabase dashboard.
-- 3+ providers per course on the same routing criteria — not yet, EMS / CD / WYK still in disjoint regions/funding routes.
-- Recurring manual DB edits — none observed; Charlotte uses `/admin/data-ops` panel and Channel B sheet→DB for in-pipeline edits.
-- Schema change touching 3+ consumers — none this week.
-- `crm.email_log` failure rate, partial cap (50) — both safely under thresholds.
+---
 
 ## Recommendations
 
-Three things for Mira's attention this week, in order of priority:
+Mira, three things this week. First, decide the `sheet_drift_detected` disposition — 71 rows breaching the 14-day rule, growing 40/week; either suppress EMS hand-edit drift from the detector or bulk-write-off, because right now the dead-letter table is acting as a graveyard, which the rule forbids. Second, the infrastructure manifest is 3.5 weeks and ~30 functions/crons behind production — it's the session-start safety check and can no longer do its job; needs an owner pass to re-sync, plus four backfilled changelog rows (0175-0178). Third, the partials-sessions growth trigger is crossed (517/week) — Metabase or the in-dashboard analytics module should move up the queue. Underneath all that the live pipe is healthy: webhooks green, zero unrouted backlog, zero funded-form payload drift, no partial-abuse, all crons firing. The flags are governance and accumulation, not lead loss.
 
-1. **Decide auto-flip-cron prerequisites are good enough to ship**, or accept that the 58 stale EMS+CD leads keep accruing each week until the day-12 warning email lands. Today's handoff puts that build on the next-task list; Mira's call on whether to gate billing capability behind it or de-risk further. Either way, Charlotte should not be running the cron manually against 58 leads.
-2. **Two growth triggers crossed.** Per `platform/agent.md` these "fire loudly once" — I'm firing them here. Read replicas / query tuning for `leads.submissions` is not urgent yet (no observed slow queries), but Metabase setup is concrete and should land in the next 2-3 sessions per the partial-volume signal. Coordinate with Iris (she'll want funnel-step views first).
-3. **Two governance bits Sasha needs owner sign-off on:** (a) Charlotte to confirm I can backfill changelog entries for migrations 0146 + 0147 next session; (b) BREVO_API_KEY + ROUTING_CONFIRM_SHARED_SECRET have been overdue for rotation since 2026-04-20 — 28 days. Both are easy 5-minute rotations. Sasha doesn't rotate; owner action.
-
-Otherwise the layer is healthy. Cron suite is fully green over 7 days, no schema or RLS drift, dead letter at 7 unresolved (all explainable and resolving on tomorrow's cron), no payload contract breaches.
-
-Capacity note: not at the 2hr/week threshold yet — this Monday pass was ~30 min. No co-agent or implementation authority needed.
+Capacity note: none. This week's scan was normal load.

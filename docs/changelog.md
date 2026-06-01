@@ -4,6 +4,25 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-01 — SECURITY FIX: revoke provider write access to enrolment billing columns
+
+Codex security audit (2026-06-01) found `authenticated` (the role providers hold via Supabase Auth) had **table-wide UPDATE** on `crm.enrolments` from migration 0108. RLS row-scopes (0096) but NOT column-scopes, and the table carries `billed_amount, billed_at, paid_at, gocardless_payment_id`. Providers hold real JWTs, so a provider could PATCH PostgREST directly and rewrite their own billing rows — bypassing the Next.js Server Actions assumed to be the trust boundary. This is the revenue source-of-truth table, so the exposure was commercial. Top-priority finding.
+
+- **Change:** `REVOKE UPDATE ON crm.enrolments FROM authenticated`, then column-level `GRANT UPDATE` on the 7 columns the provider portal actually writes: `status, lost_reason, outcome_note, status_updated_at, updated_at, callback_requested_at, callback_requested_by`. Verified against both portal write paths (`app/app/provider/leads/[id]/actions.ts:159` single, `:590` bulk).
+- **Verified safe (no path broken):** callback flagging only clears the two granted callback cols (raising is admin/service-role); sheet sync (`sheet-edit-mirror`, `reconcile-sheet-to-db`) writes via `SET LOCAL ROLE functions_writer` (untouched); admin billing writes via service role (not subject to column grants); every enrolment-mutating DB function is `SECURITY DEFINER` (runs as owner, bypasses caller grants) — no `SECURITY INVOKER` function updates the table.
+- **Post-apply proof (live `has_column_privilege`):** billing cols → all FALSE; the 7 portal cols → all TRUE. Confirmed 2026-06-01.
+- **Migration file:** `0180_provider_enrolment_column_level_update.sql` (full impact header + before/after privilege notes). **NB: applied via the Supabase SQL editor, NOT via `supabase db push`** — see the migration-history desync flag below. The 0180 file is the record; it is not yet in `supabase_migrations.schema_migrations`.
+- Signed off: Owner (ran in SQL editor + verified 2026-06-01).
+
+## 2026-06-01 — RESOLVED: migration history desync reconciled (0166–0180)
+
+While shipping 0180, `supabase db push` tried to re-apply 0166–0180. Investigation (object-existence checks via catalog) found **0166–0179 were all live in production but absent from `supabase_migrations.schema_migrations`** — applied out-of-band (SQL editor / direct), not through the migration runner. Recorded history had ended at 0165. `db push` was unusable (would error re-creating existing objects, aborting before any genuinely new migration).
+
+- **Verified before repair:** every object created by 0166–0180 confirmed live via catalog — editorial functions/tables (auto_publish, fire_netlify_blog_build, ai_assist_log, post_slug_history, draft_batches), `publish_at` is timestamptz, blog-media bucket's 4 storage policies, sms/email_log SELECT grants to authenticated, old `sms_log_submission_type_uniq` dropped + new index present, `strategy.roadmap_tasks.lane`, `crm.fire_sms_chaser_bulk`, drafter cron, and 0180's column grants. Nothing partial.
+- **Fix applied (owner ran):** `supabase migration repair --status applied 0166 0167 … 0180`, then `supabase db push --linked` → **"Remote database is up to date."** Migration runner is healthy again; future `db push` works normally.
+- **Root-cause note for future discipline:** these 14 were applied via the SQL editor instead of `supabase db push`, which silently desyncs the history table. Going forward, apply migrations through `db push` (or `migration repair` immediately after any out-of-band apply) so this doesn't recur. 0180 itself was applied via SQL editor today (emergency security fix while the runner was broken) and is included in the repair.
+- Signed off: Owner (ran repair + push, verified up-to-date 2026-06-01).
+
 ## 2026-05-31 — Brevo drift RESOLVED: 0 drifted (status pill green)
 
 Final state after the whitespace trim fix (deployed), SW_ENROL_STATUS Brevo enum values added (owner, dashboard), and a final SQL resync of the 48 remaining drifters via admin-brevo-resync (ok 48/48): **/admin/errors DB↔Brevo Check drift = 0 contacts drift, 374 aligned.** Only the 13 demo-provider-ltd (archived) leads show as "errors during check" — correct behaviour (archived provider deliberately skipped), not a fault.
