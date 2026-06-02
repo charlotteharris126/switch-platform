@@ -52,8 +52,12 @@
 --     (actions.ts:159, :590). OK.
 --   - Callback flagging: provider only ever CLEARS callback_requested_at/_by
 --     (both granted). Raising is admin-side via service role. OK.
---   - Sheet sync (sheet-edit-mirror, reconcile-sheet-to-db): write enrolments
---     via `SET LOCAL ROLE functions_writer`, not authenticated. UNAFFECTED.
+--   - Sheet/webhook EFs (sheet-edit-mirror, crm-webhook-receiver,
+--     reconcile-sheet-to-db): write enrolments over the Edge Function DB
+--     connection (SUPABASE_DB_URL = postgres superuser; reconcile-sheet-to-db
+--     additionally SET LOCAL ROLE functions_writer). None write as the provider
+--     `authenticated` role, so none are affected by this grant change.
+--     UNAFFECTED. (Comment-only accuracy correction 2026-06-02 — no SQL change.)
 --   - Admin app billing/status writes: via createAdminClient (service role).
 --     Service role is not subject to column grants. UNAFFECTED.
 --   - DB functions touching enrolments (ensure_open_enrolment,
