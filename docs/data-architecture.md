@@ -42,7 +42,11 @@ Single source of truth for the structure of the Switchable Ltd business database
 | `labs` | Switchable Labs smoke-test funnel events (Am I Stuck?, Gaply). | Live (migration 0181, 2026-06-03) |
 
 ### `labs.events` (migration 0181)
-One row per Labs funnel event. `tool` ∈ {amistuck, gaply}; `event` ∈ {run, unlock_intent, signup}; `session_id` links a visitor's run → £17-click → signup; `payload` jsonb holds tool inputs (town/job, interests, skills, prefs, result count); `email` populated on signup only (consented capture); `attribution` jsonb holds utm_*/fbclid/gclid from the landing URL (spend → conversion join); `is_bot` from user-agent. Ingested by the browser-called Edge Function `labs-event` (verify_jwt=false, CORS, origin-guarded) via `functions_writer`; read by `readonly_analytics`. Netlify Forms is kept in parallel as the email list of record. schema_version 1.0.
+One row per Labs funnel event. `tool` ∈ {amistuck, gaply}; `event` ∈ {run, unlock_intent, signup}; `session_id` links a visitor's run → £17-click → signup; `payload` jsonb holds tool inputs (town/job, interests, skills, prefs, result count); `email` populated on signup only (consented capture); `attribution` jsonb holds utm_*/fbclid/gclid from the landing URL (spend → conversion join); `is_bot` from user-agent. Ingested by the browser-called Edge Function `labs-event` (verify_jwt=false, CORS, origin-guarded) via `functions_writer`. Netlify Forms is kept in parallel as the email list of record. schema_version 1.0.
+
+**Access model (migration 0183 + 0184, follows the PII-for-reporting standard in `.claude/rules/data-infrastructure.md` §6a):**
+- Raw `labs.events` (incl `email`) is **not** exposed to the data API and is **not** readable by the reporting role. It's read operationally only: the owner via the admin app through SECURITY DEFINER, service-role-only RPCs `public.admin_labs_funnel()` + `public.admin_labs_recent_signups()` (0183), behind the admin login. An `admin_read_labs_events` (`admin.is_admin()`) policy exists for parity with `leads.submissions`. The schema is deliberately kept off the public API so the email table has no API surface; the admin page reads server-side only.
+- `labs.events_analytics` (view, 0184) is the email-free projection of the table — every column except `email`. This is what `readonly_analytics` (agents over the MCP) reads. `readonly_analytics` has no SELECT on the base table.
 
 ## Schemas (deferred, design placeholders)
 

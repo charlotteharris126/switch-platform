@@ -4,14 +4,23 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-03 — PII-for-reporting standard + apply to labs.events
+- Migration: `0184_labs_events_pii_minimisation.sql`. Took raw SELECT on `labs.events` (incl `email`) away from `readonly_analytics` (the reporting role the agents use over the MCP) — dropped policy `labs_events_select_ro` + revoked the table grant. Created email-free view `labs.events_analytics` (every column except email, runs as owner so the role reads it without base-table access), granted `readonly_analytics` SELECT on the view. Added `admin_read_labs_events` (`admin.is_admin()`) read policy for parity with `leads.submissions`.
+- New governance rule: `.claude/rules/data-infrastructure.md` §6a "PII and the reporting role" — reporting role never gets raw SELECT on a PII table; it reads an identifier-free view. New PII tables ship this shape in the creating migration. Codifies the data-minimisation posture so this is automatic, not per-table cleanup.
+- Why: 0181 had granted the reporting role full SELECT incl email. Agents need counts/segments, not raw emails. Triggered by a Codex audit of Labs (flagged the email exposure). Audit context: the same raw grant exists on `leads.submissions` — see follow-up below.
+- Verified live as `readonly_analytics`: `SELECT email FROM labs.events` → permission denied; `labs.events_analytics` readable, no email column.
+- Impact: no production consumer reads labs analytics yet (table days old), so zero breakage. Admin page unaffected (reads via service-role RPCs from 0183).
+- **Follow-up (tracked, NOT done here):** `leads.submissions` still grants `readonly_analytics` raw SELECT (email, full_name, phone). Same fix needed but it has live agent-query/dashboard consumers, so the cutover to an identifier-free view needs an impact assessment of every consumer first. Do deliberately, not in one sweep. ClickUp ticket raised (platform).
+- Signed off: Owner (2026-06-03, "long-term fix not patchwork").
+
 ## 2026-06-03 — Labs admin page (`/admin/labs`) + funnel RPCs
 - Migration: `0183_labs_admin_rpcs.sql` — two `SECURITY DEFINER` functions in `public`: `admin_labs_funnel()` (per-tool runs / unlock_intents / signups + conversion %, bot-excluded, sessions deduped) and `admin_labs_recent_signups(p_limit)` (latest signup rows incl email). Both `SET search_path = ''`, fully-qualified `labs.events`.
 - Access: EXECUTE revoked from PUBLIC, granted to `service_role` only. `labs` is not exposed to PostgREST and signup emails are PII, so the admin page reads via the service client (`createAdminClient`), layout-gated to admins. anon/authenticated cannot reach signup emails via the API.
 - New admin page `platform/app/app/admin/labs/page.tsx` + nav entry "Labs" under Tools in `admin-shell.tsx`. Renders the per-tool funnel table (against the locked success model: run→signup ≥~5% promising, <2% kill) and recent signups (when / tool / email / context / utm source).
 - Why: owner needs to SEE the Labs smoke-test funnel in their own admin (not Metabase). Reads `labs.events` from 0181/0182.
 - Impact: additive (two functions + one page + one nav link). No existing object altered. No new consumer of other tables.
-- Status: **BUILT, pending deploy** (DB push of 0183 + admin app git push). Awaiting owner go-ahead.
-- Signed off: Owner (build requested 2026-06-03; deploy sign-off pending).
+- Status: **APPLIED 2026-06-03.** 0183 pushed to production (both functions verified present + SECURITY DEFINER via pg_proc). Admin app committed + pushed to main (`eaa62b9`); Netlify rebuilding admin.switchleads.co.uk. Page shows zeros until real traffic (only the bot test row exists, filtered out).
+- Signed off: Owner (build + deploy approved 2026-06-03). Build: Claude (Labs session).
 
 ## 2026-06-03 — Switchable Labs funnel tracking (new `labs` schema + labs-event function)
 - Migration: `0181_labs_events.sql` (new schema `labs`, table `labs.events`).
