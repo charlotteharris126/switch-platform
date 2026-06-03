@@ -360,9 +360,22 @@ export interface SendTransactionalArgs {
   brand?: BrevoBrand;
   tags?: string[];
   replyTo?: { email: string; name?: string };
-  /** Only the chaser path sets this. Skips the email_log idempotency check;
-   *  every forced send still gets its own queued row. */
+  /** Only the chaser path sets this. Relaxes the once-ever email_log
+   *  idempotency check. On its own (resendWindowMinutes unset) it bypasses the
+   *  check entirely — kept for any caller that genuinely wants an
+   *  unconditional re-fire. The chaser pairs it with resendWindowMinutes so
+   *  rapid duplicates still collapse. */
   forceResend?: boolean;
+  /** Windowed dedup for the chaser path, mirroring sendSms.cooldownHours.
+   *  When set, a send is skipped if a non-failed row for the same
+   *  (submission_id, email_type) landed inside this many minutes. Combined
+   *  with the per-(submission, type) advisory lock taken in the same
+   *  transaction as the queued-row insert, this collapses near-simultaneous
+   *  duplicate sends (double-clicked batch / overlapping fire / pg_net retry)
+   *  while still allowing a deliberate re-chase once the window passes.
+   *  Undefined keeps the legacy behaviour (once-ever when forceResend is
+   *  false, unconditional when it is true). */
+  resendWindowMinutes?: number;
 }
 
 export type SendTransactionalStatus =
@@ -390,35 +403,61 @@ export async function sendTransactional(args: SendTransactionalArgs): Promise<Se
     return { ok: false, status: "failed", error: "recipient.email required", shadowMode };
   }
 
-  // Idempotency: skip if a non-failed send already exists for this
-  // (submission_id, email_type). 'failed' rows do not block — a previous
-  // failure must not silently silence the next attempt. The chaser passes
-  // forceResend=true to bypass this entirely.
-  if (!args.forceResend) {
-    try {
-      const existing = await args.sql<Array<{ id: number }>>`
-        SELECT id FROM crm.email_log
-         WHERE submission_id = ${args.submissionId}
-           AND email_type    = ${args.emailType}
-           AND status IN ('queued','sent','delivered','opened','clicked')
-         LIMIT 1
-      `;
-      if (existing.length > 0) {
-        return { ok: true, status: "skipped_duplicate", emailLogId: Number(existing[0].id), shadowMode };
-      }
-    } catch (err) {
-      console.error("sendTransactional idempotency check failed:", String(err));
-      return { ok: false, status: "failed", error: `idempotency check: ${describeFetchError(err)}`, shadowMode };
-    }
-  }
-
-  // Insert the queued row up front so post-mortem traces show the attempt
-  // even if the Brevo call hangs the function or the host process dies
-  // mid-send.
+  // Idempotency + duplicate-send race guard.
+  //
+  // The dedup check and the queued-row insert run in ONE transaction holding a
+  // per-(submission_id, email_type) advisory lock. Without the lock (the old
+  // shape) two near-simultaneous fires for the same lead both passed the check
+  // before either inserted, so both sent — that is how learners got 2-4
+  // identical chasers within seconds. The xact lock serialises concurrent
+  // fires; the second one blocks, then sees the first's queued row and skips.
+  //
+  // Dedup window:
+  //   - resendWindowMinutes set (chaser): skip if a non-failed row landed
+  //     inside the window. Collapses rapid duplicates, still allows a
+  //     deliberate re-chase once the window passes.
+  //   - forceResend true, no window: legacy unconditional re-fire (no check).
+  //   - neither (default transactional): once-ever — skip if any non-failed
+  //     row exists.
+  //
+  // 'failed' rows never block — a previous failure must not silence the next
+  // attempt.
+  const windowMins = typeof args.resendWindowMinutes === "number" && args.resendWindowMinutes > 0
+    ? args.resendWindowMinutes
+    : null;
   let emailLogId: number;
   try {
-    emailLogId = await args.sql.begin(async (trx) => {
+    const outcome = await args.sql.begin(async (trx) => {
       await trx`SET LOCAL ROLE functions_writer`;
+      // Serialise concurrent sends for the same (submission_id, email_type).
+      // hashtext returns int4; pg_advisory_xact_lock(bigint) accepts it.
+      await trx`SELECT pg_advisory_xact_lock(hashtext(${`${args.submissionId}:${args.emailType}`}))`;
+
+      if (windowMins !== null) {
+        const recent = await trx<Array<{ id: number }>>`
+          SELECT id FROM crm.email_log
+           WHERE submission_id = ${args.submissionId}
+             AND email_type    = ${args.emailType}
+             AND status IN ('queued','sent','delivered','opened','clicked')
+             AND triggered_at  > now() - make_interval(mins => ${windowMins})
+           LIMIT 1
+        `;
+        if (recent.length > 0) return { dup: true as const, id: Number(recent[0].id) };
+      } else if (!args.forceResend) {
+        const existing = await trx<Array<{ id: number }>>`
+          SELECT id FROM crm.email_log
+           WHERE submission_id = ${args.submissionId}
+             AND email_type    = ${args.emailType}
+             AND status IN ('queued','sent','delivered','opened','clicked')
+           LIMIT 1
+        `;
+        if (existing.length > 0) return { dup: true as const, id: Number(existing[0].id) };
+      }
+
+      // Insert the queued row up front so post-mortem traces show the attempt
+      // even if the Brevo call hangs the function or the host process dies
+      // mid-send. Inside the lock so the row is visible to the next fire the
+      // instant this transaction commits.
       const rows = await trx<Array<{ id: number }>>`
         INSERT INTO crm.email_log (
           submission_id, email_type, channel, template_id, recipient_email,
@@ -438,10 +477,15 @@ export async function sendTransactional(args: SendTransactionalArgs): Promise<Se
         )
         RETURNING id
       `;
-      return Number(rows[0].id);
+      return { dup: false as const, id: Number(rows[0].id) };
     });
+
+    if (outcome.dup) {
+      return { ok: true, status: "skipped_duplicate", emailLogId: outcome.id, shadowMode };
+    }
+    emailLogId = outcome.id;
   } catch (err) {
-    console.error("sendTransactional email_log insert failed:", String(err));
+    console.error("sendTransactional email_log guard/insert failed:", String(err));
     return { ok: false, status: "failed", error: `email_log insert: ${describeFetchError(err)}`, shadowMode };
   }
 
@@ -734,49 +778,49 @@ export async function sendSms(args: SendSmsArgs): Promise<SendSmsResult> {
     return { ok: false, status: "failed", error: "body required", shadowMode };
   }
 
-  // Idempotency: skip if a non-failed row already exists for this
-  // (submission_id, comm_type). 'failed' / 'undelivered' rows do not block —
-  // a previous failure must not silently silence the next attempt. Matches
-  // the sendTransactional pattern.
+  // Idempotency + duplicate-send race guard. Same shape as sendTransactional:
+  // the dedup check and the queued-row insert run in ONE transaction holding a
+  // per-(submission_id, comm_type) advisory lock, so two near-simultaneous
+  // fires for the same lead can't both pass the check before either inserts.
   //
-  // Default behaviour (cooldownHours undefined) is once-ever — the auto-fire
-  // attempt-1 path relies on this so a learner only ever gets one auto SMS.
-  // The manual batch path passes cooldownHours=24 which windows the check,
-  // letting Charlotte re-push a learner the next day.
-  try {
-    const cooldownHours = typeof args.cooldownHours === "number" && args.cooldownHours > 0
-      ? args.cooldownHours
-      : null;
-    const existing = cooldownHours === null
-      ? await args.sql<Array<{ id: number }>>`
-          SELECT id FROM crm.sms_log
-           WHERE submission_id = ${args.submissionId}
-             AND comm_type     = ${args.commType}
-             AND status IN ('queued','sent','delivered')
-           LIMIT 1
-        `
-      : await args.sql<Array<{ id: number }>>`
-          SELECT id FROM crm.sms_log
-           WHERE submission_id = ${args.submissionId}
-             AND comm_type     = ${args.commType}
-             AND status IN ('queued','sent','delivered')
-             AND triggered_at  > now() - make_interval(hours => ${cooldownHours})
-           LIMIT 1
-        `;
-    if (existing.length > 0) {
-      return { ok: true, status: "skipped_duplicate", smsLogId: Number(existing[0].id), shadowMode };
-    }
-  } catch (err) {
-    console.error("sendSms idempotency check failed:", String(err));
-    return { ok: false, status: "failed", error: `idempotency check: ${describeFetchError(err)}`, shadowMode };
-  }
-
-  // Insert the queued row up front so post-mortem traces show the attempt
-  // even if the Brevo call hangs the function.
+  //   - cooldownHours undefined: once-ever — the auto-fire attempt-1 path
+  //     relies on this so a learner only ever gets one auto SMS.
+  //   - cooldownHours set (manual batch, 24h): windowed — re-push allowed the
+  //     next day, rapid duplicates inside the window collapsed.
+  //
+  // 'failed' / 'undelivered' rows never block — a previous failure must not
+  // silence the next attempt.
+  const cooldownHours = typeof args.cooldownHours === "number" && args.cooldownHours > 0
+    ? args.cooldownHours
+    : null;
   let smsLogId: number;
   try {
-    smsLogId = await args.sql.begin(async (trx) => {
+    const outcome = await args.sql.begin(async (trx) => {
       await trx`SET LOCAL ROLE functions_writer`;
+      // Serialise concurrent sends for the same (submission_id, comm_type).
+      await trx`SELECT pg_advisory_xact_lock(hashtext(${`${args.submissionId}:${args.commType}`}))`;
+
+      const existing = cooldownHours === null
+        ? await trx<Array<{ id: number }>>`
+            SELECT id FROM crm.sms_log
+             WHERE submission_id = ${args.submissionId}
+               AND comm_type     = ${args.commType}
+               AND status IN ('queued','sent','delivered')
+             LIMIT 1
+          `
+        : await trx<Array<{ id: number }>>`
+            SELECT id FROM crm.sms_log
+             WHERE submission_id = ${args.submissionId}
+               AND comm_type     = ${args.commType}
+               AND status IN ('queued','sent','delivered')
+               AND triggered_at  > now() - make_interval(hours => ${cooldownHours})
+             LIMIT 1
+          `;
+      if (existing.length > 0) return { dup: true as const, id: Number(existing[0].id) };
+
+      // Insert the queued row up front so post-mortem traces show the attempt
+      // even if the Brevo call hangs the function. Inside the lock so it's
+      // visible to the next fire the instant this transaction commits.
       const rows = await trx<Array<{ id: number }>>`
         INSERT INTO crm.sms_log (
           submission_id, comm_type, recipient_phone, status, body_rendered, metadata
@@ -794,10 +838,15 @@ export async function sendSms(args: SendSmsArgs): Promise<SendSmsResult> {
         )
         RETURNING id
       `;
-      return Number(rows[0].id);
+      return { dup: false as const, id: Number(rows[0].id) };
     });
+
+    if (outcome.dup) {
+      return { ok: true, status: "skipped_duplicate", smsLogId: outcome.id, shadowMode };
+    }
+    smsLogId = outcome.id;
   } catch (err) {
-    console.error("sendSms sms_log insert failed:", String(err));
+    console.error("sendSms sms_log guard/insert failed:", String(err));
     return { ok: false, status: "failed", error: `sms_log insert: ${describeFetchError(err)}`, shadowMode };
   }
 

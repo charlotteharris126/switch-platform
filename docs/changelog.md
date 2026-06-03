@@ -4,6 +4,56 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-03 — Labs admin page (`/admin/labs`) + funnel RPCs
+- Migration: `0183_labs_admin_rpcs.sql` — two `SECURITY DEFINER` functions in `public`: `admin_labs_funnel()` (per-tool runs / unlock_intents / signups + conversion %, bot-excluded, sessions deduped) and `admin_labs_recent_signups(p_limit)` (latest signup rows incl email). Both `SET search_path = ''`, fully-qualified `labs.events`.
+- Access: EXECUTE revoked from PUBLIC, granted to `service_role` only. `labs` is not exposed to PostgREST and signup emails are PII, so the admin page reads via the service client (`createAdminClient`), layout-gated to admins. anon/authenticated cannot reach signup emails via the API.
+- New admin page `platform/app/app/admin/labs/page.tsx` + nav entry "Labs" under Tools in `admin-shell.tsx`. Renders the per-tool funnel table (against the locked success model: run→signup ≥~5% promising, <2% kill) and recent signups (when / tool / email / context / utm source).
+- Why: owner needs to SEE the Labs smoke-test funnel in their own admin (not Metabase). Reads `labs.events` from 0181/0182.
+- Impact: additive (two functions + one page + one nav link). No existing object altered. No new consumer of other tables.
+- Status: **BUILT, pending deploy** (DB push of 0183 + admin app git push). Awaiting owner go-ahead.
+- Signed off: Owner (build requested 2026-06-03; deploy sign-off pending).
+
+## 2026-06-03 — Switchable Labs funnel tracking (new `labs` schema + labs-event function)
+- Migration: `0181_labs_events.sql` (new schema `labs`, table `labs.events`).
+- Change: durable conversion tracking for the Labs smoke-test tools. One row per event (run / unlock_intent / signup), with tool, session_id (funnel linking), payload jsonb (inputs), email (signup only), attribution jsonb (utm/fbclid/gclid), is_bot, schema_version 1.0. RLS deny-by-default; `functions_writer` INSERT + `readonly_analytics` SELECT (each with matching GRANT per the RLS-needs-GRANT rule).
+- New Edge Function `labs-event` (browser POST, CORS, origin-guarded, verify_jwt=false in config.toml). Inserts via `SET LOCAL ROLE functions_writer`, dead-letters on failure (`edge_function_labs_event`). Same pattern as `netlify-partial-capture`.
+- Client: `labs/public/{amistuck,gaply}/app.js` post run/unlock_intent/signup events to the function (session_id in localStorage, attribution from URL), alongside the existing Netlify Forms posts (Netlify Forms KEPT as the email list of record for sell/nurture).
+- Why: Netlify Forms free tier (~100/month) silently drops data under ad traffic; this makes cost-per-email measurable end to end. Go-live gate before Labs ad spend. Context: `labs/docs/current-handoff.md`, `strategy/docs/switchable-labs-success-model.md`.
+- Impact: new schema/table/function, no existing consumer touched. Reads via readonly_analytics (agents/Metabase). Labs client gains one extra fire-and-forget POST per event.
+- Status: **APPLIED + verified live 2026-06-03.** Migrations 0181 + 0182 pushed, `labs-event` function deployed, Labs site deployed. End-to-end verified (test event → `labs.events` id 1, is_bot=true test row, filterable).
+- **0182_labs_events_writer_select.sql** — follow-up fix: `INSERT ... RETURNING id` needs SELECT privilege as well as INSERT; 0181 granted functions_writer INSERT only, so the RETURNING failed with "permission denied for table events". 0182 grants functions_writer SELECT + a matching RLS read policy (mirrors leads.partials). Lesson worth keeping: an EF that uses RETURNING needs both INSERT and SELECT on the target.
+- Signed off: Owner (design + apply, 2026-06-03). Build: Claude (Labs session).
+
+Closes the audit gap where `crm.sms_log` only ever showed `sent` (Brevo accepted) or `failed` (our pre-send error), never `delivered`/`undelivered` — so a text Brevo accepted then silently failed at the carrier was indistinguishable from one that landed. Brings SMS to email-event parity.
+
+- **New EF `brevo-sms-event-webhook`**: receives Brevo transactional SMS events, maps event → status (`delivered`/`sent`/`undelivered`), updates the `crm.sms_log` row by `brevo_message_id` (sets `sent_at`, writes failure `reason` into `error_text`, merges raw event into `metadata`). SMS-only — no consent/marketing side-effects (subscribe/unsubscribed/replied ignored). Shared-secret bearer auth: `BREVO_SMS_WEBHOOK_SECRET` if set, else falls back to existing `BREVO_WEBHOOK_SECRET` (so no new secret required). `config.toml` `verify_jwt=false` added.
+- **SMS payload ≠ email payload (corrected mid-build):** verified against Brevo docs that the transactional SMS webhook uses `msg_status` (NOT `event`), `messageId` as an INTEGER (String()-coerced to match our TEXT `brevo_message_id`), and recipient `to`. Status strings: `delivered`, `sent`, `accepted`→sent, `soft_bounce`/`hard_bounce`/`rej`/`bl`/`skip`→undelivered, `replied`/`subscribe`/`unsubscribed` ignored. First cut mirrored the email shape (`event`) and would have matched nothing — fixed before live use. (First deploy 2026-06-02 was the pre-correction version; corrected version needs redeploy.)
+- **No schema change:** `sms_log_status_check` already permits `delivered`/`undelivered`; the table was always ready, nothing wrote them.
+- **Outstanding (owner / Brevo dashboard):** (1) confirm Brevo emits SMS delivery receipts on the current plan — if not, the function is built but stays dark for a billing reason, not a code one; (2) deploy `supabase functions deploy brevo-sms-event-webhook --project-ref igvlngouxcirqhlsrhga`; (3) configure Brevo's SMS webhook to POST to the function URL with `Authorization: Bearer <secret>`.
+- **Known type-check friction (non-blocking):** shares the codebase-wide `sql.json` `deno check` error (same as `brevo-event-webhook` and `route-lead.ts:1782`); tolerated by `functions deploy`, harmless at runtime. Worth a single cleanup pass across all three later.
+- Signed off: Owner (2026-06-02).
+
+## 2026-06-02 — INCIDENT FIX: duplicate chaser sends (race) + chaser_self silent gap
+
+Operational audit of email/SMS chasers (Codex prompt, 2026-06-02, read-only Postgres MCP). Two live defects found and fixed. No schema change — Edge Function code + one secret.
+
+**Defect 1 — duplicate chaser emails (deliverability/reputation).** ~12 incidents in 14 days where one learner received 2-4 identical chasers within seconds (worst: sub 447, 4 in 20s; 366, 3 in 6.4s), all real Brevo sends. One recipient marked a chaser as spam (`complained`). Root cause: the email chaser path had **no concurrency guard** — `crm.fire_provider_chaser` has no cooldown (unlike its SMS sibling `crm.fire_sms_chaser_bulk`, 0174, which gates 24h), and `sendTransactional` with `forceResend=true` bypassed the idempotency check entirely. Two near-simultaneous fires for the same lead (double-clicked batch / overlapping fire / pg_net retry) both sent.
+
+- **Fix (`_shared/brevo.ts` `sendTransactional`):** dedup check + queued-row insert now run in ONE transaction holding a `pg_advisory_xact_lock(hashtext(submission_id||':'||email_type))`. Concurrent fires serialise; the second sees the first's queued row and skips. Added `resendWindowMinutes` (mirrors `sendSms.cooldownHours`): when set, skip if a non-failed row landed inside the window. Legacy paths unchanged (once-ever for normal transactional; unconditional only if `forceResend` with no window). The moved read runs as `functions_writer` — confirmed safe (that role already does `RETURNING`/`WHERE id` on the table, both of which require SELECT).
+- **Callers:** `admin-brevo-chase` and `admin-brevo-chase-employer` now pass a 24h window (`CHASER_RESEND_WINDOW_MINUTES`, default 1440, env-tunable), mirroring the SMS 24h cooldown.
+- **Same hardening applied to `sendSms`** (defensive parity — "this cannot happen again" across channels). The SMS path had the identical structural race (cooldown check outside the insert txn, no lock); it showed no duplicates in the audit but that was luck + the RPC 24h gate, not a guarantee. Cooldown check + queued-row insert now run in one txn under `pg_advisory_xact_lock(hashtext(submission_id||':'||comm_type))`. Behaviour otherwise unchanged (once-ever when `cooldownHours` unset, windowed when set). SMS importers to redeploy: `sms-chaser-attempt-1`, `sms-fastrack-prompt-cron`, `fastrack-receive`, `admin-test-sms`.
+- **Pre-existing unrelated type error noted:** `_shared/route-lead.ts:1782` (`trx.json(payload)` typed `Record<string,unknown>` vs `JSONValue`) fails `deno check`. Predates this work, not introduced here, does not block `supabase functions deploy` (route-lead importers are already live). Logged as a separate low-priority cleanup.
+
+**Defect 2 — `chaser_self` never fired (operational gap).** 19 self-funded leads in 30 days (16 routed), zero `chaser_self` sends in 14 days. Root cause: `admin-brevo-chase` silently skipped the self chaser when `BREVO_TEMPLATE_CHASER_SELF` was unset (funded template was set; self was not). Self-funded learners got no transactional chaser.
+
+- **Fix (`admin-brevo-chase`):** a missing chaser template now **fails loudly** — writes a `leads.dead_letter` row + returns `failed` (surfaces on `/admin/errors`) instead of silent skip.
+- **Config:** `BREVO_TEMPLATE_CHASER_SELF=12` set via `supabase secrets set` (same transactional template as funded; owner to confirm template 12 copy is funding-agnostic).
+
+- **Deploy:** `admin-brevo-chase` + `admin-brevo-chase-employer` redeployed 2026-06-02 (both re-bundle `_shared/brevo.ts`). Verified post-deploy: a real funded chase (sub 535, 20:02 UTC) landed as exactly one clean `sent` row with a Brevo message ID — happy path intact under the new lock. Historical duplicates remain in `email_log` (not retroactively removed); verification is on new sends only.
+- **Outstanding:** fire a self-funded chase to confirm `chaser_self` lands clean; optional deliberate double-fire to demonstrate race-collapse live; SMS handset delivery callbacks still unwired (`crm.sms_log` only shows sent/failed, no delivered/undelivered) — separate next item.
+- **Tracking:** ClickUp 869dhrzz1.
+- Signed off: Owner (deployed + set secret 2026-06-02).
+
 ## 2026-06-01 — SECURITY FIX: revoke provider write access to enrolment billing columns
 
 Codex security audit (2026-06-01) found `authenticated` (the role providers hold via Supabase Auth) had **table-wide UPDATE** on `crm.enrolments` from migration 0108. RLS row-scopes (0096) but NOT column-scopes, and the table carries `billed_amount, billed_at, paid_at, gocardless_payment_id`. Providers hold real JWTs, so a provider could PATCH PostgREST directly and rewrite their own billing rows — bypassing the Next.js Server Actions assumed to be the trust boundary. This is the revenue source-of-truth table, so the exposure was commercial. Top-priority finding.

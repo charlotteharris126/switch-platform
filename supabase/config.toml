@@ -416,6 +416,9 @@ verify_jwt = false
 [functions.netlify-partial-capture]
 verify_jwt = false
 
+[functions.labs-event]
+verify_jwt = false
+
 [functions.netlify-leads-reconcile]
 verify_jwt = false
 
@@ -468,6 +471,9 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.brevo-event-webhook]
+verify_jwt = false
+
+[functions.brevo-sms-event-webhook]
 verify_jwt = false
 
 [functions.email-stalled-cron]

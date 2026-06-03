@@ -1,41 +1,41 @@
-# Platform Handoff, Session 62, 2026-06-01
+# Platform Handoff, Session 63, 2026-06-02
 
 ## Current state
-Codex security audit reviewed and triaged. The one commercially dangerous finding (providers could write their own enrolment billing columns) is fixed live and verified. A migration-history desync surfaced during the fix (0166-0180 were live but unrecorded) and is now reconciled, so `supabase db push` works cleanly again. The rest of the audit findings are lower severity and queued.
+Chaser operational emergency closed. The duplicate chaser-email bug (6 learners got 2-4 identical emails within seconds over 14 days, 1 spam complaint) is fixed and verified live on both channels, and the `chaser_self` silent gap is fixed and armed. Codex reviewed the work and signed it off. The Codex security backlog (provider login binding, ingestion auth, etc.) is untouched this session and remains the main outstanding work.
 
 ## What was done this session
-- **Reviewed the Codex platform security audit.** Verified every finding against live source, reranked severity, corrected two overstated items (build does not actually fail; migration 0179 mismatch was stale IDE context). Relayed the reviewed verdict back to Codex, who accepted it and returned a 10-point priority list.
-- **Fixed #4 (HIGH) — provider write access to enrolment billing columns.** `authenticated` held table-wide UPDATE on `crm.enrolments` (from 0108), so a provider with their JWT could PATCH PostgREST directly and rewrite `billed_amount/billed_at/paid_at/gocardless_payment_id`. Wrote migration `0180_provider_enrolment_column_level_update.sql`: REVOKE table-wide UPDATE, GRANT column-level UPDATE on the 7 columns the portal actually writes (`status, lost_reason, outcome_note, status_updated_at, updated_at, callback_requested_at, callback_requested_by`).
-- **Applied 0180 via the Supabase SQL editor** (the migration runner was broken by the desync below) and verified live with `has_column_privilege`: 4 billing cols now FALSE, 7 portal cols TRUE, table SELECT intact, `functions_writer` untouched. Confirmed nothing broke (reads, outcome writes, sheet sync, admin/service writes all unaffected).
-- **Reconciled migration-history desync.** `db push` wanted to re-run 0166-0180. Confirmed via catalog that all their objects are already live (applied out-of-band via SQL editor, not recorded). Ran `supabase migration repair --status applied 0166..0180`, then `db push` → "Remote database is up to date."
-- **Logged both** in `docs/changelog.md`. Saved a memory on the SQL-editor desync gotcha so future sessions don't repeat the confusion.
+- **Audited email/SMS chasers** against production (read-only Postgres MCP). Found two live defects: duplicate chaser emails (race) and `chaser_self` never firing. SMS confirmed clean (0 rapid duplicates in 30 days; closest two texts to one person 4d 10h apart).
+- **Fixed the duplicate-email race.** `_shared/brevo.ts` `sendTransactional`: dedup check + queued-row insert now run in one transaction under `pg_advisory_xact_lock(submission_id, email_type)`; added `resendWindowMinutes` windowed dedup. `admin-brevo-chase` + `admin-brevo-chase-employer` pass a 24h window (`CHASER_RESEND_WINDOW_MINUTES`, env-tunable). Deployed both; verified a real funded chase (sub 535) landed as exactly one clean `sent` row.
+- **Hardened `sendSms` identically** (defensive parity). Redeployed `sms-chaser-attempt-1`, `sms-fastrack-prompt-cron`, `fastrack-receive`, `admin-test-sms`.
+- **Fixed `chaser_self`.** Missing chaser template now fails loudly to `dead_letter` instead of silent skip. Set `BREVO_TEMPLATE_CHASER_SELF=12`, redeployed `admin-brevo-chase`. Live test parked (no self campaigns running).
+- **Built `brevo-sms-event-webhook`** (SMS delivery tracking, push). Corrected to Brevo's real SMS payload schema (`msg_status`, integer `messageId`). Hit a wall: this Brevo account has no SMS-webhook config in the dashboard, so activation must be a pull instead (see Next steps). Function left dormant.
+- **Investigated owner's "are we sending SMS multiple times?" fear.** Confirmed NO: the 3 Brevo log lines (Accepted/Sent/Delivered) for one number are one message's lifecycle, not 3 sends. `sms_log` shows exactly one row (id 159, sub 538) for it.
+- Logged everything in `docs/changelog.md` (two entries). Ticket 869dhrzz1.
 
 ## Next steps
-1. **DB-side audit batch (now pushes cleanly via `supabase db push`):** restrict `editorial.fire_netlify_blog_build` to admin/service execution, ie add `admin.is_admin()` inside it or revoke EXECUTE from `authenticated` (#6, migration). Add the 5 missing `verify_jwt = false` config blocks for `blog-ai-assist, blog-draft-from-queue, blog-post-create, gdpr-erase-learner, iris-daily-flags` (#8, config.toml).
-2. **Ingestion auth (#5):** first confirm Netlify outgoing-webhook JWS signature is actually emitted for our form notifications (check notification settings / capture a real payload). If yes, verify `X-Webhook-Signature` in `netlify-lead-router`, `netlify-employer-lead-router`, `fastrack-receive`. If not, use a shared-secret header/token. Do not build on an unverified signature mechanism.
-3. **Provider login binding (#1):** bind the password step to the OTP verify via a short-lived HttpOnly nonce/challenge so email-possession alone cannot log in; reduce email OTP lifetime from 3600s.
-4. **App-code batch (one branch, one Netlify deploy):** sanitize admin `next` redirect to relative-only (#3); route the flagged server actions through `requireAdminUser()/requireProviderUser()` (getUser) (#7/#11); drop `image/svg+xml` from blog upload allowed types (#13); standardize `blog-post-create` secret on Vault (#9); bulk audit via `UPDATE ... RETURNING` (#10).
-5. **Quality/docs:** clean lint (56 problems / 39 errors); README says Next 15, package is 16.2.4; optional switch to `next/font/local` (Montserrat files already local) for deterministic builds.
-6. **Carries from S61 (unchanged):** reconcile panel-apply proper fix; CMS Phase 2 build-script flip; demand-aggregation view (Mira PUSH); Provider OS V1 scoping (Mira PUSH); Wren broadcast-gating PUSH; auto-flip cron + day-12 warning (migration 0097 unapplied, EMS 50+ leads past SLA).
-7. **billing_events recording gap (carry, Nell/Mira PUSH):** `crm.billing_events` empty despite confirmed revenue (WYK £150 pulled 21 May, EMS £1,050 pulled 26 May). Not investigated this session. #4 hardened the same table's write access but the recording gap itself is still open.
+1. **Security backlog (main work, Codex order):** provider login OTP binding (#1) → Netlify ingestion auth (#5) → lock down `editorial.fire_netlify_blog_build` (#6, migration) → 5 missing `verify_jwt=false` config blocks (#8) → app-code batch in one branch/deploy (#3 redirect sanitize, #7/#11 getUser helper, #9 Vault secret, #10 bulk-audit RETURNING, #13 drop SVG upload type). Accepted-noise notes only: #2 admin allowlist dual source, #12 public analytics endpoints.
+2. **SMS delivery tracking via pull (low priority, unrelated to duplicates):** build a cron EF that calls `GET /v3/transactionalSMS/statistics/events` and updates `crm.sms_log.status` by `messageId`. Redeploy the corrected `brevo-sms-event-webhook` (first deploy was the pre-correction cut) to keep it as a dormant push-fallback. No migration (`sms_log_status_check` already allows delivered/undelivered).
+3. **Carries from S62 (untouched this session):** `crm.billing_events` empty despite confirmed pulls (Nell/Mira shared item); auto-flip cron + day-12 warning (migration 0097 unapplied, EMS 50+ leads past SLA); CMS Phase 2 build-script flip; demand-aggregation view (Mira PUSH); Provider OS V1 scoping (Mira PUSH); Wren broadcast-gating PUSH; reconcile panel-apply proper fix.
+4. **Low: cleanup** the shared `sql.json` type-check error (`route-lead.ts:1782`, `brevo-event-webhook`, `brevo-sms-event-webhook`); lint (56 problems); README Next version mismatch.
+5. **PUSH from Labs (2026-06-02): move Switchable Labs conversion tracking into Supabase.** The two Labs tools (`/amistuck`, `/gaply`) currently post partial (`*-unlock-intent`, fires on the £17 click) + complete (`*-signup`, email) events to **Netlify Forms**, free tier ~100 submissions/month → silently drops data once exceeded, which an ad test will blow past, losing the conversion data the smoke test exists to measure. Route these events into the data layer instead (durable, no cap, joins ad-spend → run → conversion). **Go-live gate before any Labs ad spend.** Context: `labs/docs/current-handoff.md`; metrics in `strategy/docs/switchable-labs-success-model.md`.
 
 ## Decisions and open questions
 **Decisions:**
-- Fixed #4 with a column-level grant (not RPC-only) as the safe minimal close. Verified the 7-column whitelist against both portal write paths before applying.
-- Applied 0180 via SQL editor because the runner was broken by the history desync, then reconciled the history so the runner is healthy. Owner ran both commands.
-- Codex's 10-point priority order adopted as the remediation plan of record.
+- Race fixed with a per-(submission, type) advisory lock + windowed dedup, not a unique index (a partial unique index can't express a time window). Mirrors the SMS sibling's cooldown model.
+- 24h resend window chosen to match SMS and because of the spam complaint. Env-tunable, no code change to adjust.
+- SMS delivery tracking pivots from push (webhook) to pull (statistics API) because the Brevo account exposes no SMS-webhook config.
 
 **Open questions:**
-- Long-term provider-write model (column-grant kept vs RPC-only hardening). Defer to Mira if revisited; not blocking.
-- billing_events: what is meant to write to it and why nothing has (carry, owner/Mira/Nell).
+- **Owner decides: does Charlotte ever need a same-day repeat chase to the same lead?** The 24h window now blocks it (logged as skipped_duplicate). Data says her cadence is days apart, so 24h is fine. If yes, lower `CHASER_RESEND_WINDOW_MINUTES` (e.g. 60). Bring decision next session; no work needed if keeping 24h.
+- `crm.billing_events`: what writes to it and why nothing has (carry, owner/Mira/Nell).
 
 ## Watch items
-- **Provider portal outcome writes:** permission level verified intact post-0180, but confirm a real provider outcome write succeeds in normal use (low-volume pilot, none observed since the change yet).
-- **`crm.billing_events` still empty** despite two confirmed real payments (carry).
-- **Drift digest** should sit ~87 and shrink (carry from S61).
-- **`edge_function_partial_capture`** connection-pool errors (carry from S61, watch for climb = free-tier connection ceiling).
+- **Brevo sender reputation** over the next ~week, after the 1 spam complaint + historical duplicate spray. Fix stops new duplicates; reputation recovers slowly. Watch for any new `complained` rows.
+- **`chaser_self` armed but never run live** (no self campaigns). First self chase should be verified to confirm a clean `chaser_self` row lands and no dead-letter.
+- **`brevo-sms-event-webhook` is the pre-correction version on the server** and is dormant; do not rely on it until redeployed and a pull/push route is actually wired.
+- Carries: `crm.billing_events` still empty; drift digest ~87; `edge_function_partial_capture` connection-pool errors (free-tier ceiling watch).
 
 ## Next session
 - **Folder:** platform
-- **First task:** DB-side audit batch (#6 build-hook restriction migration + #8 the five missing `verify_jwt` config blocks). Both now push cleanly via `supabase db push`.
-- **Cross-project:** None new this session. The billing_events gap remains a shared Nell/Mira ↔ platform item but generated no new push.
+- **First task:** Start the security backlog at provider login OTP binding (#1), or the DB-side quick wins (#6 migration + #8 config blocks) if a shorter session. Both push cleanly via `supabase db push`.
+- **Cross-project:** None new. `crm.billing_events` gap remains a shared Nell/Mira ↔ platform item; generated no new push this session.

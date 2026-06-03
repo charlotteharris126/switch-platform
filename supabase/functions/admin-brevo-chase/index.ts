@@ -104,10 +104,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const THROTTLE_MS = 250;
   const results: ChaseResult[] = [];
 
-  // Phase 2b: per-funded-route chaser templates. Either may be missing;
-  // sends to that funding route silently skip the transactional path.
+  // Phase 2b: per-funded-route chaser templates. A missing template no longer
+  // skips silently — it fails loudly (dead_letter + failed status) so the gap
+  // surfaces in /admin/errors instead of leaving learners un-chased in the
+  // dark (the chaser_self gap that ran undetected for weeks).
   const chaserTemplateFundedId = parseEnvInt("BREVO_TEMPLATE_CHASER_FUNDED");
   const chaserTemplateSelfId = parseEnvInt("BREVO_TEMPLATE_CHASER_SELF");
+
+  // Duplicate-send guard window. Mirrors the SMS chaser's 24h cooldown
+  // (crm.fire_sms_chaser_bulk). Passed to sendTransactional so two
+  // near-simultaneous fires for the same lead collapse to one, while a
+  // deliberate re-chase a day later still goes through. Env-tunable.
+  const CHASER_RESEND_WINDOW_MINUTES = parseEnvInt("CHASER_RESEND_WINDOW_MINUTES") ?? 1440;
 
   for (let i = 0; i < stringEmails.length; i++) {
     if (i > 0) await sleep(THROTTLE_MS);
@@ -180,7 +188,27 @@ Deno.serve(async (req: Request): Promise<Response> => {
         const emailType: "chaser_funded" | "chaser_self" = isFunded ? "chaser_funded" : "chaser_self";
 
         if (templateId === null) {
-          transactional = "skipped";
+          // Fail loudly: a routed lead we meant to chase has no template
+          // configured for its funding route. Don't swallow it — surface in
+          // dead_letter so /admin/errors shows the misconfiguration.
+          const reason = isFunded
+            ? "BREVO_TEMPLATE_CHASER_FUNDED not set"
+            : "BREVO_TEMPLATE_CHASER_SELF not set";
+          transactional = "failed";
+          transactionalError = reason;
+          try {
+            await sql`
+              INSERT INTO leads.dead_letter (source, raw_payload, error_context, received_at)
+              VALUES (
+                'edge_function_brevo_chase',
+                ${sql.json({ email, submission_id: submissionId, funding_category, email_type: emailType })},
+                ${`Chaser template env not set: ${reason}`},
+                now()
+              )
+            `;
+          } catch (dlErr) {
+            console.error("dead_letter write failed (missing template):", String(dlErr));
+          }
         } else {
           const recipientName = [first_name, last_name].filter(Boolean).join(" ") || undefined;
           const sendResult = await sendTransactional({
@@ -197,6 +225,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             brand: "switchable",
             tags: ["chaser", emailType, "admin-brevo-chase"],
             forceResend: true,
+            resendWindowMinutes: CHASER_RESEND_WINDOW_MINUTES,
           });
 
           if (sendResult.ok && sendResult.status === "sent") {

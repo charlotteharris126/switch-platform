@@ -109,6 +109,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ error: "BREVO_TEMPLATE_S4B_EMPLOYER_CHASER not set or invalid" }, 500);
   }
 
+  // Duplicate-send guard window (minutes). Mirrors the learner chaser and the
+  // SMS 24h cooldown — collapses near-simultaneous re-fires for the same lead
+  // while allowing a deliberate re-chase a day later. Env-tunable.
+  const chaserWindowRaw = Deno.env.get("CHASER_RESEND_WINDOW_MINUTES");
+  const resendWindowMinutes = chaserWindowRaw && Number.isFinite(Number(chaserWindowRaw))
+    ? Number(chaserWindowRaw)
+    : 1440;
+
   let body: { submissionIds?: unknown };
   try {
     body = await req.json();
@@ -188,6 +196,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       brand: "switchable",
       tags: ["chaser", "s4b_employer_chaser", "admin-brevo-chase-employer"],
       forceResend: true,
+      resendWindowMinutes,
     });
 
     if (sendResult.ok && sendResult.status === "sent") {

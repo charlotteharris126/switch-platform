@@ -39,6 +39,10 @@ Single source of truth for the structure of the Switchable Ltd business database
 | `audit` | Workspace-wide change log for admin / provider / system writes | Pilot (live since migration 0013) |
 | `social` | Multi-brand organic social: drafts, engagement targets, post analytics, OAuth tokens | Pilot (Session G — migration 0029) |
 | `strategy` | Owner-facing strategic state: roadmap tasks, future strategic tracking surfaces. Read-only to Mira via MCP for weekly review continuity. | Pilot (migration 0160, 2026-05-23) |
+| `labs` | Switchable Labs smoke-test funnel events (Am I Stuck?, Gaply). | Live (migration 0181, 2026-06-03) |
+
+### `labs.events` (migration 0181)
+One row per Labs funnel event. `tool` ∈ {amistuck, gaply}; `event` ∈ {run, unlock_intent, signup}; `session_id` links a visitor's run → £17-click → signup; `payload` jsonb holds tool inputs (town/job, interests, skills, prefs, result count); `email` populated on signup only (consented capture); `attribution` jsonb holds utm_*/fbclid/gclid from the landing URL (spend → conversion join); `is_bot` from user-agent. Ingested by the browser-called Edge Function `labs-event` (verify_jwt=false, CORS, origin-guarded) via `functions_writer`; read by `readonly_analytics`. Netlify Forms is kept in parallel as the email list of record. schema_version 1.0.
 
 ## Schemas (deferred, design placeholders)
 
