@@ -63,7 +63,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (!event || !ALLOWED_EVENTS.has(event)) return json({ error: "invalid_event" }, 400);
 
   const session_id = firstString(body["session_id"]);
-  let email = firstString(body["email"]);
+  // Email only belongs on a signup. Discard it on run/unlock_intent so we never
+  // store an address against a non-signup event (data minimisation).
+  let email = event === "signup" ? firstString(body["email"]) : null;
   if (email) email = email.slice(0, 200).toLowerCase();
   if (email && !EMAIL_RE.test(email)) email = null; // drop junk, don't reject the event
   const payload = asObject(body["payload"]);
@@ -100,7 +102,14 @@ function originAllowed(value: string): boolean {
   if (!value) return false;
   try {
     const host = new URL(value).hostname;
-    return host === "labs.switchable.org.uk" || host.endsWith(".netlify.app") || host === "localhost";
+    // Production + this site's Netlify alias + its deploy previews + local dev.
+    // Scoped to amistuck-labs, not all of *.netlify.app (anyone can host there).
+    return (
+      host === "labs.switchable.org.uk" ||
+      host === "amistuck-labs.netlify.app" ||
+      host.endsWith("--amistuck-labs.netlify.app") ||
+      host === "localhost"
+    );
   } catch {
     return false;
   }
