@@ -4,13 +4,19 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-03 — Correct the labs.events PII fix (re-audit follow-ups)
+- Migration: `0185_labs_events_drop_inert_admin_policy.sql`. Drops `admin_read_labs_events` (added in 0184). It was dead: no `authenticated` GRANT on schema/table + labs not API-exposed, so it never fired, and "parity with leads.submissions" was a false claim. Chosen design is Option B — labs.events stays off the API, read only by service-role RPCs behind the admin login. Removing it makes the design honest and means a future accidental schema exposure fails closed (RLS deny-by-default). No functional change.
+- Wording: `.claude/rules/data-infrastructure.md` §6a + `data-architecture.md` reworded "PII-free / identifier-free" → "direct-identifier-free". The reporting view drops direct identifiers (email/name/phone) but keeps quasi-identifiers (session, attribution, referrer, user-agent) as the analytical substance. Not "anonymous".
+- Source: second Codex audit of commit 408e80a. Both findings (inert policy, overstated wording) valid and fixed. Other Codex points: the rule file syncs via iCloud not git (by design — only `platform/` is a git repo); live verification was genuinely run against prod via the MCP as `readonly_analytics` (Codex's sandbox couldn't see it).
+- Signed off: Owner (2026-06-03).
+
 ## 2026-06-03 — PII-for-reporting standard + apply to labs.events
 - Migration: `0184_labs_events_pii_minimisation.sql`. Took raw SELECT on `labs.events` (incl `email`) away from `readonly_analytics` (the reporting role the agents use over the MCP) — dropped policy `labs_events_select_ro` + revoked the table grant. Created email-free view `labs.events_analytics` (every column except email, runs as owner so the role reads it without base-table access), granted `readonly_analytics` SELECT on the view. Added `admin_read_labs_events` (`admin.is_admin()`) read policy for parity with `leads.submissions`.
-- New governance rule: `.claude/rules/data-infrastructure.md` §6a "PII and the reporting role" — reporting role never gets raw SELECT on a PII table; it reads an identifier-free view. New PII tables ship this shape in the creating migration. Codifies the data-minimisation posture so this is automatic, not per-table cleanup.
+- New governance rule: `.claude/rules/data-infrastructure.md` §6a "PII and the reporting role" — reporting role never gets raw SELECT on a PII table; it reads a direct-identifier-free view. New PII tables ship this shape in the creating migration. Codifies the data-minimisation posture so this is automatic, not per-table cleanup.
 - Why: 0181 had granted the reporting role full SELECT incl email. Agents need counts/segments, not raw emails. Triggered by a Codex audit of Labs (flagged the email exposure). Audit context: the same raw grant exists on `leads.submissions` — see follow-up below.
 - Verified live as `readonly_analytics`: `SELECT email FROM labs.events` → permission denied; `labs.events_analytics` readable, no email column.
 - Impact: no production consumer reads labs analytics yet (table days old), so zero breakage. Admin page unaffected (reads via service-role RPCs from 0183).
-- **Follow-up (tracked, NOT done here):** `leads.submissions` still grants `readonly_analytics` raw SELECT (email, full_name, phone). Same fix needed but it has live agent-query/dashboard consumers, so the cutover to an identifier-free view needs an impact assessment of every consumer first. Do deliberately, not in one sweep. ClickUp ticket raised (platform).
+- **Follow-up (tracked, NOT done here):** `leads.submissions` still grants `readonly_analytics` raw SELECT (email, full_name, phone). Same fix needed but it has live agent-query/dashboard consumers, so the cutover to a direct-identifier-free view needs an impact assessment of every consumer first. Do deliberately, not in one sweep. ClickUp ticket raised (platform).
 - Signed off: Owner (2026-06-03, "long-term fix not patchwork").
 
 ## 2026-06-03 — Labs admin page (`/admin/labs`) + funnel RPCs
