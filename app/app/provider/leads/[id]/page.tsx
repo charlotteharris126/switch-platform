@@ -63,6 +63,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
     siblingsResult,
     fastrackResult,
     lastChaserResult,
+    reapplyResult,
   ] = await Promise.all([
     supabase
       .schema("leads")
@@ -117,12 +118,24 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
       .order("triggered_at", { ascending: false })
       .limit(1)
       .maybeSingle<{ triggered_at: string; status: string }>(),
+    // Re-application history: later submissions from the same learner (children
+    // of this lead), oldest first. Drives the detail-view re-application panel.
+    supabase
+      .schema("leads")
+      .from("submissions")
+      .select("created_at")
+      .eq("parent_submission_id", submissionId)
+      .order("created_at", { ascending: true }),
   ]);
 
   const submission = submissionResult.data;
   if (!submission) notFound();
   const enrol = enrolResult.data;
   const status = (enrol?.status ?? "open") as LeadStatus;
+
+  const reapplications = ((reapplyResult.data ?? []) as Array<{ created_at: string }>).map(
+    (r) => r.created_at,
+  );
 
   const fastrackParentIds = new Set<number>(
     (fastrackResult.data ?? []).map((r: FastrackParentRow) => r.parent_submission_id),
@@ -187,6 +200,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
         hasUnreadAdminNote={hasUnreadAdminNote}
         status={status}
         lastChaserAt={lastChaserResult.data?.triggered_at ?? null}
+        reapplications={reapplications}
         prevId={prevId}
         nextId={nextId}
         positionLabel={positionLabel}

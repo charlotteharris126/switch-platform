@@ -75,6 +75,7 @@ export default async function PreviewLeadDetailPage({ params }: Props) {
     siblingsResult,
     fastrackResult,
     fastrackDetailResult,
+    reapplyResult,
   ] = await Promise.all([
     admin
       .schema("leads")
@@ -126,12 +127,25 @@ export default async function PreviewLeadDetailPage({ params }: Props) {
       .order("submitted_at", { ascending: false })
       .limit(1)
       .maybeSingle<FastrackDetail>(),
+    // Re-application history: later submissions from the same learner (children
+    // of this lead), oldest first. Mirrors /provider/leads/[id]/page.tsx.
+    admin
+      .schema("leads")
+      .from("submissions")
+      .select("created_at")
+      .eq("parent_submission_id", submissionId)
+      .eq("primary_routed_to", providerId)
+      .order("created_at", { ascending: true }),
   ]);
 
   const submission = submissionResult.data;
   if (!submission) notFound();
   const enrol = enrolResult.data;
   const status = (enrol?.status ?? "open") as LeadStatus;
+
+  const reapplications = ((reapplyResult.data ?? []) as Array<{ created_at: string }>).map(
+    (r) => r.created_at,
+  );
 
   const fastrackParentIds = new Set<number>(
     (fastrackResult.data ?? []).map((r: FastrackParentRow) => r.parent_submission_id),
@@ -185,6 +199,7 @@ export default async function PreviewLeadDetailPage({ params }: Props) {
           hasUnreadAdminNote={hasUnreadAdminNote}
           status={status}
           lastChaserAt={null}
+          reapplications={reapplications}
           prevId={prevId}
           nextId={nextId}
           positionLabel={positionLabel}

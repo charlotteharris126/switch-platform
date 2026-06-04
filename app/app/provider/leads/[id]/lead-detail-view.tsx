@@ -106,6 +106,10 @@ export interface LeadDetailViewProps {
   // Surfaces in the "At current status" tile so providers can see at a
   // glance whether the learner has had a Switchable nudge recently.
   lastChaserAt: string | null;
+  // Re-application history: ISO timestamps of later submissions from the same
+  // learner (children of this lead), oldest first. Empty/undefined when none.
+  // Surfaces the eagerness signal on the detail view, matching the list badge.
+  reapplications?: string[];
   // Sibling navigation. Caller pre-computes prev/next ids per its ordering.
   prevId: number | null;
   nextId: number | null;
@@ -136,6 +140,7 @@ export function LeadDetailView({
   hasUnreadAdminNote,
   status,
   lastChaserAt,
+  reapplications = [],
   prevId,
   nextId,
   positionLabel,
@@ -192,10 +197,35 @@ export function LeadDetailView({
             Fastrack submitted
           </span>
         )}
+        {reapplications.length > 0 && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+            Re-applied{reapplications.length > 1 ? ` ×${reapplications.length}` : ""}
+          </span>
+        )}
       </div>
       <p className="text-sm text-slate-500 mt-1">
         Current status: <strong className="text-slate-900">{STATUS_LABEL[status] ?? status}</strong>
       </p>
+
+      {reapplications.length > 0 && (
+        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">This learner has enquired more than once</p>
+          <p className="text-xs text-amber-800 mt-0.5">
+            They came back and submitted again, a strong sign of interest. Worth prioritising.
+          </p>
+          <ul className="mt-2 space-y-1 text-sm text-amber-900">
+            {[
+              ...(submission.routed_at ? [{ at: submission.routed_at, label: "First enquiry" }] : []),
+              ...reapplications.map((at) => ({ at, label: "Re-applied" })),
+            ].map((e, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <span className="font-medium w-24 shrink-0">{e.label}</span>
+                <span>{new Date(e.at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Auto-mark unread admin notes as read on view. Only when caller
           provided the callback — in preview, viewing must never write. */}
