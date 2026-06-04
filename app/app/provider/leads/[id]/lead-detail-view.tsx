@@ -210,9 +210,6 @@ export function LeadDetailView({
       {reapplications.length > 0 && (
         <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
           <p className="text-sm font-semibold text-amber-900">This learner has enquired more than once</p>
-          <p className="text-xs text-amber-800 mt-0.5">
-            They came back and submitted again, a strong sign of interest. Worth prioritising.
-          </p>
           <ul className="mt-2 space-y-1 text-sm text-amber-900">
             {[
               ...(submission.routed_at ? [{ at: submission.routed_at, label: "First enquiry" }] : []),
