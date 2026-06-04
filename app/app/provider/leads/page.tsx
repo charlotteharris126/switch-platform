@@ -138,6 +138,25 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     enrolBySub.set(e.submission_id, e);
   }
 
+  // Re-application timestamps. A learner who submits the funded form again
+  // creates a child row (parent_submission_id = this lead). The latest child
+  // created_at is the most recent re-application — drives the Re-applied badge
+  // recency and bubbles the lead up the list. RLS scopes these child rows to
+  // this provider just like the parents.
+  const { data: reapplyRows } = ids.length
+    ? await supabase
+        .schema("leads")
+        .from("submissions")
+        .select("parent_submission_id,created_at")
+        .in("parent_submission_id", ids)
+    : { data: [] as Array<{ parent_submission_id: number; created_at: string }> };
+
+  const lastReapplyBySub = new Map<number, string>();
+  for (const r of (reapplyRows ?? []) as Array<{ parent_submission_id: number; created_at: string }>) {
+    const prev = lastReapplyBySub.get(r.parent_submission_id);
+    if (!prev || r.created_at > prev) lastReapplyBySub.set(r.parent_submission_id, r.created_at);
+  }
+
   // Seed cohort filter from the canonical course_intakes table — only
   // intakes whose course matches a course this provider's leads include.
   // Keeps the filter scoped to "courses this provider serves" without
@@ -165,6 +184,8 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       status_updated_at: enrol?.status_updated_at ?? null,
       has_fastrack: fastrackParentIds.has(s.id),
       callback_pending: enrol?.callback_requested_at != null,
+      re_submission_count: s.re_submission_count ?? 0,
+      re_submitted_at: lastReapplyBySub.get(s.id) ?? null,
       lead_type: s.lead_type ?? "learner",
       preferred_intake_id: s.preferred_intake_id,
       acceptable_intake_ids: s.acceptable_intake_ids,

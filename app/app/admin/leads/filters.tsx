@@ -313,6 +313,18 @@ export function LeadFilters({ fundingCategories, fundingRoutes, courseIds, provi
       </label>
 
       <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Re-submissions</span>
+        <select
+          className={selectClass}
+          value={current.show_children ?? ""}
+          onChange={(e) => updateParam("show_children", e.target.value)}
+        >
+          <option value="">Hidden (default)</option>
+          <option value="yes">Shown</option>
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1">
         <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#5a6a72]">Chased</span>
         <DropdownMenu
           onOpenChange={(open) => {

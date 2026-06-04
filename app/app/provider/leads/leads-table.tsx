@@ -39,6 +39,12 @@ export interface LeadRow {
   status_updated_at: string | null;
   has_fastrack: boolean;
   callback_pending: boolean;
+  // Re-application signal. re_submission_count > 0 means this learner submitted
+  // the funded form again after their first lead (the later submission is
+  // collapsed into this parent row). re_submitted_at is the most recent
+  // re-application time. A fresh re-application is a strong eagerness signal.
+  re_submission_count: number;
+  re_submitted_at: string | null;
   // Lead-type discriminator. 'learner' (default) or 'employer_apprenticeship'.
   // When 'employer_apprenticeship', the table replaces the Course column
   // with Company, hides the cohort filter, and uses employer-shape status
@@ -441,10 +447,17 @@ export function LeadsTable({
       }
       return true;
     });
-    // Pin order: overdue → fastrack (unsettled) → callback → routed_at desc.
+    // Pin order: overdue → fastrack (unsettled) → callback → most-recent-activity.
     // Applied within every filter, not just "all" — keeps the same hierarchy
-    // visible inside Open / Calling / etc. The server returns routed_at desc
-    // already, so the final tier mostly reinforces that.
+    // visible inside Open / Calling / etc. The final tier is recency, where a
+    // re-application counts as activity (max of routed_at and re_submitted_at),
+    // so a learner who re-enquires bubbles back up rather than staying pinned to
+    // their original routed date.
+    const recency = (r: LeadRow) =>
+      Math.max(
+        r.routed_at ? new Date(r.routed_at).getTime() : 0,
+        r.re_submitted_at ? new Date(r.re_submitted_at).getTime() : 0,
+      );
     return [...subset].sort((a, b) => {
       const aOver = isOverdueRow(a, openWorkingHours, staleAttemptMs) ? 1 : 0;
       const bOver = isOverdueRow(b, openWorkingHours, staleAttemptMs) ? 1 : 0;
@@ -455,9 +468,7 @@ export function LeadsTable({
       const aCb = a.callback_pending ? 1 : 0;
       const bCb = b.callback_pending ? 1 : 0;
       if (aCb !== bCb) return bCb - aCb;
-      const aRouted = a.routed_at ? new Date(a.routed_at).getTime() : 0;
-      const bRouted = b.routed_at ? new Date(b.routed_at).getTime() : 0;
-      return bRouted - aRouted;
+      return recency(b) - recency(a);
     });
   }, [rows, filter, query, courseFilter, cohortFilter, areaFilter, openWorkingHours, staleAttemptMs]);
 
@@ -754,6 +765,18 @@ export function LeadsTable({
                         {r.has_fastrack && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-violet-100 text-violet-800 border border-violet-200">
                             Fastrack
+                          </span>
+                        )}
+                        {r.re_submission_count > 0 && (
+                          <span
+                            title={
+                              r.re_submitted_at
+                                ? `Re-applied ${new Date(r.re_submitted_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} — applied again after their first enquiry`
+                                : "Applied again after their first enquiry"
+                            }
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 border border-amber-300"
+                          >
+                            Re-applied{r.re_submission_count > 1 ? ` ×${r.re_submission_count}` : ""}
                           </span>
                         )}
                       </div>
