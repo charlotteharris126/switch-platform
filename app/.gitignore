@@ -43,3 +43,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# iCloud sync duplicates of the build dir (".next 2", ".next 3", ...)
+/.next */
