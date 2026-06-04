@@ -8,7 +8,7 @@ Most recent at top. Every schema change, data migration, access policy change, a
 - Migration `0186_fastrack_dedupe_unique.sql`: deduped existing exact-duplicate `leads.fastrack_submissions` rows (parents 552/557/564 each had two at the same millisecond), added unique index on `(parent_submission_id, submitted_at)`.
 - `fastrack-receive` EF: insert now `ON CONFLICT (parent_submission_id, submitted_at) DO NOTHING`; a duplicate POST returns `{ ok, duplicate: true }` without re-inserting or re-notifying. Root cause: the fastrack thank-you page intermittently double-POSTs (same client `submitted_at`), so the function ran twice and emailed twice. Server-side idempotency is the resilient fix; a client-side double-submit guard on the thank-you page (switchable/site, Mable) is an optional follow-up.
 - `notifyProviderOfFastrack`: was sending an individual email per provider_user (no CC, so the owner couldn't see the team on their copy). Now sends ONE email with `to` = first recipient + `cc` = the rest, matching the normal lead notification. Owner receives it as an EMS portal account holder (support+ems), no separate owner notification needed.
-- Not changed: the "open in portal" link still uses `app.switchleads.co.uk/leads/N` (consistent with 4 other EFs); flagged for a separate click-test, not touched here.
+- "Open in portal" link verified correct (NOT broken): `app.switchleads.co.uk/leads/N` is rewritten to `/provider/leads/N` by the proxy on app.switchleads.co.uk (documented in `_shared/route-lead.ts:1578`), the consistent convention across route-lead.ts, netlify-employer-lead-router and admin-notify-callback. Left as-is.
 - Verified: 0186 applied, dupes gone (parents 552/557/560/564 now 1 row each), EF deployed.
 - Signed off: Owner (2026-06-03).
 

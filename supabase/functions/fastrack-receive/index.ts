@@ -627,6 +627,8 @@ async function notifyProviderOfFastrack(args: {
     .map((r) => ({ email: r.contact_email, name: r.display_name ?? r.contact_email }));
   if (recipientObjs.length === 0) return 0;
 
+  // The proxy on app.switchleads.co.uk rewrites /leads/<id> → /provider/leads/<id>
+  // (same convention as route-lead.ts / the other provider notifications).
   const portalUrl = `https://app.switchleads.co.uk/leads/${args.submissionId}`;
   const subject = `Lead #${args.submissionId} just fast-tracked — eager signal`;
   const html = composeFastrackNotifyHtml({
