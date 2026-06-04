@@ -4,6 +4,14 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-03 — Fix duplicate fastrack notifications + one CC'd email
+- Migration `0186_fastrack_dedupe_unique.sql`: deduped existing exact-duplicate `leads.fastrack_submissions` rows (parents 552/557/564 each had two at the same millisecond), added unique index on `(parent_submission_id, submitted_at)`.
+- `fastrack-receive` EF: insert now `ON CONFLICT (parent_submission_id, submitted_at) DO NOTHING`; a duplicate POST returns `{ ok, duplicate: true }` without re-inserting or re-notifying. Root cause: the fastrack thank-you page intermittently double-POSTs (same client `submitted_at`), so the function ran twice and emailed twice. Server-side idempotency is the resilient fix; a client-side double-submit guard on the thank-you page (switchable/site, Mable) is an optional follow-up.
+- `notifyProviderOfFastrack`: was sending an individual email per provider_user (no CC, so the owner couldn't see the team on their copy). Now sends ONE email with `to` = first recipient + `cc` = the rest, matching the normal lead notification. Owner receives it as an EMS portal account holder (support+ems), no separate owner notification needed.
+- Not changed: the "open in portal" link still uses `app.switchleads.co.uk/leads/N` (consistent with 4 other EFs); flagged for a separate click-test, not touched here.
+- Verified: 0186 applied, dupes gone (parents 552/557/560/564 now 1 row each), EF deployed.
+- Signed off: Owner (2026-06-03).
+
 ## 2026-06-03 — Correct the labs.events PII fix (re-audit follow-ups)
 - Migration: `0185_labs_events_drop_inert_admin_policy.sql`. Drops `admin_read_labs_events` (added in 0184). It was dead: no `authenticated` GRANT on schema/table + labs not API-exposed, so it never fired, and "parity with leads.submissions" was a false claim. Chosen design is Option B — labs.events stays off the API, read only by service-role RPCs behind the admin login. Removing it makes the design honest and means a future accidental schema exposure fails closed (RLS deny-by-default). No functional change.
 - Wording: `.claude/rules/data-infrastructure.md` §6a + `data-architecture.md` reworded "PII-free / identifier-free" → "direct-identifier-free". The reporting view drops direct identifiers (email/name/phone) but keeps quasi-identifiers (session, attribution, referrer, user-agent) as the analytical substance. Not "anonymous".

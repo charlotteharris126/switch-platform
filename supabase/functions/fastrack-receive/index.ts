@@ -148,10 +148,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const termsAccepted = toBool(data.terms_accepted) ?? false;
   const marketingOptIn = toBool(data.marketing_opt_in) ?? false;
 
-  let fastrackId: number;
+  let fastrackId: number | null;
   try {
     fastrackId = await sql.begin(async (trx) => {
       await trx`SET LOCAL ROLE functions_writer`;
+      // ON CONFLICT DO NOTHING against the (parent_submission_id, submitted_at)
+      // unique index (migration 0186). The thank-you page intermittently
+      // double-POSTs; the repeat carries the same client submitted_at, so it
+      // conflicts and returns no row. We treat that as an idempotent no-op
+      // below (no second insert, no second provider notification).
       const inserted = await trx<Array<{ id: number }>>`
         INSERT INTO leads.fastrack_submissions (
           schema_version,
@@ -182,15 +187,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ${trx.json(rawBody as never)},
           ${firstString(body.user_agent, data.user_agent) ?? null}
         )
+        ON CONFLICT (parent_submission_id, submitted_at) DO NOTHING
         RETURNING id
       `;
-      return Number(inserted[0].id);
+      return inserted.length > 0 ? Number(inserted[0].id) : null;
     });
   } catch (err) {
     return await deadLetter(
       rawBody,
       `fastrack: insert failed: ${describeError(err)}`,
     );
+  }
+
+  // Duplicate POST (same lead + submitted_at): the first POST already inserted
+  // the row, wrote the sheet, ran the qualification logic and sent the provider
+  // notification. Return ok without repeating any of it.
+  if (fastrackId === null) {
+    return json({ status: "ok", duplicate: true, parent_submission_id: parent.id });
   }
 
   // Step 6: stamp fastracked_at on parent (best-effort, non-fatal)
@@ -607,8 +620,12 @@ async function notifyProviderOfFastrack(args: {
       FROM crm.provider_users
      WHERE provider_id = ${args.providerId}
        AND status = 'active'
+     ORDER BY id
   `;
-  if (recipients.length === 0) return 0;
+  const recipientObjs = recipients
+    .filter((r) => r.contact_email)
+    .map((r) => ({ email: r.contact_email, name: r.display_name ?? r.contact_email }));
+  if (recipientObjs.length === 0) return 0;
 
   const portalUrl = `https://app.switchleads.co.uk/leads/${args.submissionId}`;
   const subject = `Lead #${args.submissionId} just fast-tracked — eager signal`;
@@ -617,25 +634,21 @@ async function notifyProviderOfFastrack(args: {
     portalUrl,
   });
 
-  let sent = 0;
-  for (const r of recipients) {
-    if (!r.contact_email) continue;
-    const result = await sendBrevoEmail({
-      brand: "switchleads",
-      to: [{ email: r.contact_email, name: r.display_name ?? r.contact_email }],
-      subject,
-      htmlContent: html,
-      tags: ["fastrack-notify-provider"],
-    });
-    if (result.ok) {
-      sent++;
-    } else {
-      console.error(
-        `fastrack notify Brevo send failed for ${r.contact_email}: ${result.error ?? "unknown"}`,
-      );
-    }
+  // One email with the team CC'd (matches the normal lead notification), not an
+  // individual send per person — so every recipient can see who else is on it.
+  const result = await sendBrevoEmail({
+    brand: "switchleads",
+    to: [recipientObjs[0]],
+    cc: recipientObjs.length > 1 ? recipientObjs.slice(1) : undefined,
+    subject,
+    htmlContent: html,
+    tags: ["fastrack-notify-provider"],
+  });
+  if (!result.ok) {
+    console.error(`fastrack notify Brevo send failed: ${result.error ?? "unknown"}`);
+    return 0;
   }
-  return sent;
+  return recipientObjs.length;
 }
 
 function composeFastrackNotifyHtml(args: {
