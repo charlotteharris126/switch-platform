@@ -580,14 +580,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // to notify). PII-free: just the lead ID + a deep link.
   let notifySent = 0;
   let notifySkipped = 0;
-  if (!lostReason && parent.primary_routed_to) {
+  const cleanFastrack = cohortConfirmed === true && l3Reconfirmed === false;
+  if (cleanFastrack && parent.primary_routed_to) {
     try {
       notifySent = await notifyProviderOfFastrack({
         submissionId: parent.id,
+        fastrackSubmissionId: fastrackId,
         providerId: parent.primary_routed_to,
       });
     } catch (err) {
-      console.error("fastrack: provider notify failed (non-fatal):", describeError(err));
+      console.error(
+        "fastrack: provider notify failed (non-fatal):",
+        describeError(err),
+      );
       notifySkipped = 1;
       // Don't dead-letter — Brevo failures here aren't lead-critical.
     }
@@ -610,47 +615,87 @@ Deno.serve(async (req: Request): Promise<Response> => {
 // lead page. Returns the number of successful sends.
 async function notifyProviderOfFastrack(args: {
   submissionId: number;
+  fastrackSubmissionId: number;
   providerId: string;
 }): Promise<number> {
-  const recipients = await sql<Array<{
-    contact_email: string;
-    display_name: string | null;
-  }>>`
+  const lockKey = `fastrack-provider-notify:${args.submissionId}`;
+  await sql`SELECT pg_advisory_lock(hashtext(${lockKey}))`;
+  try {
+    const priorCleanRows = await sql<Array<{ id: number }>>`
+      SELECT id
+        FROM leads.fastrack_submissions
+       WHERE parent_submission_id = ${args.submissionId}
+         AND id < ${args.fastrackSubmissionId}
+         AND cohort_confirmed IS TRUE
+         AND l3_reconfirmed IS FALSE
+       LIMIT 1
+    `;
+    if (priorCleanRows.length > 0) {
+      console.log(
+        `fastrack notify skipped for submission ${args.submissionId}: prior clean fastrack ${
+          priorCleanRows[0].id
+        }`,
+      );
+      return 0;
+    }
+
+    const recipients = await sql<
+      Array<{
+        contact_email: string;
+        display_name: string | null;
+      }>
+    >`
     SELECT contact_email, display_name
       FROM crm.provider_users
      WHERE provider_id = ${args.providerId}
        AND status = 'active'
      ORDER BY id
   `;
-  const recipientObjs = recipients
-    .filter((r) => r.contact_email)
-    .map((r) => ({ email: r.contact_email, name: r.display_name ?? r.contact_email }));
-  if (recipientObjs.length === 0) return 0;
+    const seenRecipients = new Set<string>();
+    const recipientObjs: Array<{ email: string; name?: string }> = [];
+    for (const r of recipients) {
+      if (!r.contact_email) continue;
+      const emailKey = r.contact_email.trim().toLowerCase();
+      if (!emailKey || seenRecipients.has(emailKey)) continue;
+      seenRecipients.add(emailKey);
+      recipientObjs.push({
+        email: r.contact_email,
+        name: r.display_name ?? r.contact_email,
+      });
+    }
+    if (recipientObjs.length === 0) return 0;
 
-  // The proxy on app.switchleads.co.uk rewrites /leads/<id> → /provider/leads/<id>
-  // (same convention as route-lead.ts / the other provider notifications).
-  const portalUrl = `https://app.switchleads.co.uk/leads/${args.submissionId}`;
-  const subject = `Lead #${args.submissionId} just fast-tracked — eager signal`;
-  const html = composeFastrackNotifyHtml({
-    submissionId: args.submissionId,
-    portalUrl,
-  });
+    // The proxy on app.switchleads.co.uk rewrites /leads/<id> → /provider/leads/<id>
+    // (same convention as route-lead.ts / the other provider notifications).
+    const portalUrl =
+      `https://app.switchleads.co.uk/leads/${args.submissionId}`;
+    const subject =
+      `Lead #${args.submissionId} just fast-tracked — eager signal`;
+    const html = composeFastrackNotifyHtml({
+      submissionId: args.submissionId,
+      portalUrl,
+    });
 
-  // One email with the team CC'd (matches the normal lead notification), not an
-  // individual send per person — so every recipient can see who else is on it.
-  const result = await sendBrevoEmail({
-    brand: "switchleads",
-    to: [recipientObjs[0]],
-    cc: recipientObjs.length > 1 ? recipientObjs.slice(1) : undefined,
-    subject,
-    htmlContent: html,
-    tags: ["fastrack-notify-provider"],
-  });
-  if (!result.ok) {
-    console.error(`fastrack notify Brevo send failed: ${result.error ?? "unknown"}`);
-    return 0;
+    // One email with the team CC'd (matches the normal lead notification), not an
+    // individual send per person — so every recipient can see who else is on it.
+    const result = await sendBrevoEmail({
+      brand: "switchleads",
+      to: [recipientObjs[0]],
+      cc: recipientObjs.length > 1 ? recipientObjs.slice(1) : undefined,
+      subject,
+      htmlContent: html,
+      tags: ["fastrack-notify-provider"],
+    });
+    if (!result.ok) {
+      console.error(
+        `fastrack notify Brevo send failed: ${result.error ?? "unknown"}`,
+      );
+      return 0;
+    }
+    return recipientObjs.length;
+  } finally {
+    await sql`SELECT pg_advisory_unlock(hashtext(${lockKey}))`;
   }
-  return recipientObjs.length;
 }
 
 function composeFastrackNotifyHtml(args: {
