@@ -155,6 +155,16 @@ export function WorkBoard({ initialTasks }: { initialTasks: WorkTask[] }) {
     return r;
   }
 
+  // Opening a card marks it seen — so an agent-added "New" task stops being new
+  // the moment you look at it. (Tasks you added yourself are never "New".)
+  function openTask(t: WorkTask) {
+    setSelected(t);
+    if (!t.seen_by_owner && t.added_by !== "charlotte") {
+      patchLocal(t.id, { seen_by_owner: true });
+      updateWorkTaskAction(t.id, { seen_by_owner: true });
+    }
+  }
+
   return (
     <main className="mx-auto max-w-[1400px] px-4 py-6">
       <div className="mb-3 flex items-center justify-between gap-3 flex-wrap">
@@ -217,7 +227,7 @@ export function WorkBoard({ initialTasks }: { initialTasks: WorkTask[] }) {
       <DndContext sensors={sensors} onDragStart={(e: DragStartEvent) => setDragId(String(e.active.id))} onDragEnd={onDragEnd}>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-start">
           {COLUMNS.map((col) => (
-            <Column key={col.status} status={col.status} label={col.label} tasks={byColumn[col.status]} onOpen={setSelected} />
+            <Column key={col.status} status={col.status} label={col.label} tasks={byColumn[col.status]} onOpen={openTask} />
           ))}
         </div>
         <DragOverlay>{dragTask ? <Card task={dragTask} overlay /> : null}</DragOverlay>
