@@ -1,39 +1,40 @@
-# Platform Handoff, Session 65, 2026-06-04
+# Platform Handoff, Session 66, 2026-06-05
 
 ## Current state
-Provider portal now surfaces lead re-applications (badge, list bubble, detail-page history) and the fastrack duplicate-notification bug is fixed at the function. Earlier this session: the Switchable Labs platform layer (admin funnel page + PII-minimisation standard). The Codex security backlog is still untouched and remains the main outstanding platform work. Clara has pushed a billing-reconciliation + `/admin/billing` brief (ticket 869djrtgk) — the DB holds no billed/paid state, so monthly invoicing is reconstructed by hand.
+Fixed a live provider-portal bug for Freya/Riverside (employer "not signed" reasons were rejected by the DB). Earlier this session: fastrack duplicate-notification fix, provider-portal re-application surfacing, and the Switchable Labs platform layer. The Codex security backlog is still untouched and is the main outstanding platform work, alongside Clara's billing-reconciliation brief (ticket 869djrtgk).
 
 ## What was done this session
-- **Fastrack duplicate notification fixed.** Diagnosed via the data: two `fastrack_submissions` rows shared the identical client-set `submitted_at` → one submission processed twice (Netlify webhook re-delivery and/or the page's fetch-then-native-fallback double-send; not provable which without logs). Migration **0186**: deduped existing pairs (552/557/564) + unique index on `(parent_submission_id, submitted_at)`. `fastrack-receive` EF: `ON CONFLICT DO NOTHING` + idempotent early-return; **plus Codex-authored hardening (deployed, owner-approved):** advisory lock + "prior clean fastrack for this parent" check so only the first clean fastrack (cohort confirmed, L3 not re-flagged) notifies, even if a later delivery carries a different timestamp; recipients deduped by email.
-- **Fastrack provider email is now one CC'd email** (to first recipient + cc the rest), not an individual send per person — owner (an EMS portal account holder via `support+ems`) now sees the team on it.
-- **Provider portal now surfaces re-applications** (when a learner re-submits, collapsed into the parent lead). Badge on the list + detail page, lead bubbles up the list by most-recent-activity, dated history panel on the detail view ("This learner has enquired more than once"). Mirrored in the admin preview-as-provider view. `/admin/leads` gained a real "Re-submissions: Hidden/Shown" filter (was URL-only). Vicki Smith (id 567, re-applied 4 Jun) was the trigger.
-- **Switchable Labs platform layer** (earlier today): `/admin/labs` funnel page (RPCs, migration 0183); PII minimisation (0184/0185) — reporting role reads a direct-identifier-free view, raw signup emails off the API; §6a standard added to `.claude/rules/data-infrastructure.md`.
-- Portal "open lead" link confirmed correct (proxy rewrites `/leads/N` → `/provider/leads/N`); not a bug.
+- **Fixed "Mark not signed → No response" error (Freya/Riverside).** Migration **0187**: the app enum `VALID_NOT_SIGNED_REASONS` had drifted ahead of the `crm.enrolments.lost_reason` CHECK constraint, so every employer not_signed reason except `other` was DB-rejected → action errored → page reverted. Widened the constraint to match the app. Applied + verified live. Scope-checked: only Riverside uses the employer path (EMS/CD/WYK use learner statuses); the learner lost-reason enum already matches the constraint, so no parallel gap. **NOTE: all 14 existing Riverside `not_signed` rows have `lost_reason = NULL`** (the reason never saved while broken) — offered owner a backfill once Freya supplies the reasons; not yet done.
+- **Fastrack duplicate notification fixed** (migration 0186 + EF hardening: ON CONFLICT idempotency, advisory lock + first-clean-only notify, recipient dedupe). Provider email is now one CC'd email. Root cause is a double-delivery of one submission (Netlify webhook retry and/or the page's fetch→native-fallback); server fix is source-agnostic.
+- **Provider portal surfaces re-applications** (badge, list bubble by recency, dated detail panel; admin preview matches; `/admin/leads` "Re-submissions" filter).
+- **Switchable Labs platform layer:** `/admin/labs` funnel (RPCs, 0183); PII minimisation (0184/0185); §6a standard in `.claude/rules/data-infrastructure.md`.
 
 ## Next steps
-1. **Billing reconciliation + `/admin/billing`** (Clara push, ticket 869djrtgk, brief at `platform/docs/billing-section-brief-2026-06-04.md`). Phase 0 backfill of the two historical invoices, Phase A data layer (enrolment billed/paid columns vs `crm.billing_events` authority, `invoice_reference`, `billing_period`, direct-identifier-free per-lead view per §6a), Phase B billing admin section. Additive migrations + view + route.
+1. **Billing reconciliation + `/admin/billing`** (Clara push, ticket 869djrtgk, brief `platform/docs/billing-section-brief-2026-06-04.md`). Phase 0 backfill of the two historical invoices, Phase A data layer (enrolment billed/paid + `crm.billing_events` authority + `invoice_reference` + `billing_period` + direct-identifier-free per-lead view per §6a), Phase B billing admin section.
 2. **Security backlog (Codex order, untouched):** provider login OTP binding (#1) → Netlify ingestion auth (#5) → lock `editorial.fire_netlify_blog_build` (#6) → 5 missing `verify_jwt=false` config blocks (#8) → app-code batch (#3/#7/#9/#10/#11/#13).
-3. **`leads.submissions` PII follow-up (ticket 869dja09z):** apply §6a to leads — revoke `readonly_analytics` raw SELECT, identifier-free view, repoint agent queries. Impact-assess consumers first.
-4. **Labs platform items, deferred to ad-budget gate (ticket 869dja78d):** event dedupe (client `event_id` + unique index), recursive payload size cap, optional event token.
-5. **SMS delivery tracking via pull (low):** cron EF on `GET /v3/transactionalSMS/statistics/events`. Redeploy corrected `brevo-sms-event-webhook` as dormant push-fallback.
-6. **Carries:** auto-flip cron + day-12 warning (migration 0097 unapplied); CMS Phase 2 build-script flip; demand-aggregation view (Mira); Provider OS V1 scoping (Mira); Wren broadcast-gating; `sql.json` deno-check cleanup (route-lead.ts:1782) + lint.
+3. **`leads.submissions` PII follow-up (ticket 869dja09z):** apply §6a — revoke `readonly_analytics` raw SELECT, identifier-free view, repoint agent queries. Impact-assess consumers first.
+4. **Backfill the 14 Riverside `not_signed` blank reasons** once Freya supplies them (optional, cosmetic — records currently have no reason).
+5. **Map to pin leads** (ticket 869djrwhu, owner to explain) — placeholder, not actionable until scoped.
+6. **Labs platform items deferred to ad-budget gate (869dja78d):** event dedupe, payload cap, event token. Also the charging-model events (`checkout_view`/`purchase`/`bump`/`upsell`/`refund` on `labs.events`) gated on the email test reading positive (Mira push in labs handoff).
+7. **SMS delivery tracking via pull (low):** cron EF on the Brevo statistics endpoint; redeploy corrected `brevo-sms-event-webhook` dormant.
+8. **Carries:** auto-flip cron + day-12 warning (0097 unapplied); CMS Phase 2 build-script flip; demand-aggregation view (Mira); Provider OS V1 scoping (Mira); `sql.json` deno-check cleanup (route-lead.ts:1782) + lint.
 
 ## Decisions and open questions
 **Decisions:**
-- Fastrack provider notification fixed server-side (idempotent + first-clean-only), which stops the duplicate regardless of whether the source is Netlify retry or the page double-sending. Source-agnostic by design — exact trigger not pinned.
-- Re-application surfacing reads child submissions per parent; no schema change. The list sorts by max(routed_at, latest re-application).
+- not_signed reason fix done at the DB constraint (global, additive); no app redeploy needed. Lesson: an app enum that gates a column must keep the column's CHECK in lockstep.
+- Fastrack fixed server-side (idempotent + first-clean-only), source-agnostic.
 **Open questions:**
-- Exact double-send trigger (Netlify webhook retry vs the page's fetch→native-fallback path) — unproven without Netlify logs. Not chased because the server fix is source-agnostic.
-- Carries: `crm.billing_events` empty (now owned by the billing brief); chaser 24h resend window (owner decides if same-day repeat chase ever needed).
+- Exact fastrack double-delivery trigger (Netlify retry vs page fetch→fallback) — unproven without Netlify logs; not chased (fix is source-agnostic).
+- `crm.billing_events` empty (now owned by the billing brief).
 
 ## Watch items
-- **Next EMS fastrack should produce exactly ONE provider email** (verify the fix lands in the wild).
-- **Frontend fastrack double-send not yet guarded** — the page's submit script can fall back to a native form submit if the background fetch is slow, sending the same submission twice. Server fix catches it, but the page itself isn't guarded. Pushed to Mable (switchable/site) as a follow-up. Codex said it added a page guard but it's NOT in the workspace files — treat as not done.
-- Admin app rebuild — confirm `/admin/labs`, the re-application badges, and the `/admin/leads` re-submissions filter render after deploy.
-- `labs.events` holds two bot-flagged test rows (ids 1, 2), filtered everywhere.
-- Brevo sender reputation (S63 spam complaint); `crm.billing_events` still empty.
+- **Confirm Freya can now mark not-signed with a reason** (DB verified; the actual button-click is the only unproven step — read-only MCP can't simulate it).
+- **Next EMS fastrack should produce exactly ONE provider email.**
+- **Frontend fastrack double-send not yet guarded** — pushed to Mable (switchable/site); Codex claimed a page guard but it's NOT in the workspace files, treat as not done.
+- Admin app rebuild — confirm `/admin/labs`, re-application badges, and the `/admin/leads` re-submissions filter render.
+- `labs.events` has two bot-flagged test rows (ids 1, 2), filtered everywhere.
 
 ## Next session
 - **Folder:** platform
-- **First task:** Billing reconciliation/`/admin/billing` (Clara push, ticket 869djrtgk) OR start the security backlog at provider login OTP binding (#1) — owner picks which is more urgent.
-- **Cross-project:** Frontend fastrack double-send guard pushed to `switchable/site` (Mable). Billing brief is shared with accounts-legal (Clara, ticket 869djrtgk). `leads.submissions` PII follow-up (869dja09z) and deferred Labs items (869dja78d) live here.
+- **First task:** Billing reconciliation/`/admin/billing` (Clara push, ticket 869djrtgk) OR start the security backlog at provider login OTP binding (#1) — owner picks.
+- **Cross-project:** Frontend fastrack double-send guard pushed to `switchable/site` (Mable). Billing brief shared with accounts-legal (Clara, 869djrtgk). `leads.submissions` PII follow-up (869dja09z) lives here.
