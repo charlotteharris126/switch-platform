@@ -45,7 +45,9 @@ const PRIORITY_STYLE: Record<WorkTask["priority"], string> = {
   urgent: "bg-rose-100 text-rose-800 border-rose-300",
 };
 
-const SUGGESTED_TAGS = ["quick-win", "awaiting-approval", "big-project", "waiting", "research", "bug"];
+// Tags are orthogonal labels only — NOT things already covered by a status
+// (Review = needs approval) or a flag (Blocked = can't proceed) or priority.
+const SUGGESTED_TAGS = ["quick-win", "big-project", "research", "bug", "content"];
 
 const VIEWS = [
   { key: "all", label: "All" },
