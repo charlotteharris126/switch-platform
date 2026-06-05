@@ -4,6 +4,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-04 — Fix: employer "not signed" reasons rejected by DB (Freya/Riverside)
+- Migration `0187_enrolments_lost_reason_allow_not_signed.sql`. Freya reported "Mark not signed → No response" errored and reverted in the provider portal. Root cause: app enum `VALID_NOT_SIGNED_REASONS` (lib/lead-status.ts) drifted ahead of the `crm.enrolments.lost_reason` CHECK constraint, which only permitted the learner "lost" + fastrack reasons. So every employer not_signed reason except `other` (`budget`, `wrong_levy_fit`, `timing`, `competitor`, `decided_not_to_proceed`, `no_response`) was rejected → UPDATE failed → server action errored → page reverted.
+- Fix: widened the CHECK to include the 6 employer reasons. Additive, no value removed, no invalid existing rows. No app redeploy needed (the app already sent the right value; only the DB was rejecting it). Applied + verified live (constraint now lists all reasons).
+- Lesson: when an app-side enum gates a column, the column's CHECK constraint must be kept in lockstep — a missing migration leaves a silent provider-facing break.
+- Signed off: Owner (2026-06-04).
+
 ## 2026-06-03 — Fix duplicate fastrack notifications + one CC'd email
 - Migration `0186_fastrack_dedupe_unique.sql`: deduped existing exact-duplicate `leads.fastrack_submissions` rows (parents 552/557/564 each had two at the same millisecond), added unique index on `(parent_submission_id, submitted_at)`.
 - `fastrack-receive` EF: insert now `ON CONFLICT (parent_submission_id, submitted_at) DO NOTHING`; a duplicate POST returns `{ ok, duplicate: true }` without re-inserting or re-notifying. Root cause: the fastrack thank-you page intermittently double-POSTs (same client `submitted_at`), so the function ran twice and emailed twice. Server-side idempotency is the resilient fix; a client-side double-submit guard on the thank-you page (switchable/site, Mable) is an optional follow-up.
