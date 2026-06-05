@@ -90,7 +90,7 @@ Supabase credentials live per-device, not in iCloud sync.
 4. Review the migration — owner sign-off required for non-trivial changes.
 5. Apply to production: `supabase db push` OR run via Supabase SQL editor with the service role key.
 6. Log in `platform/docs/changelog.md`.
-7. Verify all downstream consumers (n8n workflows, Metabase dashboards, agent queries) still work.
+7. Verify all downstream consumers (n8n workflows, the admin app, agent queries) still work.
 
 **Never edit production schema via the Supabase UI.** Always a migration file.
 
@@ -100,7 +100,7 @@ Supabase credentials live per-device, not in iCloud sync.
 
 | Role | Purpose | Used by |
 |---|---|---|
-| `readonly_analytics` | Read all tables, read all views, no writes | Metabase, Postgres MCP for agents |
+| `readonly_analytics` | Read all tables, read all views, no writes | Postgres MCP for agents + the admin app |
 | `n8n_writer` | Write to `leads.*`, update `crm.enrolments` status, read all | n8n scenarios |
 | `ads_ingest` | Write to `ads_*` only, no reads outside `ads_*` | Meta/Google/TikTok daily pull scripts |
 | `owner` (service role) | Everything | Migrations, incident recovery, owner-initiated fixes |

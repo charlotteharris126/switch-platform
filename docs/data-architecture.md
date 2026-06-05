@@ -1395,7 +1395,7 @@ Surface blocked tasks first, then in_progress, then to_do. Stale-task flag fires
 
 ## Views (derived / analytical)
 
-These are read-only analytical surfaces, not source of truth. Defined in migration files, queryable by Metabase and agents.
+These are read-only analytical surfaces, not source of truth. Defined in migration files, queryable by the admin app and agents.
 
 ### `public.vw_attribution`
 
@@ -1476,7 +1476,7 @@ Uses CTEs rather than correlated subqueries to avoid Postgres "ungrouped column 
 
 ### `public.vw_funnel_dropoff`
 
-Joins `leads.partials` to `leads.submissions` on `session_id`. One row per session, flattened for dashboarding. Lets Metabase pivot on step_reached × form_name × utm_campaign × device_type and cross-reference against whether the session ultimately converted. Defined in migration 0005 alongside the `session_id` column that makes the join possible.
+Joins `leads.partials` to `leads.submissions` on `session_id`. One row per session, flattened for dashboarding. Lets the admin app and agents pivot on step_reached × form_name × utm_campaign × device_type and cross-reference against whether the session ultimately converted. Defined in migration 0005 alongside the `session_id` column that makes the join possible.
 
 ```sql
 CREATE VIEW public.vw_funnel_dropoff
@@ -1570,7 +1570,7 @@ Supabase creates four roles on day one. Each consumer of the DB uses its scoped 
 
 | Role | Reads | Writes | Used by |
 |---|---|---|---|
-| `readonly_analytics` | All tables, all views | Nothing | Metabase connection, read-only Postgres MCP for agents |
+| `readonly_analytics` | All tables, all views | Nothing | Read-only Postgres MCP for agents + the admin app |
 | `n8n_writer` | All tables | `leads.*`, `crm.enrolments` status transitions, `leads.dead_letter` | Supabase Edge Functions (role name is legacy from the reversed n8n decision, 2026-04-18 - permissions unchanged, rename deferred to avoid a cosmetic-only migration) |
 | `ads_ingest` | Nothing | `ads_*` tables only | Meta/Google/TikTok daily pull scripts |
 | `owner` (service role) | All | All | Migrations, manual fixes, incident recovery |
@@ -1617,9 +1617,9 @@ See `.claude/rules/data-infrastructure.md` and `.claude/rules/schema-versioning.
 ## Open questions (resolve during implementation)
 
 1. Should `course_id` live in a `courses` table inside the DB, or stay as YAML and be referenced by slug? Current bias: stay YAML, courses are low-volume and Git-trackable. Revisit if course count exceeds 50.
-2. Dead letter replay - automatic retry (e.g. scheduled Edge Function every 15 min) or manual-only? Bias: manual, visible via Metabase dashboard, owner triggers replay.
+2. Dead letter replay - automatic retry (e.g. scheduled Edge Function every 15 min) or manual-only? Bias: manual, visible via the admin app, owner triggers replay.
 3. Provider Sheet migration cutover - dual-write for a week, or cutover instantly? Bias: dual-write for 1-2 weeks, verify reconciliation, then retire Sheet.
-4. Metabase self-host vs cloud - owner decision pending.
+4. (Resolved: no Metabase - the in-house admin app is the dashboard.)
 
 ---
 

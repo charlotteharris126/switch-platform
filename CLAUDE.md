@@ -30,17 +30,16 @@ What Charlotte previously called "the CRM" lives inside this folder as one schem
 - `supabase/data-ops/`, reusable data scripts (seeds, backfills), not schema migrations
 - `supabase/config.toml`, Supabase CLI config
 - `dashboard.html`, existing ops prototype, reference only
-- `metabase/`, only appears if we ever self-host (Metabase cloud uses no local config)
 
 ## Conventions
 
 ### Stack
 
 - **Database:** Supabase (managed Postgres). Free tier during pilot, ~£20/month after volume growth.
-- **Dashboards:** Metabase cloud (~£15/month). Retires when the custom dashboard covers its chart surface.
+- **Dashboards:** the in-house admin app is the dashboard. No Metabase or other BI tool.
 - **Serverless functions:** Supabase Edge Functions (Deno/TypeScript, deployed via `supabase functions deploy`, live in `supabase/functions/`). Used for Netlify form webhook handling, scheduled ingestion, and any other automation that needs to read or write the DB. Chosen over n8n to keep the stack in one tool, avoid a ~£240/year subscription, and keep workflow code version-controlled alongside migrations.
 - **MCP for agents:** Postgres MCP (user scope). Gives Iris, Mira, Sasha, and other agents read access via the `readonly_analytics` Postgres role.
-- **Custom dashboard:** at `app.switchleads.co.uk`, reads the same Supabase. Absorbs Metabase's surfaces as they're rebuilt in-dashboard.
+- **Admin app:** Next.js at `admin.switchleads.co.uk` (`platform/app`), reads the same Supabase, is the owner's dashboard. The provider-facing portal lives at `app.switchleads.co.uk`.
 
 ### Governance
 
@@ -80,6 +79,6 @@ All work in this folder is bound by:
 | Provider data update | Here (`crm.providers`) OR `switchleads/outreach/` for Rosa's pipeline view |
 | Strategy or budget decisions | `strategy/` (Mira), she queries Supabase via MCP for KPI data |
 | New schema or new table | Here, update `docs/data-architecture.md`, write migration, log in `docs/changelog.md` |
-| New dashboard chart | Build in Metabase, save view to `docs/changelog.md` if important enough to document |
-| Custom dashboard feature | Here, first confirm Metabase cannot serve the need, then spec the feature |
+| New dashboard chart/surface | Build it in the admin app (`platform/app`), log in `docs/changelog.md` if notable |
+| Custom dashboard feature | Here, spec and build it in the admin app (`platform/app`) |
 | Legal page changed in Notion that affects platform-served surfaces | Flag to the relevant site agent's `docs/current-handoff.md` (Paige or Mable) |

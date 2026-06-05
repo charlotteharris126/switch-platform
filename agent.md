@@ -95,13 +95,13 @@ One paragraph: what Mira should pay attention to this week. If everything is cle
 
 | When this happens | Surface this |
 |---|---|
-| Metabase dashboard count exceeds 5 OR Charlotte starts asking for in-dashboard charts | Build in-dashboard analytics module to absorb Metabase. Use Recharts or Tremor with shadcn/ui. Server-component data fetching pattern already in place from MVP. See `platform/docs/admin-dashboard-scoping.md`. |
+| Charlotte asks for a new chart / analytics surface the admin app doesn't have | Build it into the admin app (`platform/app`). Recharts or Tremor with shadcn/ui; server-component data fetching pattern already in place. See `platform/docs/admin-dashboard-scoping.md`. |
 | 100+ leads/month in `leads.submissions` | Performance-tune Supabase queries, consider read replicas |
 | Provider dashboard requirement from a provider (Phase 4 trigger) OR first credits-model provider being onboarded OR 5+ providers ready for self-serve | Activate Phase 4 build: add provider routes to existing `switch-platform` repo under `app.switchleads.co.uk`. Provider sees their leads (RLS-scoped), enrolment status, billing (credits balance OR outstanding invoices), invoice download, dispute submission. Pre-launch pen-test ticket fires at the same time. Scoping in `platform/docs/admin-dashboard-scoping.md`. |
 | 3+ providers per course routinely matched on the same routing criteria | Build auto-routing algorithm + UI toggle in admin dashboard. Scoring inputs already in schema (`crm.providers.first_lead_received_at`, `crm.providers.auto_route_enabled`, `crm.routing_config`, `vw_provider_performance`). Algorithm: enrolment-rate x deadline-pressure x newness-boost. Per-provider opt-in via `auto_route_enabled` flag. See `platform/docs/admin-dashboard-scoping.md`. |
 | Supabase free tier limits approached (500MB storage, 50k MAU) | Upgrade to Pro tier (~£20/month) |
 | Dead letter table rows exceed 10 | Investigate upstream failure cause; flag to owner |
-| `leads.partials` volume crosses 200 sessions/week OR Iris starts asking funnel questions weekly | Prioritise Metabase setup, SQL queries become painful at that volume and Iris needs dashboards for ad optimisation |
+| `leads.partials` volume crosses 200 sessions/week OR Iris starts asking funnel questions weekly | Build a funnel surface in the admin app for Iris; raw SQL gets painful at that volume |
 | Any `leads.partials` session with `upsert_count` >= 50 (cap hit) | Investigate abuse source; consider Cloudflare in front of `netlify-partial-capture` if recurring |
 | Recurring manual DB edits by owner | Re-fire if a NEW manual workflow emerges that the existing admin dashboard doesn't cover |
 | Any schema change where impact touches 3+ consumers | Escalate to Mira for full impact assessment before shipping |
@@ -110,7 +110,7 @@ One paragraph: what Mira should pay attention to this week. If everything is cle
 
 | When this happens | Expand Sasha to cover |
 |---|---|
-| Metabase goes live and dashboard count grows past 5 | Dashboard governance: query accuracy, sharing permissions, staleness |
+| Admin app analytics surfaces grow past ~10 | Dashboard governance: query accuracy, sharing permissions, staleness |
 | Phase 4 provider dashboard ships | RLS policy audit: every table, every policy, quarterly |
 | Deployed Edge Function count exceeds 10 OR recurring failures observed | Function observability: deploy history, error rates, cold-start patterns |
 | Sasha's weekly ops load reaches 2+ hours | Escalate to Mira. May need a co-agent or a promotion to implementation authority. |
