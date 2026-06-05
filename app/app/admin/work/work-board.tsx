@@ -80,8 +80,8 @@ function matchesView(t: WorkTask, view: string, startOfToday: number, now: numbe
 
 export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTask[]; initialView?: string }) {
   const [tasks, setTasks] = useState<WorkTask[]>(initialTasks);
-  const [view, setView] = useState<string>(
-    initialView && VIEWS.some((v) => v.key === initialView) ? initialView : "all",
+  const [views, setViews] = useState<string[]>(
+    initialView && initialView !== "all" && VIEWS.some((v) => v.key === initialView) ? [initialView] : [],
   );
   const [catFilter, setCatFilter] = useState("");
   const [prioFilter, setPrioFilter] = useState("");
@@ -100,14 +100,19 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
     const startOfToday = new Date(new Date().toDateString()).getTime();
     return tasks.filter(
       (t) =>
-        matchesView(t, view, startOfToday, now) &&
+        (views.length === 0 || views.some((v) => matchesView(t, v, startOfToday, now))) &&
         (catFilter ? t.area_tag === catFilter : true) &&
         (prioFilter ? t.priority === prioFilter : true) &&
         (tagFilter ? t.tags.includes(tagFilter) : true),
     );
-  }, [tasks, view, catFilter, prioFilter, tagFilter]);
+  }, [tasks, views, catFilter, prioFilter, tagFilter]);
 
-  const activeFilters = (view !== "all" ? 1 : 0) + (catFilter ? 1 : 0) + (prioFilter ? 1 : 0) + (tagFilter ? 1 : 0);
+  const activeFilters = views.length + (catFilter ? 1 : 0) + (prioFilter ? 1 : 0) + (tagFilter ? 1 : 0);
+
+  function toggleView(key: string) {
+    if (key === "all") { setViews([]); return; }
+    setViews((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]));
+  }
 
   const byColumn = useMemo(() => {
     const map: Record<string, WorkTask[]> = {};
@@ -179,7 +184,7 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
           {visible.length} shown
           {activeFilters > 0 && (
             <button
-              onClick={() => { setView("all"); setCatFilter(""); setPrioFilter(""); setTagFilter(""); }}
+              onClick={() => { setViews([]); setCatFilter(""); setPrioFilter(""); setTagFilter(""); }}
               className="ml-2 underline hover:text-[#11242e]"
             >
               clear filters
@@ -189,13 +194,16 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
-        {VIEWS.map((v) => (
-          <button key={v.key} onClick={() => setView(v.key)}
-            className={`text-xs px-2.5 h-7 rounded-full border transition-colors ${
-              view === v.key ? "bg-[#11242e] text-white border-[#11242e]" : "bg-white text-[#5a6a72] border-[#dad4cb] hover:border-[#11242e]"}`}>
-            {v.label}
-          </button>
-        ))}
+        {VIEWS.map((v) => {
+          const active = v.key === "all" ? views.length === 0 : views.includes(v.key);
+          return (
+            <button key={v.key} onClick={() => toggleView(v.key)}
+              className={`text-xs px-2.5 h-7 rounded-full border transition-colors ${
+                active ? "bg-[#11242e] text-white border-[#11242e]" : "bg-white text-[#5a6a72] border-[#dad4cb] hover:border-[#11242e]"}`}>
+              {v.label}
+            </button>
+          );
+        })}
         <span className="w-px h-5 bg-[#dad4cb] mx-1" />
         <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)}
           className="h-7 text-xs border border-[#dad4cb] rounded-lg bg-white px-2 text-[#11242e] focus:outline-none focus:border-[#cd8b76]">
