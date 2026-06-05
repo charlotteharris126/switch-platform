@@ -23,6 +23,7 @@ import {
 
 const COLUMNS: { status: WorkTask["status"]; label: string }[] = [
   { status: "inbox", label: "Inbox" },
+  { status: "agents", label: "Agents" },
   { status: "this_week", label: "This Week" },
   { status: "in_progress", label: "In Progress" },
   { status: "review", label: "Review" },
@@ -282,7 +283,7 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
       </div>
 
       <DndContext sensors={sensors} onDragStart={(e: DragStartEvent) => setDragId(String(e.active.id))} onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-start">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-start">
           {COLUMNS.map((col) => (
             <Column key={col.status} status={col.status} label={col.label} tasks={byColumn[col.status]} onOpen={openTask} />
           ))}

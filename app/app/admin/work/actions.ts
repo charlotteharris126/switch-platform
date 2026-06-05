@@ -12,7 +12,7 @@ export type WorkTask = {
   id: string;
   title: string;
   notes: string | null;
-  status: "inbox" | "this_week" | "in_progress" | "review" | "done";
+  status: "inbox" | "agents" | "this_week" | "in_progress" | "review" | "done";
   blocked: boolean;
   blocked_reason: string | null;
   size: "tiny" | "small" | "big";

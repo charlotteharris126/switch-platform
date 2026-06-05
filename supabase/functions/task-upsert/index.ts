@@ -21,7 +21,7 @@ const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, connect_timeout: 
 
 const TASK_UPSERT_SECRET = Deno.env.get("TASK_UPSERT_SECRET");
 
-const ALLOWED_STATUS = new Set(["inbox", "this_week", "in_progress", "review", "done"]);
+const ALLOWED_STATUS = new Set(["inbox", "agents", "this_week", "in_progress", "review", "done"]);
 const ALLOWED_SIZE = new Set(["tiny", "small", "big"]);
 const ALLOWED_PRIORITY = new Set(["low", "normal", "high", "urgent"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
