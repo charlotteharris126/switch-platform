@@ -25,10 +25,11 @@ const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, connect_timeout: 
 
 const VALID_STATUS = ["inbox", "this_week", "in_progress", "review", "done"];
 const VALID_SIZE = ["tiny", "small", "big"];
+const VALID_PRIORITY = ["low", "normal", "high", "urgent"];
 const TASK_COLS = sql`
   t.id, t.title, t.notes, t.status, t.blocked, t.blocked_reason, t.size,
-  t.area_tag, t.roadmap_task_id, t.added_by, t.due_date, t.sort_order,
-  t.created_at, t.updated_at, t.completed_at, t.seen_by_owner,
+  t.priority, t.tags, t.area_tag, t.roadmap_task_id, t.added_by, t.due_date,
+  t.sort_order, t.created_at, t.updated_at, t.completed_at, t.seen_by_owner,
   r.title AS roadmap_title
 `;
 
@@ -81,6 +82,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 type ListFilters = { area_tag?: string; status?: string };
 type CreateTask = {
   title: string; notes?: string | null; status?: string; size?: string;
+  priority?: string; tags?: string[];
   area_tag?: string | null; roadmap_task_id?: string | null; added_by?: string;
   due_date?: string | null; sort_order?: number;
 };
@@ -103,11 +105,13 @@ async function handleCreate(task: CreateTask): Promise<Response> {
   }
   const status = VALID_STATUS.includes(task.status ?? "") ? task.status : "inbox";
   const size = VALID_SIZE.includes(task.size ?? "") ? task.size : "small";
+  const priority = VALID_PRIORITY.includes(task.priority ?? "") ? task.priority : "normal";
+  const tags = Array.isArray(task.tags) ? task.tags.filter((t) => typeof t === "string") : [];
   const [row] = await sql`
     INSERT INTO strategy.tasks
-      (title, notes, status, size, area_tag, roadmap_task_id, added_by, due_date, sort_order)
+      (title, notes, status, size, priority, tags, area_tag, roadmap_task_id, added_by, due_date, sort_order)
     VALUES (
-      ${task.title.trim()}, ${task.notes ?? null}, ${status}, ${size},
+      ${task.title.trim()}, ${task.notes ?? null}, ${status}, ${size}, ${priority}, ${tags},
       ${task.area_tag ?? null}, ${task.roadmap_task_id ?? null},
       ${task.added_by ?? "charlotte"}, ${task.due_date ?? null}, ${task.sort_order ?? 0}
     )
@@ -123,7 +127,7 @@ async function handleCreate(task: CreateTask): Promise<Response> {
 
 async function handleUpdate(id: string, patch: Record<string, unknown>): Promise<Response> {
   const allowed = [
-    "title", "notes", "status", "size", "area_tag", "roadmap_task_id",
+    "title", "notes", "status", "size", "priority", "tags", "area_tag", "roadmap_task_id",
     "due_date", "blocked", "blocked_reason", "sort_order", "seen_by_owner",
   ];
   const updates: Record<string, unknown> = {};
@@ -135,6 +139,13 @@ async function handleUpdate(id: string, patch: Record<string, unknown>): Promise
   }
   if (updates.size !== undefined && !VALID_SIZE.includes(String(updates.size))) {
     return json({ error: `invalid size; must be one of ${VALID_SIZE.join(", ")}` }, 400);
+  }
+  if (updates.priority !== undefined && !VALID_PRIORITY.includes(String(updates.priority))) {
+    return json({ error: `invalid priority; must be one of ${VALID_PRIORITY.join(", ")}` }, 400);
+  }
+  if (updates.tags !== undefined) {
+    if (!Array.isArray(updates.tags)) return json({ error: "tags must be an array" }, 400);
+    updates.tags = (updates.tags as unknown[]).filter((t) => typeof t === "string");
   }
 
   const [row] = await sql`UPDATE strategy.tasks SET ${sql(updates)} WHERE id = ${id} RETURNING id`;

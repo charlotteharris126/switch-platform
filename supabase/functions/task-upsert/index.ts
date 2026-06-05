@@ -23,6 +23,7 @@ const TASK_UPSERT_SECRET = Deno.env.get("TASK_UPSERT_SECRET");
 
 const ALLOWED_STATUS = new Set(["inbox", "this_week", "in_progress", "review", "done"]);
 const ALLOWED_SIZE = new Set(["tiny", "small", "big"]);
+const ALLOWED_PRIORITY = new Set(["low", "normal", "high", "urgent"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -53,6 +54,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   let size = firstString(body["size"]) ?? "small";
   if (!ALLOWED_SIZE.has(size)) size = "small";
 
+  let priority = firstString(body["priority"]) ?? "normal";
+  if (!ALLOWED_PRIORITY.has(priority)) priority = "normal";
+
+  const tags = Array.isArray(body["tags"])
+    ? (body["tags"] as unknown[]).filter((t) => typeof t === "string").map((t) => (t as string).slice(0, 50)).slice(0, 20)
+    : [];
+
   const notes = clip(firstString(body["notes"]), 5000);
   const areaTag = clip(firstString(body["area_tag"]), 100);
 
@@ -70,10 +78,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       await trx`SET LOCAL ROLE functions_writer`;
       return await trx<Array<{ id: string }>>`
         INSERT INTO strategy.tasks (
-          title, notes, status, size, area_tag, roadmap_task_id,
+          title, notes, status, size, priority, tags, area_tag, roadmap_task_id,
           added_by, due_date, blocked, blocked_reason, schema_version
         ) VALUES (
-          ${title}, ${notes}, ${status}, ${size}, ${areaTag}, ${roadmapTaskId},
+          ${title}, ${notes}, ${status}, ${size}, ${priority}, ${tags}, ${areaTag}, ${roadmapTaskId},
           ${addedBy}, ${dueDate}, ${blocked}, ${blockedReason}, '1.0'
         )
         RETURNING id

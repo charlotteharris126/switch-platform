@@ -4,6 +4,14 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-05 — Work Hub: editable card detail + tags/priority + roadmap-as-tab
+- Migration `0189`: added `tags text[]` (multi-label: quick-win/awaiting-approval/big-project/…) + `priority` (low/normal/high/urgent, CHECK) to `strategy.tasks`. `area_tag` kept as free-text "Category" (business area). GIN index on tags.
+- EFs `work-tasks` + `task-upsert` accept/return tags + priority.
+- `/admin/work`: **click a card to open a detail modal** — edit title, Category (business-area dropdown), Priority, Tags (chip editor + suggestions), Due date, Notes, Blocked + reason, Delete. Card now shows priority (when not normal) + tag chips. Quick-wins filter is now tag-based (`quick-win`).
+- **Roadmap folded in as a "Build" tab** (`work-hub.tsx`): `/admin/work` now has Run | Build tabs; Build embeds the existing RoadmapClient. Removed the standalone "Roadmap" nav item (route still exists). One task surface, not two — per owner.
+- tsc clean. EFs redeployed; app pushed.
+- Signed off: Owner (2026-06-05).
+
 ## 2026-06-05 — Work Hub Phase 2: the kanban board (/admin/work)
 - New EF `work-tasks`: owner board operations on `strategy.tasks` (list/create/update/delete), action-router + x-audit-key/AUDIT_SHARED_SECRET auth, mirroring `admin-roadmap` (strategy isn't API-exposed, so reads/writes go through an EF). list joins `roadmap_tasks` for the parent-rock title.
 - New admin page `/admin/work` (`platform/app/app/admin/work/`): `page.tsx` (auth + load), `actions.ts` (server actions wrapping work-tasks like roadmap's), `work-board.tsx` (dnd-kit kanban). Five columns (Inbox/This Week/In Progress/Review/Done), drag a card between columns to change status (optimistic + persisted), add-task input (lands in Inbox), Quick-wins filter (size=tiny), Blocked dot, size/area/parent-rock/due badges, "new · added_by" flag for unseen agent-added tasks. Installed `@dnd-kit/core`. Nav: "Work" added near top of admin-shell.

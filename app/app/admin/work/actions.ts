@@ -16,6 +16,8 @@ export type WorkTask = {
   blocked: boolean;
   blocked_reason: string | null;
   size: "tiny" | "small" | "big";
+  priority: "low" | "normal" | "high" | "urgent";
+  tags: string[];
   area_tag: string | null;
   roadmap_task_id: string | null;
   roadmap_title: string | null;
@@ -31,7 +33,7 @@ export type WorkTask = {
 export type TaskPatch = Partial<
   Pick<
     WorkTask,
-    "title" | "notes" | "status" | "size" | "area_tag" | "roadmap_task_id"
+    "title" | "notes" | "status" | "size" | "priority" | "tags" | "area_tag" | "roadmap_task_id"
     | "due_date" | "blocked" | "blocked_reason" | "sort_order" | "seen_by_owner"
   >
 >;
@@ -51,6 +53,8 @@ export async function createWorkTaskAction(task: {
   notes?: string | null;
   status?: WorkTask["status"];
   size?: WorkTask["size"];
+  priority?: WorkTask["priority"];
+  tags?: string[];
   area_tag?: string | null;
   roadmap_task_id?: string | null;
   due_date?: string | null;
