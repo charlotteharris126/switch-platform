@@ -7,11 +7,12 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  useDraggable,
   useDroppable,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   type WorkTask,
   type TaskPatch,
@@ -134,17 +135,57 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
     setDragId(null);
     const { active, over } = e;
     if (!over) return;
-    const id = String(active.id);
-    const targetStatus = String(over.id) as WorkTask["status"];
-    const task = tasks.find((t) => t.id === id);
-    if (!task || !COLUMNS.some((c) => c.status === targetStatus) || task.status === targetStatus) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const activeTask = tasks.find((t) => t.id === activeId);
+    if (!activeTask) return;
 
-    const prevStatus = task.status;
-    const maxSort = Math.max(0, ...tasks.filter((t) => t.status === targetStatus).map((t) => t.sort_order));
-    patchLocal(id, { status: targetStatus, sort_order: maxSort + 1 });
-    const r = await updateWorkTaskAction(id, { status: targetStatus, sort_order: maxSort + 1 });
-    if (!r.ok) patchLocal(id, { status: prevStatus });
-    else setTasks((prev) => prev.map((t) => (t.id === id ? r.task : t)));
+    // Target column: `over` is either a column droppable (status) or a card.
+    const overTask = tasks.find((t) => t.id === overId);
+    const targetCol: WorkTask["status"] = COLUMNS.some((c) => c.status === overId)
+      ? (overId as WorkTask["status"])
+      : overTask ? overTask.status : activeTask.status;
+
+    // Full (unfiltered) ordering of the target column: remove active, reinsert at drop point.
+    const colIds = tasks
+      .filter((t) => t.status === targetCol && t.id !== activeId)
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((t) => t.id);
+    let insertIdx = colIds.length;
+    if (overTask && overTask.status === targetCol) {
+      const i = colIds.indexOf(overId);
+      if (i >= 0) insertIdx = i;
+    }
+    colIds.splice(insertIdx, 0, activeId);
+
+    if (targetCol === activeTask.status && colIds.indexOf(activeId) === activeTask.sort_order
+        && colIds.every((id, i) => { const t = tasks.find((x) => x.id === id); return t && t.sort_order === i; })) {
+      return; // no actual change
+    }
+
+    const orderById = new Map(colIds.map((id, i) => [id, i] as const));
+    const prevStatus = activeTask.status;
+
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === activeId) return { ...t, status: targetCol, sort_order: orderById.get(activeId)! };
+        if (t.status === targetCol && orderById.has(t.id)) return { ...t, sort_order: orderById.get(t.id)! };
+        return t;
+      }),
+    );
+
+    const calls: Promise<{ ok: boolean }>[] = [
+      updateWorkTaskAction(activeId, { status: targetCol, sort_order: orderById.get(activeId)! }),
+    ];
+    for (const id of colIds) {
+      if (id === activeId) continue;
+      const t = tasks.find((x) => x.id === id);
+      if (t && t.sort_order !== orderById.get(id)) {
+        calls.push(updateWorkTaskAction(id, { sort_order: orderById.get(id)! }));
+      }
+    }
+    const results = await Promise.all(calls);
+    if (!results[0].ok) setTasks((prev) => prev.map((t) => (t.id === activeId ? { ...t, status: prevStatus } : t)));
   }
 
   async function addTask() {
@@ -246,7 +287,7 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
             <Column key={col.status} status={col.status} label={col.label} tasks={byColumn[col.status]} onOpen={openTask} />
           ))}
         </div>
-        <DragOverlay>{dragTask ? <Card task={dragTask} overlay /> : null}</DragOverlay>
+        <DragOverlay>{dragTask ? <CardView task={dragTask} overlay /> : null}</DragOverlay>
       </DndContext>
 
       {selected && (
@@ -273,22 +314,36 @@ function Column({ status, label, tasks, onOpen }: {
         <span className="text-[11px] font-bold uppercase tracking-[1px] text-[#5a6a72]">{label}</span>
         <span className="text-[11px] font-semibold text-[#5a6a72] tabular-nums">{tasks.length}</span>
       </div>
-      <div className="space-y-2">{tasks.map((t) => <Card key={t.id} task={t} onOpen={onOpen} />)}</div>
+      <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+        <div className="space-y-2">{tasks.map((t) => <Card key={t.id} task={t} onOpen={onOpen} />)}</div>
+      </SortableContext>
     </div>
   );
 }
 
-function Card({ task, overlay, onOpen }: { task: WorkTask; overlay?: boolean; onOpen?: (t: WorkTask) => void }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id });
+function Card({ task, onOpen }: { task: WorkTask; onOpen?: (t: WorkTask) => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      {...listeners}
+      {...attributes}
+      onClick={() => { if (!isDragging) onOpen?.(task); }}
+      className={isDragging ? "opacity-30" : ""}
+    >
+      <CardView task={task} />
+    </div>
+  );
+}
+
+function CardView({ task, overlay }: { task: WorkTask; overlay?: boolean }) {
   const isNew = !task.seen_by_owner && task.added_by !== "charlotte";
   const overdue = task.due_date && task.status !== "done" && new Date(task.due_date) < new Date(new Date().toDateString());
 
   return (
-    <div ref={overlay ? undefined : setNodeRef}
-      {...(overlay ? {} : listeners)} {...(overlay ? {} : attributes)}
-      onClick={() => { if (!overlay && !isDragging) onOpen?.(task); }}
-      className={`rounded-lg border border-[#e0dacf] bg-white p-2.5 shadow-sm cursor-grab active:cursor-grabbing ${
-        isDragging ? "opacity-30" : ""} ${overlay ? "shadow-lg rotate-1" : ""}`}>
+    <div
+      className={`rounded-lg border border-[#e0dacf] bg-white p-2.5 shadow-sm cursor-grab active:cursor-grabbing ${overlay ? "shadow-lg rotate-1" : ""}`}>
       <div className="flex items-start gap-2">
         {task.blocked && <span className="mt-0.5 inline-block w-2 h-2 rounded-full bg-rose-500 shrink-0" title={task.blocked_reason ?? "Blocked"} />}
         <p className="text-sm text-[#11242e] leading-snug flex-1">{task.title}</p>
