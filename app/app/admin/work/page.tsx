@@ -7,7 +7,8 @@ import { WorkHub } from "./work-hub";
 
 export const dynamic = "force-dynamic";
 
-export default async function WorkPage() {
+export default async function WorkPage({ searchParams }: { searchParams: Promise<{ view?: string }> }) {
+  const { view } = await searchParams;
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user || !isAdmin(userData.user.email)) {
@@ -32,6 +33,7 @@ export default async function WorkPage() {
     <WorkHub
       workTasks={workResult.tasks}
       roadmapTasks={roadmapResult.ok ? roadmapResult.tasks : []}
+      initialView={view}
     />
   );
 }

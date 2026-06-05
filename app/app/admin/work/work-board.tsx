@@ -51,11 +51,13 @@ const VIEWS = [
   { key: "all", label: "All" },
   { key: "new", label: "New" },
   { key: "overdue", label: "Overdue" },
+  { key: "today", label: "Due today" },
   { key: "soon", label: "Due soon" },
+  { key: "stalled", label: "Stalled" },
+  { key: "review", label: "Review" },
   { key: "blocked", label: "Blocked" },
   { key: "quick", label: "Quick wins" },
   { key: "big", label: "Big projects" },
-  { key: "stalled", label: "Stalled" },
 ] as const;
 
 const DAY = 86400000;
@@ -65,7 +67,9 @@ function matchesView(t: WorkTask, view: string, startOfToday: number, now: numbe
   switch (view) {
     case "new": return !t.seen_by_owner && t.added_by !== "charlotte";
     case "overdue": return due !== null && t.status !== "done" && due < startOfToday;
-    case "soon": return due !== null && t.status !== "done" && due >= startOfToday && due <= startOfToday + 3 * DAY;
+    case "today": return due !== null && t.status !== "done" && due === startOfToday;
+    case "soon": return due !== null && t.status !== "done" && due > startOfToday && due <= startOfToday + 3 * DAY;
+    case "review": return t.status === "review";
     case "blocked": return t.blocked;
     case "quick": return t.tags.includes("quick-win");
     case "big": return t.tags.includes("big-project");
@@ -74,9 +78,11 @@ function matchesView(t: WorkTask, view: string, startOfToday: number, now: numbe
   }
 }
 
-export function WorkBoard({ initialTasks }: { initialTasks: WorkTask[] }) {
+export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTask[]; initialView?: string }) {
   const [tasks, setTasks] = useState<WorkTask[]>(initialTasks);
-  const [view, setView] = useState<string>("all");
+  const [view, setView] = useState<string>(
+    initialView && VIEWS.some((v) => v.key === initialView) ? initialView : "all",
+  );
   const [catFilter, setCatFilter] = useState("");
   const [prioFilter, setPrioFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");

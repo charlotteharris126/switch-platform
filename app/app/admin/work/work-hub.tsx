@@ -9,7 +9,9 @@ import type { RoadmapTask } from "../roadmap/actions";
 // The Work Hub: two altitudes in one page. "Run" = the operational kanban
 // (strategy.tasks). "Build" = the roadmap rocks (strategy.roadmap_tasks),
 // folded in here so there's one task surface, not two.
-export function WorkHub({ workTasks, roadmapTasks }: { workTasks: WorkTask[]; roadmapTasks: RoadmapTask[] }) {
+export function WorkHub({ workTasks, roadmapTasks, initialView }: {
+  workTasks: WorkTask[]; roadmapTasks: RoadmapTask[]; initialView?: string;
+}) {
   const [tab, setTab] = useState<"run" | "build">("run");
   return (
     <div>
@@ -29,7 +31,7 @@ export function WorkHub({ workTasks, roadmapTasks }: { workTasks: WorkTask[]; ro
           </button>
         </div>
       </div>
-      {tab === "run" ? <WorkBoard initialTasks={workTasks} /> : <RoadmapClient initialTasks={roadmapTasks} />}
+      {tab === "run" ? <WorkBoard initialTasks={workTasks} initialView={initialView} /> : <RoadmapClient initialTasks={roadmapTasks} />}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { signOutAction } from "@/app/(auth)/verify-mfa/actions";
+import { WorkBell } from "./work-bell";
 
 // Sidebar nav is split into sections.
 //   "Operations" — the lead/provider lifecycle surfaces. Day-to-day work lives here.
@@ -78,9 +79,12 @@ export function AdminShell({
               priority
             />
           </Link>
-          <p className="text-[10px] uppercase tracking-[2px] font-bold text-[#cd8b76] mt-4">
-            Platform admin
-          </p>
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-[10px] uppercase tracking-[2px] font-bold text-[#cd8b76]">
+              Platform admin
+            </p>
+            <WorkBell />
+          </div>
         </div>
 
         <nav className="flex-1 py-4">

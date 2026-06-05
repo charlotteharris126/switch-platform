@@ -77,6 +77,41 @@ export async function deleteWorkTaskAction(id: string): Promise<OkResult> {
   return { ok: true };
 }
 
+export type NotifTask = { id: string; title: string; due_date: string | null };
+export type NotifBucket = { key: string; label: string; tasks: NotifTask[] };
+export type NotifResult =
+  | { ok: true; buckets: NotifBucket[]; total: number }
+  | { ok: false; error: string };
+
+// The notifications feed: tasks needing attention, bucketed. Poll-on-load
+// (no realtime in v1). "New" = agent-added + unseen; "Blocked" is deliberately
+// excluded (if the owner marked it blocked they don't need reminding).
+export async function getWorkNotificationsAction(): Promise<NotifResult> {
+  const r = await listWorkTasksAction();
+  if (!r.ok) return r;
+  const tasks = r.tasks;
+
+  const DAY = 86400000;
+  const startOfToday = new Date(new Date().toDateString()).getTime();
+  const now = Date.now();
+  const dueMs = (t: WorkTask) => (t.due_date ? new Date(t.due_date).getTime() : null);
+  const live = (t: WorkTask) => t.status !== "done";
+  const slim = (t: WorkTask): NotifTask => ({ id: t.id, title: t.title, due_date: t.due_date });
+
+  const defs: NotifBucket[] = [
+    { key: "new", label: "New", tasks: tasks.filter((t) => !t.seen_by_owner && t.added_by !== "charlotte").map(slim) },
+    { key: "overdue", label: "Overdue", tasks: tasks.filter((t) => live(t) && dueMs(t) !== null && dueMs(t)! < startOfToday).map(slim) },
+    { key: "today", label: "Due today", tasks: tasks.filter((t) => live(t) && dueMs(t) === startOfToday).map(slim) },
+    { key: "soon", label: "Due soon", tasks: tasks.filter((t) => { const d = dueMs(t); return live(t) && d !== null && d > startOfToday && d <= startOfToday + 3 * DAY; }).map(slim) },
+    { key: "stalled", label: "Stalled", tasks: tasks.filter((t) => t.status === "in_progress" && now - new Date(t.updated_at).getTime() > 5 * DAY).map(slim) },
+    { key: "review", label: "Review waiting", tasks: tasks.filter((t) => t.status === "review").map(slim) },
+  ];
+
+  const buckets = defs.filter((b) => b.tasks.length > 0);
+  const total = new Set(buckets.flatMap((b) => b.tasks.map((t) => t.id))).size;
+  return { ok: true, buckets, total };
+}
+
 async function callWorkTasks(
   body: Record<string, unknown>,
 ): Promise<{ ok: true; [k: string]: unknown } | { ok: false; error: string }> {
