@@ -62,6 +62,7 @@ const VIEWS = [
   { key: "blocked", label: "Blocked" },
   { key: "quick", label: "Quick wins" },
   { key: "big", label: "Big projects" },
+  { key: "uncategorized", label: "No category" },
 ] as const;
 
 const DAY = 86400000;
@@ -78,6 +79,7 @@ function matchesView(t: WorkTask, view: string, startOfToday: number, now: numbe
     case "quick": return t.tags.includes("quick-win");
     case "big": return t.tags.includes("big-project");
     case "stalled": return t.status === "in_progress" && now - new Date(t.updated_at).getTime() > 5 * DAY;
+    case "uncategorized": return !t.area_tag;
     default: return true;
   }
 }
