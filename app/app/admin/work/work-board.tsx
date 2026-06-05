@@ -47,9 +47,39 @@ const PRIORITY_STYLE: Record<WorkTask["priority"], string> = {
 
 const SUGGESTED_TAGS = ["quick-win", "awaiting-approval", "big-project", "waiting", "research", "bug"];
 
+const VIEWS = [
+  { key: "all", label: "All" },
+  { key: "new", label: "New" },
+  { key: "overdue", label: "Overdue" },
+  { key: "soon", label: "Due soon" },
+  { key: "blocked", label: "Blocked" },
+  { key: "quick", label: "Quick wins" },
+  { key: "big", label: "Big projects" },
+  { key: "stalled", label: "Stalled" },
+] as const;
+
+const DAY = 86400000;
+
+function matchesView(t: WorkTask, view: string, startOfToday: number, now: number): boolean {
+  const due = t.due_date ? new Date(t.due_date).getTime() : null;
+  switch (view) {
+    case "new": return !t.seen_by_owner && t.added_by !== "charlotte";
+    case "overdue": return due !== null && t.status !== "done" && due < startOfToday;
+    case "soon": return due !== null && t.status !== "done" && due >= startOfToday && due <= startOfToday + 3 * DAY;
+    case "blocked": return t.blocked;
+    case "quick": return t.tags.includes("quick-win");
+    case "big": return t.tags.includes("big-project");
+    case "stalled": return t.status === "in_progress" && now - new Date(t.updated_at).getTime() > 5 * DAY;
+    default: return true;
+  }
+}
+
 export function WorkBoard({ initialTasks }: { initialTasks: WorkTask[] }) {
   const [tasks, setTasks] = useState<WorkTask[]>(initialTasks);
-  const [quickWins, setQuickWins] = useState(false);
+  const [view, setView] = useState<string>("all");
+  const [catFilter, setCatFilter] = useState("");
+  const [prioFilter, setPrioFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [adding, setAdding] = useState(false);
@@ -57,10 +87,21 @@ export function WorkBoard({ initialTasks }: { initialTasks: WorkTask[] }) {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const visible = useMemo(
-    () => (quickWins ? tasks.filter((t) => t.tags.includes("quick-win")) : tasks),
-    [tasks, quickWins],
-  );
+  const allTags = useMemo(() => Array.from(new Set(tasks.flatMap((t) => t.tags))).sort(), [tasks]);
+
+  const visible = useMemo(() => {
+    const now = Date.now();
+    const startOfToday = new Date(new Date().toDateString()).getTime();
+    return tasks.filter(
+      (t) =>
+        matchesView(t, view, startOfToday, now) &&
+        (catFilter ? t.area_tag === catFilter : true) &&
+        (prioFilter ? t.priority === prioFilter : true) &&
+        (tagFilter ? t.tags.includes(tagFilter) : true),
+    );
+  }, [tasks, view, catFilter, prioFilter, tagFilter]);
+
+  const activeFilters = (view !== "all" ? 1 : 0) + (catFilter ? 1 : 0) + (prioFilter ? 1 : 0) + (tagFilter ? 1 : 0);
 
   const byColumn = useMemo(() => {
     const map: Record<string, WorkTask[]> = {};
@@ -116,12 +157,47 @@ export function WorkBoard({ initialTasks }: { initialTasks: WorkTask[] }) {
 
   return (
     <main className="mx-auto max-w-[1400px] px-4 py-6">
-      <div className="mb-5 flex items-center justify-between gap-4 flex-wrap">
+      <div className="mb-3 flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-[28px] font-extrabold text-[#11242e] leading-tight">Work</h1>
-        <label className="flex items-center gap-2 text-sm text-[#5a6a72] cursor-pointer select-none">
-          <input type="checkbox" checked={quickWins} onChange={(e) => setQuickWins(e.target.checked)} />
-          Quick wins only
-        </label>
+        <span className="text-xs text-[#5a6a72]">
+          {visible.length} shown
+          {activeFilters > 0 && (
+            <button
+              onClick={() => { setView("all"); setCatFilter(""); setPrioFilter(""); setTagFilter(""); }}
+              className="ml-2 underline hover:text-[#11242e]"
+            >
+              clear filters
+            </button>
+          )}
+        </span>
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+        {VIEWS.map((v) => (
+          <button key={v.key} onClick={() => setView(v.key)}
+            className={`text-xs px-2.5 h-7 rounded-full border transition-colors ${
+              view === v.key ? "bg-[#11242e] text-white border-[#11242e]" : "bg-white text-[#5a6a72] border-[#dad4cb] hover:border-[#11242e]"}`}>
+            {v.label}
+          </button>
+        ))}
+        <span className="w-px h-5 bg-[#dad4cb] mx-1" />
+        <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)}
+          className="h-7 text-xs border border-[#dad4cb] rounded-lg bg-white px-2 text-[#11242e] focus:outline-none focus:border-[#cd8b76]">
+          <option value="">Category: any</option>
+          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={prioFilter} onChange={(e) => setPrioFilter(e.target.value)}
+          className="h-7 text-xs border border-[#dad4cb] rounded-lg bg-white px-2 text-[#11242e] focus:outline-none focus:border-[#cd8b76]">
+          <option value="">Priority: any</option>
+          {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        {allTags.length > 0 && (
+          <select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}
+            className="h-7 text-xs border border-[#dad4cb] rounded-lg bg-white px-2 text-[#11242e] focus:outline-none focus:border-[#cd8b76]">
+            <option value="">Tag: any</option>
+            {allTags.map((t) => <option key={t} value={t}>#{t}</option>)}
+          </select>
+        )}
       </div>
 
       <div className="mb-5 flex gap-2 max-w-xl">
