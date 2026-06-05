@@ -4,6 +4,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-05 — Work Hub Phase 2: the kanban board (/admin/work)
+- New EF `work-tasks`: owner board operations on `strategy.tasks` (list/create/update/delete), action-router + x-audit-key/AUDIT_SHARED_SECRET auth, mirroring `admin-roadmap` (strategy isn't API-exposed, so reads/writes go through an EF). list joins `roadmap_tasks` for the parent-rock title.
+- New admin page `/admin/work` (`platform/app/app/admin/work/`): `page.tsx` (auth + load), `actions.ts` (server actions wrapping work-tasks like roadmap's), `work-board.tsx` (dnd-kit kanban). Five columns (Inbox/This Week/In Progress/Review/Done), drag a card between columns to change status (optimistic + persisted), add-task input (lands in Inbox), Quick-wins filter (size=tiny), Blocked dot, size/area/parent-rock/due badges, "new · added_by" flag for unseen agent-added tasks. Installed `@dnd-kit/core`. Nav: "Work" added near top of admin-shell.
+- Within-column reorder (sort_order drag) deferred — v1 appends to column end on move. Notifications feed = Phase 3; ClickUp migration + docs/skills cutover = Phase 4 (see spec).
+- tsc clean. Deployed: work-tasks EF (live); app pushed (Netlify rebuild).
+- Signed off: Owner (2026-06-05, "keep going").
+
 ## 2026-06-05 — Work Hub Phase 1: strategy.tasks + task-upsert EF
 - Migration `0188_strategy_tasks.sql`: new `strategy.tasks` table (Work Hub "Run" altitude per `platform/docs/admin-work-hub-spec.md`), linked to `strategy.roadmap_tasks` via `roadmap_task_id`. Mirrors roadmap_tasks access: owner `admin.is_admin()` FOR ALL, `readonly_analytics` direct SELECT (Mira triages — no stripped view, tasks has no identifier columns and triage needs full title/notes; same as the sibling roadmap_tasks), `functions_writer` INSERT for the capture EF. `area_tag` is FREE TEXT not a CHECK enum (deliberately, to avoid the enum/CHECK drift that caused the 0187 bug). Trigger auto-manages `updated_at` + `completed_at` on status transitions. Indexes on status/sort, roadmap_task_id, due_date, unseen-feed.
 - New EF `task-upsert`: the one capture front door for agents + the `/handoff` push (so tasks land in the Inbox with `added_by` stamped, not in a doc). Internal-only — shared-secret bearer gate (`TASK_UPSERT_SECRET`, set), `verify_jwt=false`, inserts via `functions_writer`, dead-letters on failure. The owner's own "Add task" UI will write via the admin app directly (Phase 2).

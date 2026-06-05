@@ -19,6 +19,7 @@ const NAV_SECTIONS: Array<{
   {
     items: [
       { href: "/", label: "Overview" },
+      { href: "/admin/work", label: "Work" },
       { href: "/actions", label: "Actions" },
       { href: "/leads", label: "Leads" },
       { href: "/admin/referrals", label: "Referrals" },

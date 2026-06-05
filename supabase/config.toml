@@ -422,6 +422,9 @@ verify_jwt = false
 [functions.task-upsert]
 verify_jwt = false
 
+[functions.work-tasks]
+verify_jwt = false
+
 [functions.netlify-leads-reconcile]
 verify_jwt = false
 
