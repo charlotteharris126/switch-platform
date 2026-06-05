@@ -4,6 +4,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-05 — Work Hub Phase 1: strategy.tasks + task-upsert EF
+- Migration `0188_strategy_tasks.sql`: new `strategy.tasks` table (Work Hub "Run" altitude per `platform/docs/admin-work-hub-spec.md`), linked to `strategy.roadmap_tasks` via `roadmap_task_id`. Mirrors roadmap_tasks access: owner `admin.is_admin()` FOR ALL, `readonly_analytics` direct SELECT (Mira triages — no stripped view, tasks has no identifier columns and triage needs full title/notes; same as the sibling roadmap_tasks), `functions_writer` INSERT for the capture EF. `area_tag` is FREE TEXT not a CHECK enum (deliberately, to avoid the enum/CHECK drift that caused the 0187 bug). Trigger auto-manages `updated_at` + `completed_at` on status transitions. Indexes on status/sort, roadmap_task_id, due_date, unseen-feed.
+- New EF `task-upsert`: the one capture front door for agents + the `/handoff` push (so tasks land in the Inbox with `added_by` stamped, not in a doc). Internal-only — shared-secret bearer gate (`TASK_UPSERT_SECRET`, set), `verify_jwt=false`, inserts via `functions_writer`, dead-letters on failure. The owner's own "Add task" UI will write via the admin app directly (Phase 2).
+- Verified live: unauthorized → 401, authorized → task created, lands `status=inbox`, readable by readonly_analytics. First real task seeded (Phase 2 build).
+- Decisions to flag to Mira: (1) direct readonly_analytics read instead of a stripped view (reasoning above); (2) dnd-kit for the kanban, poll-not-realtime for notifications, two linked tables (per spec). Next: Phase 2 (the kanban UI), the big piece.
+- Signed off: Owner (2026-06-05).
+
 ## 2026-06-04 — Fix: employer "not signed" reasons rejected by DB (Freya/Riverside)
 - Migration `0187_enrolments_lost_reason_allow_not_signed.sql`. Freya reported "Mark not signed → No response" errored and reverted in the provider portal. Root cause: app enum `VALID_NOT_SIGNED_REASONS` (lib/lead-status.ts) drifted ahead of the `crm.enrolments.lost_reason` CHECK constraint, which only permitted the learner "lost" + fastrack reasons. So every employer not_signed reason except `other` (`budget`, `wrong_levy_fit`, `timing`, `competitor`, `decided_not_to_proceed`, `no_response`) was rejected → UPDATE failed → server action errored → page reverted.
 - Fix: widened the CHECK to include the 6 employer reasons. Additive, no value removed, no invalid existing rows. No app redeploy needed (the app already sent the right value; only the DB was rejecting it). Applied + verified live (constraint now lists all reasons).

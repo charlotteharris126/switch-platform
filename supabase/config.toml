@@ -419,6 +419,9 @@ verify_jwt = false
 [functions.labs-event]
 verify_jwt = false
 
+[functions.task-upsert]
+verify_jwt = false
+
 [functions.netlify-leads-reconcile]
 verify_jwt = false
 
