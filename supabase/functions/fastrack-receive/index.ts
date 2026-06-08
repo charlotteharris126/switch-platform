@@ -414,7 +414,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   //
   // Dormant until BREVO_TEMPLATE_U_FASTRACK_QUALIFIED env var is set —
   // sendTransactional returns skipped_missing_template silently.
-  if (cohortConfirmed === true && l3Reconfirmed === false && parent.email) {
+  // Qualifying condition by funding route: FCFJ clears on l3_reconfirmed===false
+  // (no L3 mismatch); AEB (team-leading) clears on earnings_reconfirmed===true
+  // (reconfirmed under £30k). Either path fires the same "you're qualified" ack.
+  if (cohortConfirmed === true && (l3Reconfirmed === false || earningsReconfirmed === true) && parent.email) {
     const templateId = Number(Deno.env.get("BREVO_TEMPLATE_U_FASTRACK_QUALIFIED") ?? "0");
     if (templateId > 0) {
       const recipientName = [parent.first_name, parent.last_name]
