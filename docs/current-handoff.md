@@ -1,70 +1,35 @@
-# Platform Handoff, Session 67, 2026-06-05
-
-## ⚡ PUSH FROM Mable (switchable/site) 2026-06-08: persist + route `earnings_band` (new funded income gate)
-
-**UPDATE (end of day, post-push):** the course page is now **LIVE** (`/funded/introduction-to-management-sunderland/`, deployed with the /business reframe). Status of the asks below: **(1) column DONE** — `leads.submissions.earnings_band TEXT NULL` confirmed live. **(3) EMS sheet DROPPED** — the sheet is being retired, not worth the FIELD_MAP work; surface `earnings_band` on whatever replaces it later. **(4) DONE** — `dq_reason` has no CHECK constraint (free text), so `over_income_threshold` is accepted as-is. **Remaining: (2) the `netlify-lead-router` mapping** so `earnings_band` persists, plus the five-leg routing verify confirming `course_id = team-leading` reaches EMS. Original spec below for reference.
-
-New funded course page built this session: **Introduction to Management** (NCFE Level 2 Certificate in Principles of Team Leading), Sunderland, provider EMS. Course id `team-leading`, slug `introduction-to-management-sunderland`. **Not live yet** (push held, blocked on EMS confirming the funding scheme name). It introduces a new `earnings` qualifier step (DQs anyone earning £30k+, captures the declared band), per Charlotte's "filter out 30k+ earners, capture and send to EMS" spec.
-
-**What the site now emits on funded leads (live in the build, ships when the page goes live):**
-- New payload field **`earnings_band`** on the funded form. Values: `under_30k` (passes) / `over_30k` (DQ'd at the gate, so a clean submitted lead is always `under_30k`; `over_30k` only appears on a DQ-injected `switchable-waitlist` row via `injectQualifierAnswers`). Carried as a main-form hidden field + injected into the DQ waitlist form.
-- New **`dq_reason`** value **`over_income_threshold`** on the income DQ waitlist submission.
-- Mirrored in the form-matrix simulator + `routing.js` classifier (`classifyFundedStep('earnings', …)`, FUNDED_STEP_DQ `over_30k`).
-
-**Current behaviour without you:** Netlify captures `earnings_band` on every submission, and `netlify-lead-router` receives it, but with no column it's silently dropped (unknown field ignored — nothing breaks, but the band isn't persisted or routed to EMS).
-
-**Asks (priority order):**
-1. **Column:** add `leads.submissions.earnings_band TEXT NULL`. Additive (free per data-infra §2). Migration + `data-architecture.md` mirror + changelog row.
-2. **EF mapping:** map incoming `earnings_band` → the column in `netlify-lead-router`'s insert. (Producer schema doc `switchable/site/docs/funded-funnel-architecture.md` updated my side — additive field, no version bump.)
-3. **EMS sheet:** add `earnings_band` to the EMS provider sheet (header + canonical v2 Apps Script FIELD_MAP entry, then redeploy) so the declared band reaches EMS as eligibility evidence — that's the "send" half of capture-and-send.
-4. **`dq_reason` constraint:** confirm whatever column `dq_reason` lands in accepts `over_income_threshold`. If there's a CHECK enum, widen it (migration); if free text, nothing to do.
-5. **Optional:** if useful for nurture, surface `earnings_band` as a Brevo attribute via `_shared/route-lead.ts` (not required; flag a backfill if you do, per the Brevo-wiring rule).
-
-**Impact (§8):** reads of `leads.submissions` — the `readonly_analytics` view should pick up the new column (quasi-identifier, fine to expose; not PII). No existing consumer reads `earnings_band` yet. Producer = the funded form (one page so far, low volume). Rollback = drop column. Sign-off: owner.
-
-## ⚡ PUSH FROM Mable (switchable/site) 2026-06-08 (2): AEB fastrack follow-ups (team-leading, LIVE)
-
-The funded fastrack thank-you (`/funded/thank-you/`, form `fastrack-funded-v1`) now renders an AEB-specific Q2 + Q3 for `funding_route: aeb` (team-leading), shipped + live this session. Two additive things land on `fastrack-funded-v1` submissions for AEB:
-
-1. **New field `earnings_reconfirmed`** (`true`/`false`, non-PII, additive). AEB Q2 asks "Do you earn under £30,000 a year?". `fastrack-receive` must not reject the unknown field. No `schema_version` bump.
-2. **New `lost_reason` value `fastrack-earnings-over`** (earning £30k+ is a hard DQ on AEB, mirrors `fastrack-l3-mismatch`). It flows through to `SW_LOST_REASON`. **If that Brevo attribute is a Category/enum type, register `fastrack-earnings-over` or Brevo silently drops the value** (the reconcile-drift gotcha) — alongside existing `fastrack-l3-mismatch` / `fastrack-cohort-decline`.
-
-No new form name (so no allowlist/webhook work). Backstop note: 30k+ is already DQ'd on the main form's `earnings` step, so the fastrack DQ only catches a mis-click or changed answer.
+# Platform Handoff, Session 68, 2026-06-08
 
 ## Current state
-Built the Work Hub (`/admin/work`) end to end this session: a kanban task board that replaces ClickUp, with the roadmap folded in as a "Build" tab. It's feature-complete and live but **near-empty** — the ClickUp task migration (the only big piece left) is deferred to a focused Mira session. Also fixed Freya/Riverside's not-signed bug and removed Metabase from the docs. The Codex security backlog and Clara's billing brief remain the other untouched platform work.
+The EMS team-leading (Introduction to Management, Sunderland, AEB) funnel is wired and tested end to end on the platform side. A real-lead test surfaced a standing Netlify-to-router webhook delivery lag, now fixed: the backfill auto-recovers and routes missed leads every 10 min (verified live). One form-side bug remains for Mable: `earnings_band` lands empty on the lead. Earlier this session: Work Hub agent-write path, ClickUp task cutover, and per-device MCP scoping.
 
 ## What was done this session
-- **Work Hub built + deployed** (`platform/docs/admin-work-hub-spec.md`):
-  - Schema: `strategy.tasks` (0188) + `tags`/`priority` (0189) + `agents` status (0190). RLS mirrors `roadmap_tasks` (owner `admin.is_admin()`, `readonly_analytics` read for Mira, `functions_writer` for capture). `area_tag` + `tags` are free text (no CHECK-enum drift); `status`/`priority` are CHECK enums kept in lockstep with both EFs + the board.
-  - EFs: `task-upsert` (agent/handoff capture front door, `TASK_UPSERT_SECRET`-gated) + `work-tasks` (owner board ops, x-audit-key/`AUDIT_SHARED_SECRET`, mirrors `admin-roadmap`).
-  - UI `/admin/work`: dnd-kit kanban (Inbox · Agents · This Week · In Progress · Review · Done), drag between + reorder within columns (sort_order persisted), editable card detail (title/category/priority/tags/notes/due/blocked/delete), filter views (All/New/Overdue/Due today/Due soon/Stalled/Review/Blocked/Quick wins/Big projects/No category) with **multi-select** + Category/Priority/Tag dropdowns, notifications bell (badge + grouped feed, deep-links to filtered board), roadmap as a Build tab (removed standalone Roadmap nav). Opening an agent-added card marks it seen.
-  - `/prime-project` skill Step 4 now also reads the Work Hub for the active project's `area_tag` (queued-by-others, agent-delegated, count). Skill syncs via iCloud.
-- **Fixed not-signed bug (Freya/Riverside, 0187):** widened `crm.enrolments.lost_reason` CHECK to allow the employer reasons. Live + verified.
-- **Removed Metabase** from all live docs (we use the in-house admin app); migration files left (immutable).
+- **earnings_band end to end** (migration 0200): column on `leads.submissions`; mapped in `_shared/ingest.ts` (insert) + `_shared/route-lead.ts` (interface, 3 SELECTs, provider-sheet payload); appender FIELD_MAP; portal lead-detail field. `dq_reason` is free text (accepts `over_income_threshold`, no change). Deployed netlify-lead-router, netlify-leads-reconcile, routing-confirm.
+- **EMS Sunderland caller**: data-op 039 added `regional_contacts.by_la.sunderland` = Andrea Clarke / 07792 102 367 (applied + verified). Drives the learner SMS + welcome "who's calling" line. Email fan-out confirmed: Andy (to) + Charlotte (owner cc) + Daniel (catch-all `provider_user`); Tees Valley reps correctly excluded for Sunderland leads.
+- **Fastrack AEB capture**: migration 0201 (`leads.fastrack_submissions.earnings_reconfirmed`); `fastrack-receive` captures it + surfaces "Earnings under £30k reconfirmed" in the EMS fastrack summary (FCFJ summaries byte-unchanged); qualified-ack email now fires for AEB (`earnings_reconfirmed`) as well as FCFJ (`l3_reconfirmed`).
+- **Webhook-lag fix (the big one)**: diagnosed a standing Netlify->router delivery lag (~3% of leads over 90 days delivered >2 min late, mostly >10 min; 15 dropped + caught by the backfill; **0 permanently lost**). `netlify-leads-reconcile` now RE-DELIVERS missed leads through `netlify-lead-router` (full insert + route + email/SMS) instead of inserting un-routed; cron hourly -> `*/10` (migration 0202). **VERIFIED**: stuck test lead 570 auto-recovered + routed to EMS, no double-send (idempotency held).
+- **Test-lead cleanup**: archived 569 + 570 (migration 0203, soft archive; portal list filters `archived_at IS NULL`).
+- **Work Hub agent-write + ClickUp cutover** (earlier this session): vault-key capture path (`get_task_capture_key`, migration 0194 added-then-dropped 0197, plus 0198, 0199); Backlog + Completed columns + 30-day purge (0195, 0196); `/handoff` + ticketing rule + `/prime-project` rewired ClickUp->Hub; MCP connectors scoped per-device in `~/.claude.json`.
 
 ## Next steps
-1. **ClickUp → Work Hub migration (Mira, the big one):** triage the ~156 ClickUp tasks (Task pipeline ~100 + Backlog 56) to the real survivors, map to `strategy.tasks` (category/priority/status), import clean. Then retire ClickUp tasks + wire agents (Rosa/Nell) + `/handoff` steps 4-5 to call `task-upsert`, and update project folders' CLAUDE.md + ticketing rule. Cutover list in the spec. **Do import + triage together in the Mira session — do NOT bulk-dump 156 raw cards.**
-2. **Billing reconciliation + `/admin/billing`** (Clara push, ticket 869djrtgk, brief `platform/docs/billing-section-brief-2026-06-04.md`).
-3. **Security backlog (Codex order, untouched):** provider login OTP binding (#1) → ingestion auth (#5) → lock `editorial.fire_netlify_blog_build` (#6) → `verify_jwt` config blocks (#8) → app-code batch.
-4. **`leads.submissions` PII follow-up (ticket 869dja09z):** apply §6a; impact-assess consumers first.
-5. **Carries:** SMS delivery pull; auto-flip cron (0097 unapplied); Provider OS V1 scoping; `sql.json` deno-check cleanup.
+1. **Switch to Mable (switchable/site): fix `earnings_band` landing empty** — the form isn't populating the hidden `h-earnings` field at submit (the value is in the partial-tracker but null on the lead: 568, 569, 570). Platform side is correct; it's a form-JS fix. Verify it lands as `under_30k` on a real lead.
+2. **Watch webhook delivery** — confirm the next real leads land in seconds (not lagged). If lags persist, pull Netlify's outgoing webhook delivery log for `switchable-funded` (Netlify-side vs our-side).
+3. **SW_LOST_REASON Brevo enum**: register `fastrack-earnings-over` if that attribute is a Category type, else Brevo silently drops it on the rare over-£30k fastrack DQ (Wren, low-urgency).
+4. **Rotate 3 leaked credentials** (GitHub PAT, Notion key, DB password found in `~/.zsh_history`) — separate security task, owner-driven.
+5. **Carries**: ClickUp cutover remaining (wire Rosa/Nell agents to `task-upsert`); billing reconciliation (`/admin/billing`); Codex security backlog.
 
 ## Decisions and open questions
-**Decisions:**
-- Work Hub = two linked tables (`tasks` + `roadmap_tasks`), dnd-kit, poll-not-realtime notifications (per spec). Mira reads `tasks` directly (no stripped view) — it has no identifier columns and triage needs full content.
-- Tags are orthogonal labels only; "needs approval" = Review column, "can't proceed" = Blocked flag, not tags (removed awaiting-approval/waiting).
-- Migration done in the Mira session (triage + import together), not a 1am bulk dump.
-**Open questions:**
-- Final mapping of ClickUp tags → `area_tag` categories (Mira decides at triage).
+- **Webhook-lag fix = reconcile re-delivers through the router + 10-min cron.** Why: 0 leads lost historically but ~3% lagged/dropped and needed manual routing; this makes recovery automatic + fast, and idempotency (ON CONFLICT on the Netlify id) prevents double-routing if the webhook later catches up.
+- **Agent DB-write = vault key + EF (`get_task_capture_key`)**, not a per-device secret. Why: per-device secrets fail the iCloud-sync + "no writing outside workspace" rules; the vault-fetch keeps the read-only role read-only and needs zero device setup.
+- **Open**: is the webhook lag a tonight-only Netlify wobble or a standing issue? Needs the next-leads timing + the Netlify delivery log to confirm.
 
 ## Watch items
-- **Click-test the board** after rebuild: drag reorder within a column + move between, the card detail modal, the filters, the notifications bell. (dnd-kit reorder was built + tsc-clean but not click-tested from here.)
-- Work Hub holds 1 seed task until the migration runs.
-- `TASK_UPSERT_SECRET` is set in Supabase; agents/handoff need it wired at Phase 4 cutover.
-- Freya: confirm she can now mark not-signed with a reason.
+- Webhook delivery timing on the next real leads (netlify_received -> created_at gap should be seconds).
+- `earnings_band` empty on every lead until Mable fixes the form.
+- The `*/10` reconcile now fires provider emails/SMS on recovery; watch for any unexpected double-sends (idempotency should prevent).
+- SW_LOST_REASON Brevo enum (rare over-£30k fastrack DQ).
 
 ## Next session
-- **Folder:** platform (or `strategy` if Mira is running the migration triage)
-- **First task:** ClickUp → Work Hub migration with Mira (triage + import), OR billing reconciliation (869djrtgk) if not doing the migration.
-- **Cross-project:** Migration is Mira's (pushed to `strategy/docs/current-handoff.md`). Prime-project + ticketing-rule + agent filing changes land at Phase 4 cutover.
+- **Folder:** switchable/site (Mable)
+- **First task:** fix the form so `earnings_band` populates the hidden field at submit; verify it saves as `under_30k` on a real routed lead.
+- **Cross-project:** pushed to `switchable/site/docs/current-handoff.md` (the empty-`earnings_band` form bug added to Next steps; AEB fastrack note + brief already there). Webhook fix is platform-only.
