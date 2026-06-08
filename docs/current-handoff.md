@@ -2,6 +2,8 @@
 
 ## ⚡ PUSH FROM Mable (switchable/site) 2026-06-08: persist + route `earnings_band` (new funded income gate)
 
+**UPDATE (end of day, post-push):** the course page is now **LIVE** (`/funded/introduction-to-management-sunderland/`, deployed with the /business reframe). Status of the asks below: **(1) column DONE** — `leads.submissions.earnings_band TEXT NULL` confirmed live. **(3) EMS sheet DROPPED** — the sheet is being retired, not worth the FIELD_MAP work; surface `earnings_band` on whatever replaces it later. **(4) DONE** — `dq_reason` has no CHECK constraint (free text), so `over_income_threshold` is accepted as-is. **Remaining: (2) the `netlify-lead-router` mapping** so `earnings_band` persists, plus the five-leg routing verify confirming `course_id = team-leading` reaches EMS. Original spec below for reference.
+
 New funded course page built this session: **Introduction to Management** (NCFE Level 2 Certificate in Principles of Team Leading), Sunderland, provider EMS. Course id `team-leading`, slug `introduction-to-management-sunderland`. **Not live yet** (push held, blocked on EMS confirming the funding scheme name). It introduces a new `earnings` qualifier step (DQs anyone earning £30k+, captures the declared band), per Charlotte's "filter out 30k+ earners, capture and send to EMS" spec.
 
 **What the site now emits on funded leads (live in the build, ships when the page goes live):**
@@ -19,6 +21,15 @@ New funded course page built this session: **Introduction to Management** (NCFE 
 5. **Optional:** if useful for nurture, surface `earnings_band` as a Brevo attribute via `_shared/route-lead.ts` (not required; flag a backfill if you do, per the Brevo-wiring rule).
 
 **Impact (§8):** reads of `leads.submissions` — the `readonly_analytics` view should pick up the new column (quasi-identifier, fine to expose; not PII). No existing consumer reads `earnings_band` yet. Producer = the funded form (one page so far, low volume). Rollback = drop column. Sign-off: owner.
+
+## ⚡ PUSH FROM Mable (switchable/site) 2026-06-08 (2): AEB fastrack follow-ups (team-leading, LIVE)
+
+The funded fastrack thank-you (`/funded/thank-you/`, form `fastrack-funded-v1`) now renders an AEB-specific Q2 + Q3 for `funding_route: aeb` (team-leading), shipped + live this session. Two additive things land on `fastrack-funded-v1` submissions for AEB:
+
+1. **New field `earnings_reconfirmed`** (`true`/`false`, non-PII, additive). AEB Q2 asks "Do you earn under £30,000 a year?". `fastrack-receive` must not reject the unknown field. No `schema_version` bump.
+2. **New `lost_reason` value `fastrack-earnings-over`** (earning £30k+ is a hard DQ on AEB, mirrors `fastrack-l3-mismatch`). It flows through to `SW_LOST_REASON`. **If that Brevo attribute is a Category/enum type, register `fastrack-earnings-over` or Brevo silently drops the value** (the reconcile-drift gotcha) — alongside existing `fastrack-l3-mismatch` / `fastrack-cohort-decline`.
+
+No new form name (so no allowlist/webhook work). Backstop note: 30k+ is already DQ'd on the main form's `earnings` step, so the fastrack DQ only catches a mis-click or changed answer.
 
 ## Current state
 Built the Work Hub (`/admin/work`) end to end this session: a kanban task board that replaces ClickUp, with the roadmap folded in as a "Build" tab. It's feature-complete and live but **near-empty** — the ClickUp task migration (the only big piece left) is deferred to a focused Mira session. Also fixed Freya/Riverside's not-signed bug and removed Metabase from the docs. The Codex security backlog and Clara's billing brief remain the other untouched platform work.
