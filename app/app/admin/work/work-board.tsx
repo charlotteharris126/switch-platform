@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -21,13 +21,17 @@ import {
   deleteWorkTaskAction,
 } from "./actions";
 
-const COLUMNS: { status: WorkTask["status"]; label: string }[] = [
+// `stash` columns are hidden by default and revealed by a toggle: Backlog (an
+// ideas brain-dump reviewed periodically) and Completed (ticked-off tasks, auto-
+// cleared after 30 days by the purge cron). Everything else is the daily board.
+const COLUMNS: { status: WorkTask["status"]; label: string; stash?: "backlog" | "completed" }[] = [
+  { status: "backlog", label: "Backlog", stash: "backlog" },
   { status: "inbox", label: "Inbox" },
   { status: "agents", label: "Agents" },
   { status: "this_week", label: "This Week" },
   { status: "in_progress", label: "In Progress" },
   { status: "review", label: "Review" },
-  { status: "done", label: "Done" },
+  { status: "done", label: "Completed", stash: "completed" },
 ];
 
 // Business areas = the "Category" single-select. Free text in the DB; this is
@@ -71,9 +75,9 @@ function matchesView(t: WorkTask, view: string, startOfToday: number, now: numbe
   const due = t.due_date ? new Date(t.due_date).getTime() : null;
   switch (view) {
     case "new": return !t.seen_by_owner && t.added_by !== "charlotte";
-    case "overdue": return due !== null && t.status !== "done" && due < startOfToday;
-    case "today": return due !== null && t.status !== "done" && due === startOfToday;
-    case "soon": return due !== null && t.status !== "done" && due > startOfToday && due <= startOfToday + 3 * DAY;
+    case "overdue": return due !== null && t.status !== "done" && t.status !== "backlog" && due < startOfToday;
+    case "today": return due !== null && t.status !== "done" && t.status !== "backlog" && due === startOfToday;
+    case "soon": return due !== null && t.status !== "done" && t.status !== "backlog" && due > startOfToday && due <= startOfToday + 3 * DAY;
     case "review": return t.status === "review";
     case "blocked": return t.blocked;
     case "quick": return t.tags.includes("quick-win");
@@ -94,8 +98,15 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
   const [tagFilter, setTagFilter] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
+  const [addTo, setAddTo] = useState<"inbox" | "backlog">("inbox");
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<WorkTask | null>(null);
+  const [showBacklog, setShowBacklog] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
+
+  const visibleColumns = COLUMNS.filter((c) =>
+    c.stash === "backlog" ? showBacklog : c.stash === "completed" ? showCompleted : true,
+  );
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -195,9 +206,13 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
     const title = newTitle.trim();
     if (!title || adding) return;
     setAdding(true);
-    const r = await createWorkTaskAction({ title, status: "inbox" });
+    const r = await createWorkTaskAction({ title, status: addTo });
     setAdding(false);
-    if (r.ok) { setTasks((prev) => [...prev, r.task]); setNewTitle(""); }
+    if (r.ok) {
+      setTasks((prev) => [...prev, r.task]);
+      setNewTitle("");
+      if (addTo === "backlog") setShowBacklog(true); // so the idea is visible where it landed
+    }
   }
 
   async function saveTask(id: string, patch: TaskPatch) {
@@ -268,6 +283,17 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
             {allTags.map((t) => <option key={t} value={t}>#{t}</option>)}
           </select>
         )}
+        <span className="w-px h-5 bg-[#dad4cb] mx-1" />
+        <button onClick={() => setShowBacklog((v) => !v)}
+          className={`text-xs px-2.5 h-7 rounded-full border transition-colors ${
+            showBacklog ? "bg-[#11242e] text-white border-[#11242e]" : "bg-white text-[#5a6a72] border-[#dad4cb] hover:border-[#11242e]"}`}>
+          {showBacklog ? "Hide backlog" : "Show backlog"}
+        </button>
+        <button onClick={() => setShowCompleted((v) => !v)}
+          className={`text-xs px-2.5 h-7 rounded-full border transition-colors ${
+            showCompleted ? "bg-[#11242e] text-white border-[#11242e]" : "bg-white text-[#5a6a72] border-[#dad4cb] hover:border-[#11242e]"}`}>
+          {showCompleted ? "Hide completed" : "Show completed"}
+        </button>
       </div>
 
       <div className="mb-5 flex gap-2 max-w-xl">
@@ -275,9 +301,14 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") addTask(); }}
-          placeholder="Add a task (lands in Inbox)…"
+          placeholder={addTo === "backlog" ? "Brain-dump an idea (lands in Backlog)…" : "Add a task (lands in Inbox)…"}
           className="flex-1 h-9 text-sm border border-[#dad4cb] rounded-lg bg-white px-3 text-[#11242e] focus:outline-none focus:ring-2 focus:ring-[#cd8b76]/40 focus:border-[#cd8b76]"
         />
+        <select value={addTo} onChange={(e) => setAddTo(e.target.value as "inbox" | "backlog")}
+          className="h-9 text-sm border border-[#dad4cb] rounded-lg bg-white px-2 text-[#11242e] focus:outline-none focus:border-[#cd8b76]">
+          <option value="inbox">→ Inbox</option>
+          <option value="backlog">→ Backlog</option>
+        </select>
         <button onClick={addTask} disabled={adding || !newTitle.trim()}
           className="h-9 px-4 text-sm font-semibold rounded-lg bg-[#11242e] text-white disabled:opacity-40">
           {adding ? "Adding…" : "Add"}
@@ -285,8 +316,10 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
       </div>
 
       <DndContext sensors={sensors} onDragStart={(e: DragStartEvent) => setDragId(String(e.active.id))} onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-start">
-          {COLUMNS.map((col) => (
+        <div
+          className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start lg:[grid-template-columns:repeat(var(--cols),minmax(0,1fr))]"
+          style={{ ["--cols"]: String(visibleColumns.length) } as CSSProperties}>
+          {visibleColumns.map((col) => (
             <Column key={col.status} status={col.status} label={col.label} tasks={byColumn[col.status]} onOpen={openTask} />
           ))}
         </div>
@@ -342,7 +375,7 @@ function Card({ task, onOpen }: { task: WorkTask; onOpen?: (t: WorkTask) => void
 
 function CardView({ task, overlay }: { task: WorkTask; overlay?: boolean }) {
   const isNew = !task.seen_by_owner && task.added_by !== "charlotte";
-  const overdue = task.due_date && task.status !== "done" && new Date(task.due_date) < new Date(new Date().toDateString());
+  const overdue = task.due_date && task.status !== "done" && task.status !== "backlog" && new Date(task.due_date) < new Date(new Date().toDateString());
 
   return (
     <div

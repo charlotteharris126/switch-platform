@@ -4,6 +4,15 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-08 — Work Hub: Backlog + Completed columns, agent capture, ClickUp task cutover
+- **Backlog/Ideas column** (migration `0195`: `backlog` added to `strategy.tasks` status CHECK; kept in lockstep with work-tasks `VALID_STATUS`, task-upsert `ALLOWED_STATUS`, the WorkTask TS type, board COLUMNS). A brain-dump pool reviewed periodically, distinct from Inbox.
+- **Board UI** (`work-board.tsx`): Backlog (leftmost) + Completed (was "Done") columns hidden by default behind "Show backlog" / "Show completed" toggles; dynamic grid sizes to visible column count; add-box has an Inbox/Backlog destination switch. Overdue/today/soon views + overdue badge exclude backlog. tsc clean.
+- **30-day auto-clear** (migration `0196`): daily pg_cron `purge-completed-work-tasks` deletes `status='done'` rows with `completed_at < now() - 30 days`. Only completed; backlog + active never touched.
+- **Agent + /handoff write path = task-upsert EF** (not a DB function). Migration `0194` first added SECURITY DEFINER `add_work_task`/`update_work_task` granted to `readonly_analytics`, but testing showed the Postgres MCP wraps queries in a READ ONLY transaction that refuses writes even from a definer function ("cannot execute INSERT in a read-only transaction"). Migration `0197` drops both functions. Net: the §11 "agents never write" model is left fully intact — no access-role exception. `task-upsert` EF extended to handle **update** (incl. tick-off via `status:'done'`) alongside insert; no delete (owner-only). Bearer-gated by `TASK_UPSERT_SECRET` (already configured), writes via `functions_writer`.
+- **Cutover wiring:** `/handoff` step 4 rewritten (ClickUp → task-upsert EF capture) + step 5 files a Hub task on cross-project push; workspace `CLAUDE.md` ticketing rule + `/prime-project` step 4 + session-start line now point at the Hub. ClickUp Task pipeline + Backlog retired; Prospect + Client lead pipelines stay on ClickUp.
+- **Activation pending (owner):** the `TASK_UPSERT_SECRET` value must be placed on each device (outside the iCloud-synced workspace, per the secrets rule) as the `TASK_UPSERT_SECRET` env var, so `/handoff`/agents can authenticate. Until then capture skips gracefully and notes it in the handoff.
+- Impact assessment (§8): writes only `strategy.tasks` (+ `leads.dead_letter` on EF failure); no PII; no schema_version bump; rollback = DOWN sections + cron.unschedule. Signed off: Owner (2026-06-08, "go").
+
 ## 2026-06-05 — Work Hub: editable card detail + tags/priority + roadmap-as-tab
 - Migration `0189`: added `tags text[]` (multi-label: quick-win/awaiting-approval/big-project/…) + `priority` (low/normal/high/urgent, CHECK) to `strategy.tasks`. `area_tag` kept as free-text "Category" (business area). GIN index on tags.
 - EFs `work-tasks` + `task-upsert` accept/return tags + priority.

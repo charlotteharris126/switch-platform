@@ -23,7 +23,7 @@ if (!DATABASE_URL) throw new Error("SUPABASE_DB_URL is not set.");
 
 const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, connect_timeout: 10, prepare: false });
 
-const VALID_STATUS = ["inbox", "agents", "this_week", "in_progress", "review", "done"];
+const VALID_STATUS = ["backlog", "inbox", "agents", "this_week", "in_progress", "review", "done"];
 const VALID_SIZE = ["tiny", "small", "big"];
 const VALID_PRIORITY = ["low", "normal", "high", "urgent"];
 const TASK_COLS = sql`

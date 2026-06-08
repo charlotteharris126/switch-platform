@@ -21,7 +21,7 @@ const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, connect_timeout: 
 
 const TASK_UPSERT_SECRET = Deno.env.get("TASK_UPSERT_SECRET");
 
-const ALLOWED_STATUS = new Set(["inbox", "agents", "this_week", "in_progress", "review", "done"]);
+const ALLOWED_STATUS = new Set(["backlog", "inbox", "agents", "this_week", "in_progress", "review", "done"]);
 const ALLOWED_SIZE = new Set(["tiny", "small", "big"]);
 const ALLOWED_PRIORITY = new Set(["low", "normal", "high", "urgent"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,6 +40,49 @@ Deno.serve(async (req: Request): Promise<Response> => {
     body = await req.json();
   } catch {
     return json({ error: "invalid_json" }, 400);
+  }
+
+  // UPDATE path: a valid `id` means update an existing task (incl. ticking off
+  // via status:'done'). Partial — only the fields present in the body change.
+  // No delete here: agents add + maintain, the owner is the only one who removes.
+  const idRaw = firstString(body["id"]);
+  if (idRaw) {
+    if (!UUID_RE.test(idRaw)) return json({ error: "invalid_id" }, 400);
+    const patch: Record<string, unknown> = {};
+    const uTitle = clip(firstString(body["title"]), 500);
+    if (uTitle) patch.title = uTitle;
+    if ("notes" in body) patch.notes = clip(firstString(body["notes"]), 5000);
+    if ("area_tag" in body) patch.area_tag = clip(firstString(body["area_tag"]), 100);
+    const uStatus = firstString(body["status"]);
+    if (uStatus) { if (!ALLOWED_STATUS.has(uStatus)) return json({ error: "invalid_status" }, 400); patch.status = uStatus; }
+    const uPriority = firstString(body["priority"]);
+    if (uPriority) { if (!ALLOWED_PRIORITY.has(uPriority)) return json({ error: "invalid_priority" }, 400); patch.priority = uPriority; }
+    const uSize = firstString(body["size"]);
+    if (uSize) { if (!ALLOWED_SIZE.has(uSize)) return json({ error: "invalid_size" }, 400); patch.size = uSize; }
+    if (Array.isArray(body["tags"])) {
+      patch.tags = (body["tags"] as unknown[]).filter((t) => typeof t === "string").map((t) => (t as string).slice(0, 50)).slice(0, 20);
+    }
+    if ("due_date" in body) {
+      const d = firstString(body["due_date"]);
+      patch.due_date = d && DATE_RE.test(d) ? d : null;
+    }
+    if (typeof body["blocked"] === "boolean") {
+      patch.blocked = body["blocked"];
+      patch.blocked_reason = body["blocked"] ? clip(firstString(body["blocked_reason"]), 500) : null;
+    }
+    if (Object.keys(patch).length === 0) return json({ error: "no_fields_to_update" }, 400);
+    try {
+      const rows = await sql.begin(async (trx) => {
+        await trx`SET LOCAL ROLE functions_writer`;
+        return await trx<Array<{ id: string }>>`
+          UPDATE strategy.tasks SET ${trx(patch)} WHERE id = ${idRaw} RETURNING id`;
+      });
+      if (rows.length === 0) return json({ error: "not_found" }, 404);
+      return json({ status: "ok", id: rows[0].id, op: "update" });
+    } catch (err) {
+      console.error("strategy.tasks UPDATE failed:", err);
+      return json({ error: "internal" }, 500);
+    }
   }
 
   const title = clip(firstString(body["title"]), 500);
