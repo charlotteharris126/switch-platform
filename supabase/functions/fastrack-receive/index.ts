@@ -141,6 +141,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const submittedAt = firstString(data.submitted_at) ?? new Date().toISOString();
   const transportHelp = toBool(data.transport_help_requested);
   const docsReady = toBool(data.docs_ready);
+  // AEB fastrack only (team-leading): learner reconfirms they earn under £30k.
+  // NULL on FCFJ fastracks (the question isn't asked). Extra due-diligence signal.
+  const earningsReconfirmed = toBool(data.earnings_reconfirmed);
   const voiceRaw = firstString(data.voice_of_learner_intro);
   const voice = voiceRaw
     ? voiceRaw.trim().slice(0, VOICE_OF_LEARNER_MAX_LEN)
@@ -167,6 +170,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           docs_ready,
           l3_reconfirmed,
           l3_mismatch_flag,
+          earnings_reconfirmed,
           voice_of_learner_intro,
           terms_accepted,
           marketing_opt_in,
@@ -181,6 +185,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ${docsReady},
           ${l3Reconfirmed},
           ${l3MismatchFlag},
+          ${earningsReconfirmed},
           ${voice},
           ${termsAccepted},
           ${marketingOptIn},
@@ -509,6 +514,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         l3Reconfirmed,
         voice,
         l3MismatchFlag,
+        earningsReconfirmed,
       });
 
       const sheetPayload: Record<string, unknown> = {
@@ -727,17 +733,23 @@ function composeFastrackNotes(args: {
   l3Reconfirmed: boolean | null;
   voice: string | null;
   l3MismatchFlag: boolean;
+  earningsReconfirmed?: boolean | null;
 }): string {
   const docsLine = args.docsReady === false ? "no ⚠ Docs gathering needed" : yn(args.docsReady);
   const l3Line = args.l3MismatchFlag ? "yes ⚠ MISMATCH" : yn(args.l3Reconfirmed);
-  const head = [
+  const parts = [
     `Cohort confirmed: ${yn(args.cohortConfirmed)}`,
     `Transport help: ${yn(args.transportHelp)}`,
     `Docs ready: ${docsLine}`,
     `L3 reconfirmed: ${l3Line}`,
-  ].join(" | ");
+  ];
+  // AEB fastracks carry an earnings reconfirm instead of L3; surface it when
+  // present. NULL on FCFJ → not appended, so FCFJ summaries are unchanged.
+  if (args.earningsReconfirmed !== null && args.earningsReconfirmed !== undefined) {
+    parts.push(`Earnings under £30k reconfirmed: ${yn(args.earningsReconfirmed)}`);
+  }
   const tail = `Notes: ${args.voice ?? "—"}`;
-  return `${head}\n${tail}`;
+  return `${parts.join(" | ")}\n${tail}`;
 }
 
 function lostReasonHumanText(reason: LostReason): string {
