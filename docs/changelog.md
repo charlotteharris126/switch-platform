@@ -4,6 +4,15 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-08 — Persist + route earnings_band (EMS team-leading income gate)
+- Migration: `0200_submissions_earnings_band.sql` — added `leads.submissions.earnings_band TEXT NULL` (additive, §2 free).
+- EF mapping: `_shared/ingest.ts` reads `earnings_band` generically into the canonical row + the insert (so netlify-lead-router AND netlify-leads-reconcile persist it). `_shared/route-lead.ts` — added to the Submission interface, the three SELECT column lists, and the `appendToProviderSheet` payload `row`, so the declared band reaches the provider sheet.
+- Sheet appender: `apps-scripts/provider-sheet-appender-v2.gs` FIELD_MAP gains `earningsband`/`earnings`/`incomeband`/`declaredincome` → `earnings_band`. **Manual step pending (Charlotte):** add an "Earnings band" header column to the EMS sheet and redeploy its bound Apps Script copy with the updated canonical script — until then the value is persisted + sent but lands nowhere on the sheet (no matching header = no-op).
+- `dq_reason`: no CHECK constraint on `leads.submissions.dq_reason` (free text) — accepts `over_income_threshold` already, nothing to do.
+- Deployed: netlify-lead-router, netlify-leads-reconcile, routing-confirm (the three on-path importers). The other 8 shared-module importers are functionally unaffected by the additive field; they bundle it on next routine deploy.
+- Producer: funded form (Mable, switchable/site), schema doc updated additively (no version bump). Page `introduction-to-management-sunderland` not live yet (held on EMS funding-scheme name). No leads flowing — additive + safe, readies the pipeline.
+- Impact (§8): readonly_analytics still has raw SELECT on leads.submissions (legacy §6a), so the column is auto-readable (quasi-identifier, not PII). No existing consumer reads it. Rollback = drop column. Signed off: Owner (2026-06-08).
+
 ## 2026-06-08 — Work Hub: Backlog + Completed columns, agent capture, ClickUp task cutover
 - **Backlog/Ideas column** (migration `0195`: `backlog` added to `strategy.tasks` status CHECK; kept in lockstep with work-tasks `VALID_STATUS`, task-upsert `ALLOWED_STATUS`, the WorkTask TS type, board COLUMNS). A brain-dump pool reviewed periodically, distinct from Inbox.
 - **Board UI** (`work-board.tsx`): Backlog (leftmost) + Completed (was "Done") columns hidden by default behind "Show backlog" / "Show completed" toggles; dynamic grid sizes to visible column count; add-box has an Inbox/Backlog destination switch. Overdue/today/soon views + overdue badge exclude backlog. tsc clean.

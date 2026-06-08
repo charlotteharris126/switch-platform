@@ -257,6 +257,7 @@ CREATE TABLE leads.submissions (
   can_start_on_intake_date   BOOLEAN, -- legacy single-cohort yes/no. Schema v1.1; retained for one transition cycle alongside the v1.2 cohort-aware fields below.
   outcome_interest           TEXT,
   why_this_course            TEXT,
+  earnings_band              TEXT, -- funded income gate (earnings qualifier step, EMS team-leading). under_30k / over_30k. Added migration 0200.
 
   -- Cohort-aware intake fields (added in migration 0041; lead payload schema v1.2).
   -- preferred_intake_id: the cohort the learner picked first when offered multiple

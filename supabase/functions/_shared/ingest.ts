@@ -90,6 +90,10 @@ export interface CanonicalSubmission {
   experiment_id: string | null;
   experiment_variant: string | null;
 
+  // Funded income gate (the `earnings` qualifier step, EMS team-leading page).
+  // under_30k passes / over_30k DQ'd at the gate. Added 2026-06-08.
+  earnings_band: string | null;
+
   // Client-generated UUIDv4 set by the funded form's pre-submit JS so
   // the post-redirect /funded/thank-you/?ref=<uuid> link and the
   // subsequent fastrack form can look up the parent submission without
@@ -296,7 +300,7 @@ export async function insertSubmission(
         fbclid, gclid, referrer,
         first_name, last_name, email, phone, la, age_band,
         employment_status, prior_level_3_or_higher, can_start_on_intake_date,
-        outcome_interest, why_this_course,
+        outcome_interest, why_this_course, earnings_band,
         preferred_intake_id, acceptable_intake_ids,
         postcode, region, reason, interest, situation, qualification,
         start_when, budget, courses_selected,
@@ -315,7 +319,7 @@ export async function insertSubmission(
         ${row.fbclid}, ${row.gclid}, ${row.referrer},
         ${row.first_name}, ${row.last_name}, ${row.email}, ${row.phone}, ${row.la}, ${row.age_band},
         ${row.employment_status}, ${row.prior_level_3_or_higher}, ${row.can_start_on_intake_date},
-        ${row.outcome_interest}, ${row.why_this_course},
+        ${row.outcome_interest}, ${row.why_this_course}, ${row.earnings_band},
         ${row.preferred_intake_id}, ${row.acceptable_intake_ids},
         ${row.postcode}, ${row.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
@@ -481,6 +485,9 @@ function normalise(
     ),
     outcome_interest: firstString(data["outcome_interest"], data["outcome"]),
     why_this_course: firstString(data["why_this_course"], data["why"]),
+    // Read generically so both the main funded form (hidden field) and the
+    // injected DQ waitlist row (over_30k) land the declared band.
+    earnings_band: firstString(data["earnings_band"], data["earnings-band"]),
 
     // Schema 1.2 cohort fields. preferred_intake_id is a single string
     // (slug like "tv-may-06"). acceptable_intake_ids comes from a hidden

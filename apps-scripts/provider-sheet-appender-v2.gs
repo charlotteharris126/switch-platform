@@ -132,6 +132,15 @@ const FIELD_MAP = {
   'whythiscourse':     'why_this_course',
   'why':               'why_this_course',
 
+  // Funded income gate (earnings qualifier step, EMS team-leading page,
+  // 2026-06-08). Declared band: under_30k (passes) / over_30k. Add an
+  // "Earnings band" header to a funded sheet to surface it; sheets without
+  // the header stay no-ops.
+  'earningsband':      'earnings_band',
+  'earnings':          'earnings_band',
+  'incomeband':        'earnings_band',
+  'declaredincome':    'earnings_band',
+
   // Self-funded-shape learner fields (Session 5)
   'postcode':          'postcode',
   'region':            'region',
