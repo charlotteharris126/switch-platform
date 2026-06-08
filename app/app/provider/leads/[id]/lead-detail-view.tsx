@@ -44,6 +44,7 @@ export interface LeadDetailSubmission {
   // Learner-shape fields. Populated for lead_type='learner'.
   age_band: string | null;
   employment_status: string | null;
+  earnings_band: string | null;
   course_id: string | null;
   funding_category: string | null;
   funding_route: string | null;
@@ -361,6 +362,7 @@ export function LeadDetailView({
               <Section title="About the learner">
                 <Row label="Age band" value={labelAgeBand(submission.age_band)} />
                 <Row label="Employment" value={labelEmployment(submission.employment_status)} />
+                <Row label="Earnings band" value={submission.earnings_band === "under_30k" ? "Under £30,000" : submission.earnings_band === "over_30k" ? "Over £30,000" : submission.earnings_band} />
                 <Row label="Has Level 3 or higher" value={booleanLabel(submission.prior_level_3_or_higher)} />
                 <Row label="What they're after" value={labelOutcomeInterest(submission.outcome_interest)} />
               </Section>
