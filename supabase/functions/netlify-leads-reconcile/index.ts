@@ -79,6 +79,12 @@ async function getAuditSharedSecret(): Promise<string> {
 const LOOKBACK_HOURS = 24;
 const MAX_PAGES = 5; // defensive cap; pilot volume is ~10/day so 1 page is normal
 
+// Re-deliver missed leads through the live router (insert + route + provider
+// email/SMS + referral), identical to a real Netlify webhook. SUPABASE_URL is
+// auto-injected in Edge Functions.
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "https://igvlngouxcirqhlsrhga.supabase.co";
+const LEAD_ROUTER_URL = `${SUPABASE_URL}/functions/v1/netlify-lead-router`;
+
 interface NetlifyApiSubmission {
   id: string;
   form_name?: string;
@@ -212,41 +218,35 @@ Deno.serve(async (req: Request): Promise<Response> => {
         continue;
       }
 
-      const result = await insertSubmission(sql, row);
+      // Re-deliver the missed lead through the live router — identical to a real
+      // Netlify webhook — so it gets the FULL treatment: insert + routing +
+      // provider email/SMS + referral. The router's insert is idempotent
+      // (ON CONFLICT on the Netlify submission id), so if Netlify's webhook later
+      // catches up there is no double-route. This turns the backfill from
+      // "observe a missed lead" into "recover and deliver it automatically".
+      const resp = await fetch(LEAD_ROUTER_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(sub),
+      });
+      let respJson: { status?: string; submission_id?: number } = {};
+      try { respJson = await resp.json(); } catch { /* non-JSON response */ }
 
-      if (result.duplicate) {
-        alreadyPresent++;
+      if (respJson.status === "duplicate") { alreadyPresent++; continue; }
+      if (respJson.status === "ignored") { continue; }
+      if (!resp.ok || (respJson.status !== "ok" && respJson.status !== "dead_letter")) {
+        errors.push({ netlify_id: sub.id, error: `router re-deliver ${resp.status}: ${respJson.status ?? "no status"}` });
         continue;
       }
 
       backfills.push({
-        submission_id: result.id,
+        submission_id: respJson.submission_id ?? null,
         netlify_id: sub.id,
         form_name: formName,
         course_id: row.course_id,
         email: row.email,
         created_at: sub.created_at ?? null,
       });
-
-      await writeBackfillDeadLetter(result.id, sub.id, formName);
-
-      // Mirror the router's referral processing so back-filled leads get the
-      // same anti-fraud + leads.referrals row as fast-path leads. Inline-await
-      // is fine here: this function runs on an hourly cron, not a user-facing
-      // request, so latency from the lookup + transaction doesn't matter.
-      // Errors are logged and swallowed so a referral failure can't abort the
-      // remainder of the back-fill batch.
-      const refCode = extractRefCode(sub as Record<string, JsonValue>);
-      if (refCode) {
-        try {
-          await processReferral(sql, result.id, refCode, row);
-        } catch (err) {
-          console.error(
-            `referral processing failed for back-filled lead ${result.id}:`,
-            describeError(err),
-          );
-        }
-      }
     } catch (err) {
       console.error(`reconcile ${apply ? "insert" : "dry-run"} failed for ${sub.id}:`, describeError(err));
       errors.push({ netlify_id: sub.id, error: describeError(err) });
