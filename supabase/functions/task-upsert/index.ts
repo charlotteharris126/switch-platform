@@ -19,7 +19,17 @@ if (!DATABASE_URL) {
 
 const sql = postgres(DATABASE_URL, { max: 1, idle_timeout: 20, connect_timeout: 10, prepare: false });
 
-const TASK_UPSERT_SECRET = Deno.env.get("TASK_UPSERT_SECRET");
+// Auth key lives in the Vault (migration 0198), not an env var — so there is one
+// source of truth and nothing is stored on any device. Read it via the DB helper.
+async function taskCaptureKey(): Promise<string | null> {
+  try {
+    const [row] = await sql<Array<{ k: string }>>`SELECT public.get_task_capture_key() AS k`;
+    return row?.k ?? null;
+  } catch (err) {
+    console.error("get_task_capture_key failed:", err);
+    return null;
+  }
+}
 
 const ALLOWED_STATUS = new Set(["backlog", "inbox", "agents", "this_week", "in_progress", "review", "done"]);
 const ALLOWED_SIZE = new Set(["tiny", "small", "big"]);
@@ -30,10 +40,11 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
-  // Internal-only gate. Fail closed if the secret isn't configured.
-  if (!TASK_UPSERT_SECRET) return json({ error: "not_configured" }, 503);
+  // Internal-only gate. Key fetched from the Vault; fail closed if unavailable.
+  const captureKey = await taskCaptureKey();
+  if (!captureKey) return json({ error: "not_configured" }, 503);
   const auth = req.headers.get("authorization") || "";
-  if (auth !== `Bearer ${TASK_UPSERT_SECRET}`) return json({ error: "unauthorized" }, 401);
+  if (auth !== `Bearer ${captureKey}`) return json({ error: "unauthorized" }, 401);
 
   let body: Record<string, unknown>;
   try {

@@ -58,6 +58,17 @@ All work in this folder is bound by:
 - `docs/data-architecture.md` is the design source of truth. Migrations implement what the doc says, not the other way round.
 - **Brevo attribute wiring changes require a same-session backfill plan.** Any change to a function in `_shared/route-lead.ts` that produces a Brevo contact attribute value (e.g. `buildReferralUrl`, `buildFastrackUrl`, the `SW_COURSE_*` resolution path, the enrol-status lookup) leaves existing Brevo contacts holding the old value until they happen to be re-upserted. That stale value gets rendered verbatim in any marketing broadcast that references the attribute. **Before merging the wiring change, queue a Brevo backfill ticket for Sasha** and flag the affected attribute(s) in `platform/docs/changelog.md`. The next marketing broadcast referencing the attribute is gated on that backfill being run (see `switchable/email/CLAUDE.md` Pre-broadcast gate).
 
+### Laptop-side automation auth (the capture pattern)
+
+The one standard for anything that runs on a laptop (Claude in a session: agents, `/handoff`) and needs to WRITE business data. Agents read via the Postgres MCP (`readonly_analytics`) and cannot write the DB directly — and nothing authenticating is ever stored on a device (the workspace is iCloud-synced; secrets can't live there, and writing outside the workspace is barred).
+
+The pattern, end to end:
+1. The write goes through an Edge Function (functions_writer), never direct DB.
+2. The EF's auth key lives in the **Vault**, generated in-DB so its plaintext never touches a file. The EF validates the incoming key by reading it from the Vault.
+3. The laptop caller **fetches the key at runtime** from the Vault via a narrow `SECURITY DEFINER` reader granted to `readonly_analytics` (returns only that one scoped key, not the general `get_shared_secret`), then POSTs to the EF.
+
+First instance (Work Hub capture): EF `task-upsert` (add + update, no delete), key `TASK_CAPTURE_KEY` (migration 0198), reader `public.get_task_capture_key()`, table grant for update in 0199. Any future laptop-side writer reuses this shape: Vault key + narrow readonly reader + gated EF. Do not store a key on a device, and do not widen the read-only role to write.
+
 ### Key reference files
 
 - Schema design: `platform/docs/data-architecture.md`
