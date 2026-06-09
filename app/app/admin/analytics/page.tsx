@@ -51,6 +51,7 @@ interface SubmissionRow {
 interface PartialRow {
   step_reached: number | null;
   is_complete: boolean | null;
+  form_name: string | null;
   funding_category: string | null;
   funding_route: string | null;
   first_seen_at: string;
@@ -84,6 +85,17 @@ const STEP_LABEL: Record<string, string> = {
   "9": "Submitted",
   "90": "Skipped course matches",
   "91": "Held on DQ panel",
+};
+
+// Friendly names for the form_name values trackPartial() sends. Unknown forms
+// fall back to the raw value, so a new funnel still shows up the day it ships.
+const FORM_LABEL: Record<string, string> = {
+  "switchable-funded": "Funded course form",
+  "switchable-self-funded": "Self-funded course form",
+  "s4b-employer-lead-v1": "Employer lead (S4B)",
+  "fastrack-funded-v1": "Fastrack (post-DQ)",
+  "switchable-waitlist": "Waitlist",
+  "switchable-waitlist-enrichment": "Waitlist enrichment",
 };
 
 const DQ_REASON_LABEL: Record<string, string> = {
@@ -129,7 +141,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   let partialsQ = supabase
     .schema("leads")
     .from("partials")
-    .select("step_reached, is_complete, funding_category, funding_route, first_seen_at");
+    .select("step_reached, is_complete, form_name, funding_category, funding_route, first_seen_at");
   if (cutoff) partialsQ = partialsQ.gte("first_seen_at", cutoff);
 
   const [subsRes, partialsRes, enrolRes, providersRes, adsRes] = await Promise.all([
@@ -239,20 +251,20 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   const priorL3 = bucketBy(peopleSubs, (s) => (s.prior_level_3_or_higher === null ? null : s.prior_level_3_or_higher ? "Yes (Level 3+)" : "No"), enrolledSubIds);
 
   // ─── Section 3: Funnel drop-off ─────────────────────────────────────
-  const stepMap = new Map<number, { step: number; total: number; completed: number; abandoned: number }>();
+  // Combined across all forms, then split per form_name. The combined view
+  // shows overall health; the per-form blocks show WHICH funnel leaks where
+  // (e.g. the AEB Sunderland form bleeding at the income step vs the FCFJ one).
+  const allFunnel = buildFunnel(partials);
+  const partialsByForm = new Map<string, PartialRow[]>();
   for (const p of partials) {
-    if (p.step_reached === null) continue;
-    let bucket = stepMap.get(p.step_reached);
-    if (!bucket) {
-      bucket = { step: p.step_reached, total: 0, completed: 0, abandoned: 0 };
-      stepMap.set(p.step_reached, bucket);
-    }
-    bucket.total++;
-    if (p.is_complete) bucket.completed++;
-    else bucket.abandoned++;
+    const f = p.form_name ?? "(unknown)";
+    const arr = partialsByForm.get(f);
+    if (arr) arr.push(p);
+    else partialsByForm.set(f, [p]);
   }
-  const funnelRows = Array.from(stepMap.values()).sort((a, b) => a.step - b.step);
-  const funnelMaxTotal = Math.max(1, ...funnelRows.map((r) => r.total));
+  const funnelByForm = Array.from(partialsByForm.entries())
+    .map(([form, rows]) => ({ form, sessions: rows.length, ...buildFunnel(rows) }))
+    .sort((a, b) => b.sessions - a.sessions);
 
   // ─── Section 4: Course demand vs supply ─────────────────────────────
   const courseMap = new Map<string, { course: string; leads: number; providers: Set<string>; routed: number; enrolled: number }>();
@@ -450,36 +462,32 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
       {/* Section 3: Funnel */}
       <Section
         title="Funnel drop-off"
-        subtitle="How far people get on the form before they leave. Step 1 = landed; later steps = each question they answered. Bigger abandoned bar = bigger problem."
+        subtitle="How far people get on the form before they leave. Step 1 = landed; later steps = each question they answered. Bigger abandoned bar = bigger problem. Combined first, then split per form so you can see which funnel leaks where."
       >
-        {funnelRows.length === 0 ? (
+        {allFunnel.rows.length === 0 ? (
           <Empty>No partial submissions captured in this window.</Empty>
         ) : (
-          <div className="bg-white border border-[#dad4cb] rounded-xl p-4 space-y-2">
-            {funnelRows.map((r) => {
-              const completedPct = (r.completed / funnelMaxTotal) * 100;
-              const abandonedPct = (r.abandoned / funnelMaxTotal) * 100;
-              return (
-                <div key={r.step} className="space-y-1">
-                  <div className="flex justify-between items-baseline text-xs">
-                    <span className="font-bold text-[#11242e]">
-                      {STEP_LABEL[String(r.step)] ?? `Step ${r.step}`}
-                    </span>
-                    <span className="text-[#5a6a72]">
-                      {r.total} sessions · {r.completed} completed · {r.abandoned} abandoned
-                    </span>
-                  </div>
-                  <div className="h-3 w-full bg-[#f4f1ed] rounded-full overflow-hidden flex">
-                    <div className="bg-emerald-500" style={{ width: `${completedPct}%` }} />
-                    <div className="bg-[#cd8b76]" style={{ width: `${abandonedPct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-            <div className="flex gap-4 mt-3 text-[10px] text-[#5a6a72]">
-              <span><span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" /> Completed</span>
-              <span><span className="inline-block w-2 h-2 rounded-full bg-[#cd8b76] mr-1" /> Abandoned</span>
+          <div className="space-y-4">
+            <div className="bg-white border border-[#dad4cb] rounded-xl p-4 space-y-2">
+              <h3 className="text-[10px] uppercase tracking-[2px] text-[#5a6a72] font-bold mb-1">
+                All forms ({partials.length} sessions)
+              </h3>
+              <FunnelBars rows={allFunnel.rows} max={allFunnel.max} withLegend />
             </div>
+
+            {funnelByForm.length > 1 && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {funnelByForm.map((f) => (
+                  <div key={f.form} className="bg-white border border-[#dad4cb] rounded-xl p-4 space-y-2">
+                    <h3 className="text-[10px] uppercase tracking-[2px] text-[#5a6a72] font-bold mb-1">
+                      {FORM_LABEL[f.form] ?? f.form}{" "}
+                      <span className="text-[#11242e]">({f.sessions} sessions)</span>
+                    </h3>
+                    <FunnelBars rows={f.rows} max={f.max} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </Section>
@@ -599,6 +607,66 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
         </div>
       </Section>
     </div>
+  );
+}
+
+interface FunnelStep {
+  step: number;
+  total: number;
+  completed: number;
+  abandoned: number;
+}
+
+// Aggregate a set of partial rows into per-step completed/abandoned counts.
+// Shared by the combined funnel and each per-form funnel.
+function buildFunnel(rows: PartialRow[]): { rows: FunnelStep[]; max: number } {
+  const stepMap = new Map<number, FunnelStep>();
+  for (const p of rows) {
+    if (p.step_reached === null) continue;
+    let bucket = stepMap.get(p.step_reached);
+    if (!bucket) {
+      bucket = { step: p.step_reached, total: 0, completed: 0, abandoned: 0 };
+      stepMap.set(p.step_reached, bucket);
+    }
+    bucket.total++;
+    if (p.is_complete) bucket.completed++;
+    else bucket.abandoned++;
+  }
+  const out = Array.from(stepMap.values()).sort((a, b) => a.step - b.step);
+  return { rows: out, max: Math.max(1, ...out.map((r) => r.total)) };
+}
+
+function FunnelBars({ rows, max, withLegend }: { rows: FunnelStep[]; max: number; withLegend?: boolean }) {
+  if (rows.length === 0) return <Empty>No sessions.</Empty>;
+  return (
+    <>
+      {rows.map((r) => {
+        const completedPct = (r.completed / max) * 100;
+        const abandonedPct = (r.abandoned / max) * 100;
+        return (
+          <div key={r.step} className="space-y-1">
+            <div className="flex justify-between items-baseline text-xs">
+              <span className="font-bold text-[#11242e]">
+                {STEP_LABEL[String(r.step)] ?? `Step ${r.step}`}
+              </span>
+              <span className="text-[#5a6a72]">
+                {r.total} sessions · {r.completed} completed · {r.abandoned} abandoned
+              </span>
+            </div>
+            <div className="h-3 w-full bg-[#f4f1ed] rounded-full overflow-hidden flex">
+              <div className="bg-emerald-500" style={{ width: `${completedPct}%` }} />
+              <div className="bg-[#cd8b76]" style={{ width: `${abandonedPct}%` }} />
+            </div>
+          </div>
+        );
+      })}
+      {withLegend && (
+        <div className="flex gap-4 mt-3 text-[10px] text-[#5a6a72]">
+          <span><span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" /> Completed</span>
+          <span><span className="inline-block w-2 h-2 rounded-full bg-[#cd8b76] mr-1" /> Abandoned</span>
+        </div>
+      )}
+    </>
   );
 }
 
