@@ -1,34 +1,36 @@
-# Platform Handoff, Session 69, 2026-06-09
+# Platform Handoff, Session 70, 2026-06-09
 
 ## Current state
-Data layer is healthy: migrations aligned (0001-0203, no drift), lead flow clean, all crons active. A drift check this session surfaced and fixed a changelog gap, closed the partials growth trigger by enhancing the existing Analytics funnel (per-form split), and confirmed a real lagged lead (578) recovered correctly. One governance issue (dead_letter used as a drift-notice log) is now ticketed for Mira.
+Lead-delivery pipeline diagnosed and stabilised. The Netlify -> `netlify-lead-router` webhook has a known ~3% intermittent drop (migration 0202); it became visible once the Sunderland EMS campaign raised volume on 8 Jun, so dropped leads waited up to 10 min for the backup and notifications arrived late/out of order. Session 69's "is the 578 lag a one-off?" question is now answered: it is the recurring webhook flakiness. Mitigated this session: reconcile sweep now every 2 min with a 2-min grace window. Every one of today's leads is verified routed + EMS-notified + learner-emailed + SMS-sent. Root cause is Netlify's delivery layer (not our function/config); mitigated, not eliminated.
 
 ## What was done this session
-- **Data drift check (Sasha).** Migrations 0001-0203 aligned both directions. Lead flow: 9/24h, 19/7d, 0 unrouted >48h, routing gap zero. All 21 crons active (incl netlify-forms-audit-hourly, purge-stale-partials, reconcile now */10). Labs ingesting fine; the 3 Jun "permission denied" self-resolved during the same-day PII fix. Secrets: no annual rotations due within 60 days.
-- **Changelog backfill** (commit on main). Session 68 shipped 0201 (AEB fastrack earnings reconfirm), 0202 (webhook-lag fix / reconcile */10), 0203 (test-lead archive), and data-op 039 (EMS Sunderland rep) but only logged 0200. All four backfilled per §9.
-- **Live lead 578 verified.** `janineolds@hotmail.com`, Sunderland team-leading, lagged 72s then recovered + routed to EMS by reconcile. Today's other 3 Sunderland leads hit the fast path (2s). Webhook alive; one-off lag, not a dead webhook.
-- **Analytics funnel: per-form split** (commit on main, pushed). Added `form_name` to the partials query; funnel section now shows combined + one block per live form (6 forms). Closes the >200 partials/week growth trigger by enhancing `/admin/analytics` rather than building a duplicate page. tsc clean.
-- **Work Hub task filed** for the dead_letter redesign (id `e2b2615f`, area_tag platform).
+- Diagnosed the lag via `submit_to_insert` timing: healthy leads land in ~2s; affected leads land only on reconcile ticks (72s-7min). Proved the router function is healthy (unauth POST 200 in ~0.85s) and the webhook config is correct (recreating it did not fix it) -> the flaky link is Netlify's outgoing-webhook delivery.
+- Migration `0204`: reconcile cron `*/10` -> `*/2` (worst-case recovery ~2-4 min). Verified live (`vw_cron_jobs` = `*/2`, active).
+- Redeployed `netlify-leads-reconcile`: 2-min grace window (`GRACE_MINUTES=2`) so the faster sweep does not race the healthy ~97% webhook (was causing false "back-filled" alerts + dropped re-delivered emails); and now actually calls `writeBackfillDeadLetter` (writer existed, was never invoked) -> resolves session 69 step 3 (the alert's "logged in dead_letter" claim is now true).
+- Verified end to end via `audit.actions`: all 5 real leads today (575-578, 580) `provider_notified=true` + `sheet_appended=true`; learner `u1_funded` in `crm.email_log`; SMS in `crm.sms_log` all `sent`, no failures. Reconcile-recovered leads (578, 580) also fully notified.
+- Confirmed SMS/email follow-ups are cron-driven (read the DB every minute), not webhook-triggered, so they were never broken; only the lead's DB-arrival lagged. Today's SMS all `sent` -> session 69 step 1 (Brevo SMS credits) is effectively confirmed funded.
+- Migration `0205`: archived diagnostic test rows 584, 585.
+- Wrote `docs/incident-2026-06-09-lead-webhook-lag.md`; logged 0204/0205 + verification in `docs/changelog.md`.
+- CROSS-PROJECT (site): the session-68/69 `earnings_band` empty-field bug was fixed and deployed this session (site repo). It was the only funnel field wrapped in a `{{#IF}}` conditional + carrying two failed patches; now mirrors `employment_status`. Confirmed live: leads 577/578/580 landed `earnings_band=under_30k`.
 
 ## Next steps
-1. **Confirm Brevo SMS credits topped up.** A 31 May `brevo_transactional_sms` 402 "not_enough_credits" in dead_letter means learner fastrack/chaser SMS failed that day. SMS is on the live EMS Sunderland path now, so verify credits are funded.
-2. **Watch webhook delivery timing** on the next real leads (submit-to-insert should be seconds). Lead 578 lagged 72s today; if lag recurs, pull Netlify's outgoing webhook delivery log for `switchable-funded` (Netlify-side vs our-side).
-3. **Fix the stale reconcile alert template** (platform-side, in `netlify-leads-reconcile`): the "back-fill" email still says "logged in leads.dead_letter with source='reconcile_backfill'", but the 0202 rework re-delivers through the router and writes no such row. Update the copy so the alert matches actual behaviour.
-4. **Dead_letter redesign** (ticketed, `e2b2615f`): Mira's architecture call. Route drift-notices (sheet_drift_detected, brevo_attribute_drift, brevo_attribute_reconcile_async_check_result) to their own log table, or auto-resolve on write, so §10 governance signal works again.
-5. **Carries:** rotate BREVO_API_KEY + ROUTING_CONFIRM_SHARED_SECRET (plaintext in Session 3 transcript) + the 3 leaked creds in `~/.zsh_history` (owner-driven security); ClickUp cutover remaining (wire Rosa/Nell to task-upsert); billing reconciliation (`/admin/billing`).
+1. Owner + Mira decide the durable fix: add a client-side direct POST from the form to the router (deduped on `client_nonce`/`session_id`) to remove the Netlify-webhook dependency entirely, OR accept the 2-min self-healing backup as sufficient for pilot. Architecture decision, Mira signs off.
+2. If durable fix is a go: scope `client_nonce` dedup in `_shared/ingest.ts` (touches every importer -> redeploy all) + CORS on the router for browser POSTs.
+3. Dead_letter redesign (ticketed `e2b2615f`, Mira): route drift-notices to their own log table or auto-resolve on write, so the §10 "anything old = a real problem" signal works again.
+4. Optional: mirror provider-notification sends into `crm.email_log` (currently only in `audit.actions`); read Netlify's webhook delivery log to confirm failing-vs-not-attempted (dashboard only).
+5. Carries: rotate BREVO_API_KEY + ROUTING_CONFIRM_SHARED_SECRET + the 3 leaked creds in `~/.zsh_history` (owner-driven security); ClickUp cutover (wire Rosa/Nell to task-upsert); billing reconciliation (`/admin/billing`).
 
 ## Decisions and open questions
-- **Closed the funnel trigger by enhancing, not building.** Why: `/admin/analytics` already had a funnel drop-off section reading partials; a new page would duplicate it (breaks no-dup rule). The genuine gap at 271 sessions/week was per-form visibility, so the fix was a per-form split in place.
-- **dead_letter governance is broken by design, not by incident.** Why: 921 rows / ~110 "unresolved" / oldest 20 days is almost all routine drift-notices written by daily crons, not failed ingestions. No leads lost. Needs the redesign (step 4) to restore the "anything old = a real problem" signal.
-- **Open:** is the 72s lag on 578 a one-off Netlify wobble or the start of a recurrence? Needs the next-leads timing to confirm.
+- Decision (owner-authorised): speed reconcile to `*/2` + grace window as interim mitigation rather than chase Netlify's flakiness. WHY: removes the user-facing pain (delays, false alarms) now; the root cause is third-party (Netlify) reliability needing a larger change to eliminate.
+- Open: is today's lag baseline ~3% flakiness amplified by volume, or a worse-than-usual Netlify spell? Cannot confirm without Netlify's status page / delivery log.
+- Open: durable-fix go/no-go (step 1) and dead_letter redesign (step 3) are Mira's calls.
 
 ## Watch items
-- Webhook delivery timing on the next real leads (578 lagged 72s today; 575/576/577 were 2s).
-- Brevo SMS credit balance (step 1) until confirmed funded.
-- The `*/10` reconcile fires provider emails/SMS on recovery; watch for unexpected double-sends (idempotency should prevent).
-- dead_letter row count climbing from daily drift-notices until the redesign lands.
+- Next real leads: `submit_to_insert` ~2s (webhook) or <=~4 min (backup); no false "back-filled" alerts on healthy leads. If alarms persist or delays exceed ~4 min, the grace+cron change is not holding.
+- Every new lead should show `provider_notified=true` in `audit.actions` + a `crm.email_log` learner row + a `crm.sms_log` row. Spot-check the next few.
+- dead_letter row count still climbing from daily drift-notices until the redesign lands.
 
 ## Next session
-- **Folder:** platform (Sasha) for steps 1-3, OR switchable/site (Mable) if the session-68 `earnings_band` empty-field form bug is the priority.
-- **First task:** confirm Brevo SMS credits are topped up (live-impact), then update the stale reconcile alert template.
-- **Cross-project:** none new this session. The session-68 carry to Mable (form not populating hidden `earnings_band` field; lands empty on leads) remains open and was already pushed to `switchable/site/docs/current-handoff.md`.
+- **Folder:** platform (Sasha)
+- **First task:** Take the durable-fix decision (direct-POST vs accept backup) to Mira; if go, scope the `client_nonce` dedup + `_shared/ingest.ts` change.
+- **Cross-project:** switchable/site — `earnings_band` fix shipped + deployed this session (pushed to site handoff). Next site task queued: "split-test /business/ like /business/construction/" (site/Mable).

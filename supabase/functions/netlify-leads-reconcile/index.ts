@@ -79,15 +79,17 @@ async function getAuditSharedSecret(): Promise<string> {
 const LOOKBACK_HOURS = 24;
 const MAX_PAGES = 5; // defensive cap; pilot volume is ~10/day so 1 page is normal
 
-// Grace window. netlify-lead-router (the live webhook) is the real-time path.
-// This cron runs every 10 min, so a lead that submits within a few seconds of a
-// tick is visible in Netlify's API before the webhook's insert has committed.
-// Reconcile then races the webhook, wins the insert by milliseconds, and fires a
-// false "webhook didn't deliver" alert — even though the lead routed fine exactly
-// once. Skipping anything younger than this guarantees the webhook gets first
-// crack; a genuine miss is still caught on the next tick. Diagnosed 2026-06-09
-// (leads 580 @11:30:07 and 581 @11:40:05, both ~7s after a */10 tick).
-const GRACE_MINUTES = 5;
+// Grace window. netlify-lead-router (the live webhook) is the real-time path and
+// delivers a healthy lead in ~2s. This cron runs every 2 min (migration 0204), so
+// without a grace a lead that submits just before a tick is visible in Netlify's
+// API before the webhook's insert has committed; reconcile then races the webhook,
+// wins the insert by milliseconds, fires a false "webhook didn't deliver" alert,
+// and (because the re-delivered router call's background email tasks can be torn
+// down) can drop the lead's owner-FYI + provider emails. Skipping anything younger
+// than this guarantees the webhook gets first crack on every healthy lead; a
+// genuine miss (the ~3% the webhook drops) is still caught within ~1 sweep after
+// the grace, i.e. ~2-4 min. Diagnosed 2026-06-09 (leads 580/581 raced a */10 tick).
+const GRACE_MINUTES = 2;
 
 // Re-deliver missed leads through the live router (insert + route + provider
 // email/SMS + referral), identical to a real Netlify webhook. SUPABASE_URL is

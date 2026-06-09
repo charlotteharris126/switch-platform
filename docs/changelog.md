@@ -4,6 +4,14 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-09 — Reconcile cron to every 2 min + grace window (webhook-lag mitigation)
+- Migration: `0204_reconcile_cron_every_2min.sql` — `cron.alter_job` on `netlify-leads-reconcile-hourly` from `*/10` to `*/2`. Schedule change only, no DDL.
+- EF: `netlify-leads-reconcile` redeployed with (a) a 2-minute grace window (`GRACE_MINUTES=2`) skipping submissions younger than 2 min so the faster sweep does not race the healthy ~97% webhook — which was firing false "back-filled" alerts AND risking dropped owner/provider emails on the re-delivered call; (b) `writeBackfillDeadLetter` now actually called per genuine back-fill (the writer existed but was never invoked, so the alert email's "logged in leads.dead_letter" line was previously untrue).
+- Context: the known ~3% webhook drop (see 0202) became painful once the Sunderland EMS campaign drove higher volume on 8 Jun — dropped leads waited up to 10 min for recovery, so notifications arrived badly late/out of order. Diagnosed live 2026-06-09: leads 578/580/581 + browser/test submissions all landed only on `*/10` reconcile ticks; lead-router function itself proven healthy (200, ~0.85s, unauth OK); recreating the Netlify outgoing webhook did not visibly fix it → flakiness is in Netlify's delivery layer, not our setup. This caps worst-case recovery at ~2-4 min as an interim mitigation.
+- Impact (§8): more frequent Netlify API reads (trivial at pilot volume). Idempotency (ON CONFLICT on Netlify submission id) unchanged. Rollback = schedule back to `*/10` + revert EF. ROOT CAUSE of the webhook drop still open — to be investigated via lead-router delivery logs (Sasha). Signed off: Owner (Charlotte, 2026-06-09 session).
+- Cleanup: test rows 584, 585 (WEBHOOKTEST diagnostic submissions, DQ, un-routed) archived via migration 0205.
+- Verified via audit.actions: all 5 of today's real leads (575-578, 580) had provider_notified=true + sheet_appended=true (EMS emailed every lead, delayed-not-dropped on the 2 slow ones); learner u1_funded confirmed sent for all 5 in crm.email_log.
+
 ## 2026-06-08 — Webhook-lag fix: reconcile re-delivers + cron to every 10 min
 - Migration: `0202_reconcile_cron_every_10min.sql` — `cron.alter_job` on `netlify-leads-reconcile-hourly` from `30 * * * *` to `*/10 * * * *`. Schedule change only, no DDL.
 - Context: the Netlify → `netlify-lead-router` webhook intermittently lags or drops (~3% of leads over 90 days; 0 permanently lost, all caught by the backfill; 15 historically dropped + recovered). `netlify-leads-reconcile` was reworked this session to RE-DELIVER missed leads through the live router (insert + route + provider email/SMS) instead of inserting them un-routed — so a dropped lead is now fully recovered automatically. Running every 10 min caps worst-case recovery delay at ~10 min (was ~60).
