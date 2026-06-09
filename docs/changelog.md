@@ -4,6 +4,27 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-08 — Webhook-lag fix: reconcile re-delivers + cron to every 10 min
+- Migration: `0202_reconcile_cron_every_10min.sql` — `cron.alter_job` on `netlify-leads-reconcile-hourly` from `30 * * * *` to `*/10 * * * *`. Schedule change only, no DDL.
+- Context: the Netlify → `netlify-lead-router` webhook intermittently lags or drops (~3% of leads over 90 days; 0 permanently lost, all caught by the backfill; 15 historically dropped + recovered). `netlify-leads-reconcile` was reworked this session to RE-DELIVER missed leads through the live router (insert + route + provider email/SMS) instead of inserting them un-routed — so a dropped lead is now fully recovered automatically. Running every 10 min caps worst-case recovery delay at ~10 min (was ~60).
+- Idempotency: `ON CONFLICT` on the Netlify submission id prevents any double-route if the webhook later catches up. Verified live — stuck test lead 570 auto-recovered + routed to EMS, no double-send.
+- Impact (§8): more frequent Netlify API reads (small at pilot volume); the `*/10` reconcile now also fires provider emails/SMS on recovery (watch for unexpected double-sends — idempotency should prevent). Job name kept (now a slight misnomer). Rollback = schedule back to `30 * * * *`. Signed off: Owner (2026-06-08).
+
+## 2026-06-08 — AEB fastrack earnings reconfirm (leads.fastrack_submissions)
+- Migration: `0201_fastrack_earnings_reconfirmed.sql` — added `leads.fastrack_submissions.earnings_reconfirmed boolean NULL` (additive, §2 free).
+- Change: the AEB (team-leading) fastrack swaps the FCFJ "L3 reconfirm" question for an earnings reconfirm ("yes, I earn under £30k"). `fastrack-receive` persists it and surfaces "Earnings under £30k reconfirmed" in the EMS fastrack summary (FCFJ summaries byte-unchanged). The qualified-ack email now fires for AEB (`earnings_reconfirmed`) as well as FCFJ (`l3_reconfirmed`). Pairs with `earnings_band` (0200).
+- Impact: NULL on FCFJ fastracks (question not asked), set on AEB. Non-PII boolean. No schema_version bump (additive). Rollback = drop column. Signed off: Owner (2026-06-08).
+
+## 2026-06-08 — Archive team-leading test leads 569 + 570 (data fix)
+- Migration: `0203_archive_test_leads_569_570.sql` — soft-archive (no deletes): `UPDATE leads.submissions SET archived_at = now() WHERE id IN (569,570)`.
+- Why: 569 + 570 are Charlotte's end-to-end test submissions (iCloud +aliases) that routed to EMS during testing. Archiving removes them from reporting and the provider portal lead views (which filter `archived_at IS NULL`) so they don't skew lead numbers or sit in EMS's pipeline. Provider notification emails already went out during the test (EMS aware they were tests).
+- Impact: 2 submissions archived (their open enrolments removed in the same session's test cleanup). Reversible — `archived_at = NULL`. Signed off: Owner (2026-06-08).
+
+## 2026-06-08 — Data-op 039: EMS Sunderland regional rep (Andrea Clarke)
+- Data-op: `supabase/data-ops/039_ems_sunderland_rep_2026_06_08.sql` (UPDATE on `crm.providers`, not schema — logged per §2).
+- Change: `jsonb_set` adds `regional_contacts.by_la.sunderland` = Andrea Clarke / 07792 102 367 to `enterprise-made-simple`, preserving the five Tees Valley LAs from data-op 038. Drives the learner SMS + welcome "who's calling" line for the Sunderland-only "Introduction to Management" (team-leading) course. Without a Sunderland entry the fastrack/chaser SMS is skipped and the email falls back to a generic line.
+- Applied + verified (Sunderland present, Tees Valley intact); audit row via `audit.log_system_action('data_ops:039', ...)`. Page held on EMS funding-scheme name, so no leads flowing yet. Signed off: Owner (2026-06-08).
+
 ## 2026-06-08 — Persist + route earnings_band (EMS team-leading income gate)
 - Migration: `0200_submissions_earnings_band.sql` — added `leads.submissions.earnings_band TEXT NULL` (additive, §2 free).
 - EF mapping: `_shared/ingest.ts` reads `earnings_band` generically into the canonical row + the insert (so netlify-lead-router AND netlify-leads-reconcile persist it). `_shared/route-lead.ts` — added to the Submission interface, the three SELECT column lists, and the `appendToProviderSheet` payload `row`, so the declared band reaches the provider sheet.
