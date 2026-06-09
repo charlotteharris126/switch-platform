@@ -12,6 +12,7 @@ Lead-delivery pipeline diagnosed and stabilised. The Netlify -> `netlify-lead-ro
 - Migration `0205`: archived diagnostic test rows 584, 585.
 - Wrote `docs/incident-2026-06-09-lead-webhook-lag.md`; logged 0204/0205 + verification in `docs/changelog.md`.
 - CROSS-PROJECT (site): the session-68/69 `earnings_band` empty-field bug was fixed and deployed this session (site repo). It was the only funnel field wrapped in a `{{#IF}}` conditional + carrying two failed patches; now mirrors `employment_status`. Confirmed live: leads 577/578/580 landed `earnings_band=under_30k`.
+- Sasha health pass (on-demand): lead flow green (13/24h, 22/7d, 0 unrouted >48h, 0 funded-null-course, 1 null-session); migrations aligned 0001-0205; reconcile `*/2` confirmed firing every 2 min, all succeeded. Fixed manifest drift (reconcile-cron row still recorded `30 * * * *` -> corrected to `*/2`, verify query updated). dead_letter still 921/24-unresolved (drift-notice bloat, ticketed).
 
 ## Next steps
 1. Owner + Mira decide the durable fix: add a client-side direct POST from the form to the router (deduped on `client_nonce`/`session_id`) to remove the Netlify-webhook dependency entirely, OR accept the 2-min self-healing backup as sufficient for pilot. Architecture decision, Mira signs off.
