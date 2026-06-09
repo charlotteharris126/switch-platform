@@ -79,6 +79,16 @@ async function getAuditSharedSecret(): Promise<string> {
 const LOOKBACK_HOURS = 24;
 const MAX_PAGES = 5; // defensive cap; pilot volume is ~10/day so 1 page is normal
 
+// Grace window. netlify-lead-router (the live webhook) is the real-time path.
+// This cron runs every 10 min, so a lead that submits within a few seconds of a
+// tick is visible in Netlify's API before the webhook's insert has committed.
+// Reconcile then races the webhook, wins the insert by milliseconds, and fires a
+// false "webhook didn't deliver" alert — even though the lead routed fine exactly
+// once. Skipping anything younger than this guarantees the webhook gets first
+// crack; a genuine miss is still caught on the next tick. Diagnosed 2026-06-09
+// (leads 580 @11:30:07 and 581 @11:40:05, both ~7s after a */10 tick).
+const GRACE_MINUTES = 5;
+
 // Re-deliver missed leads through the live router (insert + route + provider
 // email/SMS + referral), identical to a real Netlify webhook. SUPABASE_URL is
 // auto-injected in Edge Functions.
@@ -160,9 +170,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const backfills: BackfillRecord[] = [];
   const errors: Array<{ netlify_id: string; error: string }> = [];
   let alreadyPresent = 0;
+  let tooRecent = 0;
 
   for (const sub of netlifySubs) {
     if (!sub.id) continue;
+
+    // Grace window — leave fresh submissions to the live webhook (see GRACE_MINUTES).
+    // Without this, reconcile races the webhook on leads that submit near a tick,
+    // wins the insert, fires a false "webhook missed it" alert, and (because the
+    // re-delivered router call's background email tasks can be torn down) can drop
+    // the lead's owner-FYI + provider emails. The webhook handles these reliably.
+    const subCreated = sub.created_at ? new Date(sub.created_at) : null;
+    if (subCreated && startedAt.getTime() - subCreated.getTime() < GRACE_MINUTES * 60_000) {
+      tooRecent++;
+      continue;
+    }
+
     if (existingNetlifyIds.has(sub.id)) {
       alreadyPresent++;
       continue;
@@ -239,14 +262,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
         continue;
       }
 
+      const backfilledId = respJson.submission_id ?? null;
       backfills.push({
-        submission_id: respJson.submission_id ?? null,
+        submission_id: backfilledId,
         netlify_id: sub.id,
         form_name: formName,
         course_id: row.course_id,
         email: row.email,
         created_at: sub.created_at ?? null,
       });
+      // Audit each genuine back-fill so the alert email's "logged in
+      // leads.dead_letter" instruction is actually true (the writer existed but
+      // was never called) and Sasha's Monday scan can spot a recurring pattern.
+      if (backfilledId !== null) {
+        await writeBackfillDeadLetter(backfilledId, sub.id, formName);
+      }
     } catch (err) {
       console.error(`reconcile ${apply ? "insert" : "dry-run"} failed for ${sub.id}:`, describeError(err));
       errors.push({ netlify_id: sub.id, error: describeError(err) });
