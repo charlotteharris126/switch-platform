@@ -1,37 +1,37 @@
-# Platform Handoff, Session 70, 2026-06-09
+# Platform Handoff, Session 71, 2026-06-10
 
 ## Current state
-Lead-delivery pipeline diagnosed and stabilised. The Netlify -> `netlify-lead-router` webhook has a known ~3% intermittent drop (migration 0202); it became visible once the Sunderland EMS campaign raised volume on 8 Jun, so dropped leads waited up to 10 min for the backup and notifications arrived late/out of order. Session 69's "is the 578 lag a one-off?" question is now answered: it is the recurring webhook flakiness. Mitigated this session: reconcile sweep now every 2 min with a 2-min grace window. Every one of today's leads is verified routed + EMS-notified + learner-emailed + SMS-sent. Root cause is Netlify's delivery layer (not our function/config); mitigated, not eliminated.
+Provider-portal "Mark not signed" bug fixed and deployed. Freya (Riverside) reported the employer "not signed" outcome with the "No response" reason erroring; root cause was the server action silently dropping every employer not_signed reason (it only ever persisted a reason for the learner "lost" flow). The action now validates and writes the reason; pushed to main, Netlify built. The Session 70 lead-pipeline state still stands underneath: the Netlify -> `netlify-lead-router` webhook has a known ~3% intermittent drop, mitigated (not eliminated) by the reconcile sweep running every 2 min with a 2-min grace window. No new pipeline work this session.
 
 ## What was done this session
-- Diagnosed the lag via `submit_to_insert` timing: healthy leads land in ~2s; affected leads land only on reconcile ticks (72s-7min). Proved the router function is healthy (unauth POST 200 in ~0.85s) and the webhook config is correct (recreating it did not fix it) -> the flaky link is Netlify's outgoing-webhook delivery.
-- Migration `0204`: reconcile cron `*/10` -> `*/2` (worst-case recovery ~2-4 min). Verified live (`vw_cron_jobs` = `*/2`, active).
-- Redeployed `netlify-leads-reconcile`: 2-min grace window (`GRACE_MINUTES=2`) so the faster sweep does not race the healthy ~97% webhook (was causing false "back-filled" alerts + dropped re-delivered emails); and now actually calls `writeBackfillDeadLetter` (writer existed, was never invoked) -> resolves session 69 step 3 (the alert's "logged in dead_letter" claim is now true).
-- Verified end to end via `audit.actions`: all 5 real leads today (575-578, 580) `provider_notified=true` + `sheet_appended=true`; learner `u1_funded` in `crm.email_log`; SMS in `crm.sms_log` all `sent`, no failures. Reconcile-recovered leads (578, 580) also fully notified.
-- Confirmed SMS/email follow-ups are cron-driven (read the DB every minute), not webhook-triggered, so they were never broken; only the lead's DB-arrival lagged. Today's SMS all `sent` -> session 69 step 1 (Brevo SMS credits) is effectively confirmed funded.
-- Migration `0205`: archived diagnostic test rows 584, 585.
-- Wrote `docs/incident-2026-06-09-lead-webhook-lag.md`; logged 0204/0205 + verification in `docs/changelog.md`.
-- CROSS-PROJECT (site): the session-68/69 `earnings_band` empty-field bug was fixed and deployed this session (site repo). It was the only funnel field wrapped in a `{{#IF}}` conditional + carrying two failed patches; now mirrors `employment_status`. Confirmed live: leads 577/578/580 landed `earnings_band=under_30k`.
-- Sasha health pass (on-demand): lead flow green (13/24h, 22/7d, 0 unrouted >48h, 0 funded-null-course, 1 null-session); migrations aligned 0001-0205; reconcile `*/2` confirmed firing every 2 min, all succeeded. Fixed manifest drift (reconcile-cron row still recorded `30 * * * *` -> corrected to `*/2`, verify query updated). dead_letter still 921/24-unresolved (drift-notice bloat, ticketed).
+- Traced Freya's "Mark not signed / No response errors and goes back" report end to end. Confirmed against production: the `lost_reason` CHECK (migration 0187), the `status` CHECK, the employer transition rules, and the provider column-level UPDATE grant (0180, includes `lost_reason`) all already permit `not_signed` + `no_response`. DB was never the blocker.
+- Found the real bug: `app/app/provider/leads/[id]/actions.ts` `markOutcomeAction` only validated/persisted a reason for `lost`; for `not_signed` it dropped the reason to null. Audit proof: Freya's marks today (audit ids 1490/1492, `attempt_3_no_answer -> not_signed`) succeeded but recorded `lost_reason: null`; all 16 `not_signed` rows in the DB carried null. The vanishing reason on re-render read to her as a failure.
+- Fixed: action now validates the employer reason against `VALID_NOT_SIGNED_REASONS` and writes it to `lost_reason`, and accepts the optional outcome note for `not_signed`. Typecheck clean. Committed + pushed (4abe890); Netlify deploying the provider portal.
+- Logged the fix + a correction to migration 0187's mistaken diagnosis in `docs/changelog.md`.
+- CROSS-PROJECT (switchable/email): on Charlotte's request, removed the word "apprenticeship" -> "training" in the two visible S4B employer email templates (`html-exports/u1-employer.html`, `u-employer-chaser.html`). Source files only; the live Brevo templates still need updating. Pushed to switchable/email handoff + Work Hub.
 
 ## Next steps
-1. Owner + Mira decide the durable fix: add a client-side direct POST from the form to the router (deduped on `client_nonce`/`session_id`) to remove the Netlify-webhook dependency entirely, OR accept the 2-min self-healing backup as sufficient for pilot. Architecture decision, Mira signs off.
+1. Owner + Mira decide the durable lead-webhook fix: add a client-side direct POST from the form to the router (deduped on `client_nonce`/`session_id`) to remove the Netlify-webhook dependency entirely, OR accept the 2-min self-healing backup as sufficient for pilot. Architecture decision, Mira signs off.
 2. If durable fix is a go: scope `client_nonce` dedup in `_shared/ingest.ts` (touches every importer -> redeploy all) + CORS on the router for browser POSTs.
-3. Dead_letter redesign (ticketed `e2b2615f`, Mira): route drift-notices to their own log table or auto-resolve on write, so the §10 "anything old = a real problem" signal works again.
+3. Dead_letter redesign (ticketed `e2b2615f`, Mira): route drift-notices to their own log table or auto-resolve on write, so the section-10 "anything old = a real problem" signal works again.
 4. Optional: mirror provider-notification sends into `crm.email_log` (currently only in `audit.actions`); read Netlify's webhook delivery log to confirm failing-vs-not-attempted (dashboard only).
 5. Carries: rotate BREVO_API_KEY + ROUTING_CONFIRM_SHARED_SECRET + the 3 leaked creds in `~/.zsh_history` (owner-driven security); ClickUp cutover (wire Rosa/Nell to task-upsert); billing reconciliation (`/admin/billing`).
+6. PUSH FROM Iris (switchable/ads) 2026-06-09: add a "Waiting on" column to the Work Hub. Design signed off by Charlotte. Hub task 811389d0 (status review, area platform) holds the full spec + infra impact assessment: new `waiting_on` status via migration + new columns `waiting_on_what` (text, required when status=waiting_on) and `review_after` (date, nullable); task-upsert validation; `/admin/work` UI (column, DnD, mandatory-blocker input, overdue badge); CLAUDE.md "Column meaning" + ticketing docs; Mira Monday-audit resurface guard (flag past-date OR undated-and-parked >3 weeks); new-business template. Needs Charlotte to move it out of review when she wants it built.
 
 ## Decisions and open questions
-- Decision (owner-authorised): speed reconcile to `*/2` + grace window as interim mitigation rather than chase Netlify's flakiness. WHY: removes the user-facing pain (delays, false alarms) now; the root cause is third-party (Netlify) reliability needing a larger change to eliminate.
-- Open: is today's lag baseline ~3% flakiness amplified by volume, or a worse-than-usual Netlify spell? Cannot confirm without Netlify's status page / delivery log.
-- Open: durable-fix go/no-go (step 1) and dead_letter redesign (step 3) are Mira's calls.
+- Decision: fixed the not_signed bug app-side (persist the reason) rather than touch the DB, because the DB was already correctly set up by 0187 + 0180. The earlier migration 0187 diagnosed it as a constraint problem on the assumption the action wrote the reason; it never did. WHY logged in changelog.
+- Carried from S70 - Decision (owner-authorised): speed reconcile to `*/2` + grace window as interim mitigation rather than chase Netlify's flakiness.
+- Carried open: durable-fix go/no-go (step 1) and dead_letter redesign (step 3) are Mira's calls.
+- Carried open: is the lead lag baseline ~3% flakiness amplified by volume, or a worse-than-usual Netlify spell? Cannot confirm without Netlify's delivery log.
 
 ## Watch items
-- Next real leads: `submit_to_insert` ~2s (webhook) or <=~4 min (backup); no false "back-filled" alerts on healthy leads. If alarms persist or delays exceed ~4 min, the grace+cron change is not holding.
-- Every new lead should show `provider_notified=true` in `audit.actions` + a `crm.email_log` learner row + a `crm.sms_log` row. Spot-check the next few.
+- Provider portal: have Freya retry "Mark not signed / No response" once Netlify finishes deploying. Expected: mark goes through and the reason now persists. If she still sees a literal error popup (not just a page reset), it points elsewhere; get exact wording.
+- The 16 existing `not_signed` rows keep null reasons (historical, not backfillable). New ones from now carry the real reason.
+- Next real leads: `submit_to_insert` ~2s (webhook) or <=~4 min (backup); no false "back-filled" alerts on healthy leads.
+- Every new lead should show `provider_notified=true` in `audit.actions` + a `crm.email_log` learner row + a `crm.sms_log` row.
 - dead_letter row count still climbing from daily drift-notices until the redesign lands.
 
 ## Next session
 - **Folder:** platform (Sasha)
 - **First task:** Take the durable-fix decision (direct-POST vs accept backup) to Mira; if go, scope the `client_nonce` dedup + `_shared/ingest.ts` change.
-- **Cross-project:** switchable/site — `earnings_band` fix shipped + deployed this session (pushed to site handoff). Next site task queued: "split-test /business/ like /business/construction/" (site/Mable).
+- **Cross-project:** switchable/email - apprenticeship->training copy edit made in the two S4B employer templates this session; the live Brevo templates still need updating (pushed to switchable/email handoff + Work Hub task).
