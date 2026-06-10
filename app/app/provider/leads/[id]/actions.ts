@@ -26,6 +26,7 @@ import {
   isAllowedTransition,
   isLeadStatus,
   isLostReason,
+  isNotSignedReason,
   lostReasonsFor,
   STATUS_LABEL,
   type LeadStatus,
@@ -102,7 +103,10 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
     };
   }
 
-  let newLostReason: LostReason | null = null;
+  // Reason lands in crm.enrolments.lost_reason for both terminal states:
+  // learner "lost" reasons and employer "not_signed" reasons (the column
+  // is shared — its CHECK constraint allows both sets, migration 0187).
+  let newLostReason: string | null = null;
   if (targetStatus === "lost") {
     if (!args.lostReason || !isLostReason(args.lostReason)) {
       return { ok: false, error: "A lost reason is required." };
@@ -114,13 +118,22 @@ export async function markOutcomeAction(args: Args): Promise<Result> {
       };
     }
     newLostReason = args.lostReason;
+  } else if (targetStatus === "not_signed") {
+    if (!args.lostReason || !isNotSignedReason(args.lostReason)) {
+      return { ok: false, error: "A reason is required." };
+    }
+    newLostReason = args.lostReason;
   }
 
   // outcome_note is only persisted for terminal states. For Enrolled /
   // Meeting booked / attempt_X, ignore any incoming note string —
   // structured progression is the context for those, not a frozen note.
-  // For Lost / Cannot reach we accept the note (trimmed, length-capped).
-  const acceptsNote = targetStatus === "lost" || targetStatus === "cannot_reach";
+  // For Lost / Not signed / Cannot reach we accept the note (trimmed,
+  // length-capped).
+  const acceptsNote =
+    targetStatus === "lost"
+    || targetStatus === "not_signed"
+    || targetStatus === "cannot_reach";
   let newOutcomeNote: string | null = null;
   if (acceptsNote) {
     const raw = typeof args.outcomeNote === "string" ? args.outcomeNote.trim() : "";

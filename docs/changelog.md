@@ -4,6 +4,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-10 — Fix: provider portal now saves the employer "not signed" reason
+- Change: `app/app/provider/leads/[id]/actions.ts` (`markOutcomeAction`) now validates the employer `not_signed` reason against `VALID_NOT_SIGNED_REASONS` and writes it to `crm.enrolments.lost_reason`, and keeps the optional outcome note for `not_signed`. No DB change.
+- Why: Freya (Riverside) reported "Mark not signed" with the "No response" reason "errors and goes back to the original page". Investigation showed the marks were actually succeeding (audit rows 1490/1492 on 2026-06-10, both `attempt_3_no_answer → not_signed`) but the action only ever persisted a reason for the learner `lost` flow — every employer `not_signed` reason was silently dropped to null (all 16 `not_signed` rows in the DB carried `lost_reason = null`). With the reason vanishing on re-render, the page reset read as a failure.
+- Correction to migration 0187 (2026-06-04): its header diagnosed the cause as the `lost_reason` CHECK constraint rejecting the employer reasons, on the assumption the action wrote them. The action never wrote them — the constraint widening was correct and harmless but did not address the real bug, which was this missing write. 0187 + 0180 (column-level UPDATE grant incl. `lost_reason`) had the DB ready; only the app write was missing.
+- Impact (§8): app-only change. Reads of `lost_reason` (portal display, reporting) unaffected — previously always null for `not_signed`, now carry the real reason. Existing 16 null rows left as-is (historical, reason not recoverable). Rollback = revert the action edit. Signed off: Owner (Charlotte, 2026-06-10 session).
+
 ## 2026-06-09 — Reconcile cron to every 2 min + grace window (webhook-lag mitigation)
 - Migration: `0204_reconcile_cron_every_2min.sql` — `cron.alter_job` on `netlify-leads-reconcile-hourly` from `*/10` to `*/2`. Schedule change only, no DDL.
 - EF: `netlify-leads-reconcile` redeployed with (a) a 2-minute grace window (`GRACE_MINUTES=2`) skipping submissions younger than 2 min so the faster sweep does not race the healthy ~97% webhook — which was firing false "back-filled" alerts AND risking dropped owner/provider emails on the re-delivered call; (b) `writeBackfillDeadLetter` now actually called per genuine back-fill (the writer existed but was never invoked, so the alert email's "logged in leads.dead_letter" line was previously untrue).
