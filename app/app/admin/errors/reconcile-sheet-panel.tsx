@@ -52,6 +52,8 @@ export function ReconcileSheetPanel({
     | "republish_apply"
     | "republish_selected_dry_run"
     | "republish_selected_apply"
+    | "republish_full_dry_run"
+    | "republish_full_apply"
     | null
   >(null);
   const [dryRunResult, setDryRunResult] = useState<ReconcileSheetToDbResult | null>(null);
@@ -59,7 +61,7 @@ export function ReconcileSheetPanel({
   const [republishResult, setRepublishResult] = useState<RepublishSheetResult | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [confirmApply, setConfirmApply] = useState<
-    "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | null
+    "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | "db_to_sheet_full" | null
   >(null);
 
   function resetResults() {
@@ -226,6 +228,44 @@ export function ReconcileSheetPanel({
     fireRepublishIds([...selectedIds], apply);
   }
 
+  // Full DB → sheet republish: rewrite EVERY routed lead's row from the DB,
+  // no scoping. The right tool when the DB is the trusted source and the
+  // sheet is one-way (doesn't mirror back, e.g. Riverside): overwrites the
+  // whole sheet to match, sweeping up ambiguous "Calling" rows and skipped
+  // rows the scoped buttons can't reach. May exceed Netlify's ~26s cap on a
+  // big sheet; the Edge Function keeps writing in the background, so re-run
+  // Check drift after a minute to see the settled state.
+  function fireRepublishFull(apply: boolean) {
+    if (!providerId) return;
+    setRepublishResult(null);
+    setPendingMode(apply ? "republish_full_apply" : "republish_full_dry_run");
+    startTransition(async () => {
+      try {
+        const r = await republishSheetAction({ provider_id: providerId, apply });
+        setRepublishResult(r);
+        if (apply && r.ok) {
+          try {
+            const refreshed = await reconcileSheetToDbAction({ provider_id: providerId, apply: false });
+            setDryRunResult(refreshed);
+            if (refreshed.ok) {
+              setSelectedIds(new Set(refreshed.proposed_changes.map((c) => c.submission_id)));
+            }
+          } catch {
+            // Refresh failed — push still succeeded. Operator can Check drift manually.
+          }
+        }
+      } catch (err) {
+        setRepublishResult({
+          ok: false,
+          error: (err instanceof Error ? err.message : String(err)) + TIMEOUT_HINT,
+        });
+      } finally {
+        setPendingMode(null);
+        setConfirmApply(null);
+      }
+    });
+  }
+
   const eligibleChanges = useMemo<ReconcileProposedChange[]>(
     () => (dryRunResult?.ok ? dryRunResult.proposed_changes : []),
     [dryRunResult],
@@ -286,6 +326,7 @@ export function ReconcileSheetPanel({
           fireRepublish={fireRepublish}
           fireRepublishSelected={fireRepublishSelected}
           fireRepublishIds={fireRepublishIds}
+          fireRepublishFull={fireRepublishFull}
           pending={pending}
           pendingMode={pendingMode}
         />
@@ -333,6 +374,7 @@ function DriftReport({
   fireRepublish,
   fireRepublishSelected,
   fireRepublishIds,
+  fireRepublishFull,
   pending,
   pendingMode,
 }: {
@@ -340,12 +382,13 @@ function DriftReport({
   eligibleChanges: ReconcileProposedChange[];
   selectedIds: Set<number>;
   setSelectedIds: (s: Set<number>) => void;
-  confirmApply: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | null;
-  setConfirmApply: (v: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | null) => void;
+  confirmApply: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | "db_to_sheet_full" | null;
+  setConfirmApply: (v: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | "db_to_sheet_full" | null) => void;
   fireApplySheetToDb: () => void;
   fireRepublish: (apply: boolean) => void;
   fireRepublishSelected: (apply: boolean) => void;
   fireRepublishIds: (ids: number[], apply: boolean) => void;
+  fireRepublishFull: (apply: boolean) => void;
   pending: boolean;
   pendingMode: string | null;
 }) {
@@ -551,8 +594,21 @@ function DriftReport({
             Push DB → sheet (republish)
           </button>
         )}
+        {!confirmApply && (
+          <button
+            type="button"
+            onClick={() => setConfirmApply("db_to_sheet_full")}
+            disabled={pending}
+            className="px-4 py-2 bg-white text-teal-800 border border-teal-300 rounded-md text-sm font-semibold hover:bg-teal-50 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+          >
+            Push whole sheet from DB
+          </button>
+        )}
         {summary.drift_eligible_total === 0 && summary.drift_skipped_db_fresher === 0 && (
-          <p className="text-xs text-slate-500">No action needed.</p>
+          <p className="basis-full text-[11px] text-slate-400">
+            &quot;Push whole sheet from DB&quot; overwrites every row from the database. Use for a provider whose sheet is
+            one-way (doesn&apos;t mirror back, e.g. Riverside) to clear ambiguous or skipped drift in one go.
+          </p>
         )}
 
         {confirmApply === "sheet_to_db" && (
@@ -631,6 +687,39 @@ function DriftReport({
               className="px-3 py-1 bg-slate-700 text-white rounded-md text-xs font-semibold hover:bg-slate-800 disabled:opacity-60 cursor-pointer"
             >
               {pendingMode === "republish_apply" ? "Pushing…" : "Apply"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmApply(null)}
+              disabled={pending}
+              className="px-3 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {confirmApply === "db_to_sheet_full" && (
+          <div className="flex items-center gap-2 bg-teal-50 border border-teal-200 rounded-md px-3 py-1.5 flex-wrap">
+            <span className="text-xs text-teal-900 font-semibold">
+              Overwrite EVERY row of {summary.company_name}&apos;s sheet from the database? Use when the database is the
+              trusted side. Clears ambiguous and skipped drift too.
+            </span>
+            <button
+              type="button"
+              onClick={() => fireRepublishFull(false)}
+              disabled={pending}
+              className="px-3 py-1 bg-teal-100 text-teal-900 border border-teal-300 rounded-md text-xs font-semibold hover:bg-teal-200 disabled:opacity-60 cursor-pointer"
+            >
+              {pendingMode === "republish_full_dry_run" ? "Dry-run…" : "Dry-run"}
+            </button>
+            <button
+              type="button"
+              onClick={() => fireRepublishFull(true)}
+              disabled={pending}
+              className="px-3 py-1 bg-teal-700 text-white rounded-md text-xs font-semibold hover:bg-teal-800 disabled:opacity-60 cursor-pointer"
+            >
+              {pendingMode === "republish_full_apply" ? "Pushing…" : "Yes, overwrite whole sheet"}
             </button>
             <button
               type="button"
