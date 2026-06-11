@@ -1068,6 +1068,15 @@ function InternalSanityCard({ data }: { data: ReconciliationData }) {
             <strong>{data.rapid_fire_dupes}</strong> rapid-fire duplicates (same person, multiple submits before the dedupe caught up).
           </li>
         </ul>
+        {dbReconciles && (
+          <p className="text-sm text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2 mt-3 leading-relaxed">
+            <strong>{data.unique_people_routed}</strong> people
+            {" + "}<strong>{data.archived_routed_rows}</strong> test
+            {" + "}<strong>{data.linked_reapplications}</strong> re-applied
+            {" + "}<strong>{data.rapid_fire_dupes}</strong> duplicates
+            {" = "}<strong>{data.routing_log_rows}</strong> sends. Balances ✓
+          </p>
+        )}
         {!dbReconciles && (
           <p className="text-xs text-[#b3412e] mt-2">
             <strong>{gap - accountedFor}</strong> row(s) unexplained — needs investigation.

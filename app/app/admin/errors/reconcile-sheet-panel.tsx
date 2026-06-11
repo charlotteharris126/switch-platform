@@ -555,6 +555,24 @@ function DriftReport({
         </div>
       )}
 
+      {summary.drift_db_fresher_submission_ids.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-md px-4 py-3">
+          <p className="text-sm font-semibold text-slate-900">
+            DB → sheet (DB is fresher) — {summary.drift_db_fresher_submission_ids.length}
+          </p>
+          <p className="text-xs text-slate-500 mt-0.5 mb-2">
+            The database has the newer status on these; they get pushed out to the sheet by
+            &quot;Push DB → sheet (republish)&quot; or &quot;Push whole sheet from DB&quot;. If they survive a push,
+            the appender can&apos;t find them in the sheet (blank or wrong ID cell).
+          </p>
+          <div className="text-xs font-mono text-slate-700 flex flex-wrap gap-x-3 gap-y-1">
+            {summary.drift_db_fresher_submission_ids.map((id) => (
+              <a key={id} href={`/leads/${id}`} className="hover:underline cursor-pointer">#{id}</a>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-3 flex-wrap">
         {!confirmApply && summary.drift_eligible_total > 0 && (
           <button
