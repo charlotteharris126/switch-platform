@@ -564,6 +564,9 @@ export default async function ErrorsPage({
           Three places the DB has to stay in sync with an external system.
           DB is always the source of truth; each panel projects the DB
           through to what the external system should hold, then diffs.
+          The pills below reflect the last daily check, not a live read, so
+          &quot;No drift flagged&quot; means nothing outstanding from that run.
+          Click <em>Check drift</em> in a panel for the live state.
         </p>
 
         {sheetProviders.length > 0 && (
@@ -870,9 +873,13 @@ function ReconcilerStatusPill({
   driftedLabel: string;
 }) {
   if (drifted === 0) {
+    // "No drift flagged" not "Aligned": this counts the daily cron's
+    // outstanding drift notices, so zero means "nothing flagged by the last
+    // check" — not a live, verified match. Run "Check drift" in the panel
+    // below for the live truth. (Avoids the false-green a notice-wipe caused.)
     return (
-      <Badge className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-600">
-        Aligned
+      <Badge className="text-[10px] bg-slate-500 text-white hover:bg-slate-500">
+        No drift flagged
       </Badge>
     );
   }
