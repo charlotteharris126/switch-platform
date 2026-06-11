@@ -50,13 +50,17 @@ export function ReconcileSheetPanel({
     | "apply_sheet_to_db"
     | "republish_dry_run"
     | "republish_apply"
+    | "republish_selected_dry_run"
+    | "republish_selected_apply"
     | null
   >(null);
   const [dryRunResult, setDryRunResult] = useState<ReconcileSheetToDbResult | null>(null);
   const [applyResult, setApplyResult] = useState<ReconcileSheetToDbResult | null>(null);
   const [republishResult, setRepublishResult] = useState<RepublishSheetResult | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [confirmApply, setConfirmApply] = useState<"sheet_to_db" | "db_to_sheet" | null>(null);
+  const [confirmApply, setConfirmApply] = useState<
+    "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | null
+  >(null);
 
   function resetResults() {
     setDryRunResult(null);
@@ -177,6 +181,48 @@ export function ReconcileSheetPanel({
     });
   }
 
+  // Push the SELECTED rows DB → sheet (republish scoped to the ticked
+  // submission_ids). Use when the DB is the trusted side but the dry-run
+  // classified the rows as sheet-fresher (e.g. EMS, who moved off the sheet
+  // so the DB carries the live truth — the sheet just needs overwriting).
+  // Mirror of fireApplySheetToDb, opposite direction.
+  function fireRepublishSelected(apply: boolean) {
+    if (!providerId || selectedIds.size === 0) return;
+    setRepublishResult(null);
+    setPendingMode(apply ? "republish_selected_apply" : "republish_selected_dry_run");
+    const ids = [...selectedIds];
+    startTransition(async () => {
+      try {
+        const r = await republishSheetAction({
+          provider_id: providerId,
+          apply,
+          submission_ids: ids,
+        });
+        setRepublishResult(r);
+        if (apply && r.ok) {
+          try {
+            const refreshed = await reconcileSheetToDbAction({ provider_id: providerId, apply: false });
+            setDryRunResult(refreshed);
+            if (refreshed.ok) {
+              setSelectedIds(new Set(refreshed.proposed_changes.map((c) => c.submission_id)));
+            }
+          } catch {
+            // Refresh failed — the push still succeeded. Operator can hit
+            // Check drift manually to see post-push state.
+          }
+        }
+      } catch (err) {
+        setRepublishResult({
+          ok: false,
+          error: (err instanceof Error ? err.message : String(err)) + TIMEOUT_HINT,
+        });
+      } finally {
+        setPendingMode(null);
+        setConfirmApply(null);
+      }
+    });
+  }
+
   const eligibleChanges = useMemo<ReconcileProposedChange[]>(
     () => (dryRunResult?.ok ? dryRunResult.proposed_changes : []),
     [dryRunResult],
@@ -235,6 +281,7 @@ export function ReconcileSheetPanel({
           setConfirmApply={setConfirmApply}
           fireApplySheetToDb={fireApplySheetToDb}
           fireRepublish={fireRepublish}
+          fireRepublishSelected={fireRepublishSelected}
           pending={pending}
           pendingMode={pendingMode}
         />
@@ -280,6 +327,7 @@ function DriftReport({
   setConfirmApply,
   fireApplySheetToDb,
   fireRepublish,
+  fireRepublishSelected,
   pending,
   pendingMode,
 }: {
@@ -287,10 +335,11 @@ function DriftReport({
   eligibleChanges: ReconcileProposedChange[];
   selectedIds: Set<number>;
   setSelectedIds: (s: Set<number>) => void;
-  confirmApply: "sheet_to_db" | "db_to_sheet" | null;
-  setConfirmApply: (v: "sheet_to_db" | "db_to_sheet" | null) => void;
+  confirmApply: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | null;
+  setConfirmApply: (v: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | null) => void;
   fireApplySheetToDb: () => void;
   fireRepublish: (apply: boolean) => void;
+  fireRepublishSelected: (apply: boolean) => void;
   pending: boolean;
   pendingMode: string | null;
 }) {
@@ -429,6 +478,24 @@ function DriftReport({
             Apply selected sheet → DB ({selectedIds.size})
           </button>
         )}
+        {!confirmApply && summary.drift_eligible_total > 0 && (
+          <button
+            type="button"
+            onClick={() => setConfirmApply("db_to_sheet_selected")}
+            disabled={pending || selectedIds.size === 0}
+            className="px-4 py-2 bg-teal-700 text-white rounded-md text-sm font-semibold hover:bg-teal-800 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+          >
+            Push selected DB → sheet ({selectedIds.size})
+          </button>
+        )}
+        {!confirmApply && summary.drift_eligible_total > 0 && (
+          <p className="basis-full text-[11px] text-slate-400 leading-relaxed">
+            Two directions for the ticked rows: <span className="text-rose-700 font-medium">sheet → DB</span> pulls the
+            sheet&apos;s value into the database (use when the provider works in the sheet);{" "}
+            <span className="text-teal-700 font-medium">DB → sheet</span> overwrites the sheet from the database (use when
+            the database is the trusted side, e.g. the provider works elsewhere).
+          </p>
+        )}
         {!confirmApply && summary.drift_skipped_db_fresher > 0 && (
           <button
             type="button"
@@ -455,6 +522,38 @@ function DriftReport({
               className="px-3 py-1 bg-rose-700 text-white rounded-md text-xs font-semibold hover:bg-rose-800 disabled:opacity-60 cursor-pointer"
             >
               {pendingMode === "apply_sheet_to_db" ? "Applying…" : "Yes, apply"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmApply(null)}
+              disabled={pending}
+              className="px-3 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {confirmApply === "db_to_sheet_selected" && (
+          <div className="flex items-center gap-2 bg-teal-50 border border-teal-200 rounded-md px-3 py-1.5">
+            <span className="text-xs text-teal-900 font-semibold">
+              Overwrite the sheet from DB for {selectedIds.size} selected lead{selectedIds.size === 1 ? "" : "s"}?
+            </span>
+            <button
+              type="button"
+              onClick={() => fireRepublishSelected(false)}
+              disabled={pending}
+              className="px-3 py-1 bg-teal-100 text-teal-900 border border-teal-300 rounded-md text-xs font-semibold hover:bg-teal-200 disabled:opacity-60 cursor-pointer"
+            >
+              {pendingMode === "republish_selected_dry_run" ? "Dry-run…" : "Dry-run"}
+            </button>
+            <button
+              type="button"
+              onClick={() => fireRepublishSelected(true)}
+              disabled={pending}
+              className="px-3 py-1 bg-teal-700 text-white rounded-md text-xs font-semibold hover:bg-teal-800 disabled:opacity-60 cursor-pointer"
+            >
+              {pendingMode === "republish_selected_apply" ? "Pushing…" : "Yes, push DB → sheet"}
             </button>
             <button
               type="button"
