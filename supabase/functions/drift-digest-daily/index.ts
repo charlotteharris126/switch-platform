@@ -109,12 +109,76 @@ Deno.serve(async (req: Request): Promise<Response> => {
      WHERE replayed_at IS NULL
   `;
 
+  // Severity split — mirrors app/app/admin/errors/page.tsx SOURCE_EXPLANATIONS.
+  // "Needs you" = a real failure needing a code/config/owner action. Everything
+  // else is routine drift or self-healing retries. An unknown source defaults
+  // to needs-you so a genuinely new failure type still alerts.
+  const ACTION_SOURCES = new Set([
+    "edge_function_sheet_append",
+    "netlify_forms",
+    "netlify_audit",
+    "edge_function_provider_email",
+    "edge_function_meta_ingest_upsert",
+    "edge_function_labs_event",
+    "fastrack_form",
+  ]);
+  const KNOWN_ROUTINE_SOURCES = new Set([
+    "sheet_drift_detected",
+    "brevo_attribute_drift",
+    "brevo_attribute_reconcile_async_check_result",
+    "reconcile_backfill",
+    "edge_function_partial_capture",
+    "edge_function_brevo_upsert",
+    "edge_function_brevo_upsert_no_match",
+    "edge_function_brevo_chase",
+    "edge_function_crm_push",
+    "edge_function_meta_ingest_api",
+    "edge_function_meta_ingest_fetch",
+    "edge_function_meta_ingest_parse",
+    "brevo_transactional_sms",
+  ]);
+  const isAction = (source: string): boolean =>
+    ACTION_SOURCES.has(source) ? true : KNOWN_ROUTINE_SOURCES.has(source) ? false : true;
+
+  const ACTION_LABEL: Record<string, string> = {
+    edge_function_sheet_append: "Lead didn't reach a provider's sheet",
+    netlify_forms: "A form submission couldn't be saved",
+    netlify_audit: "Form webhook config drift (possible silent lead loss)",
+    edge_function_provider_email: "Provider notification email failed",
+    edge_function_meta_ingest_upsert: "Meta ads data couldn't be written",
+    edge_function_labs_event: "Labs analytics event couldn't be saved",
+    fastrack_form: "Fastrack form couldn't link to a lead",
+  };
+  const ROUTINE_LABEL: Record<string, string> = {
+    sheet_drift_detected: "Provider sheet a step behind the database",
+    brevo_attribute_drift: "Brevo contacts a step behind (daily check)",
+    brevo_attribute_reconcile_async_check_result: "Brevo check run logs",
+    reconcile_backfill: "Leads the backup sweep recovered (auto-routed)",
+    edge_function_partial_capture: "Abandoned half-filled forms",
+    edge_function_brevo_upsert: "Brevo sync retries (self-healing)",
+    edge_function_brevo_upsert_no_match: "Brevo sync, no course match",
+    edge_function_brevo_chase: "Provider chaser retries",
+    edge_function_crm_push: "Provider CRM push retries",
+    edge_function_meta_ingest_api: "Meta ads ingest retries",
+    edge_function_meta_ingest_fetch: "Meta ads ingest retries",
+    edge_function_meta_ingest_parse: "Meta ads ingest retries",
+    brevo_transactional_sms: "SMS not sent (top up Brevo credits)",
+  };
+
   const dashboardUrl = `${getAdminDashboardUrl()}/errors`;
   const totalNew = rows.length;
-  const subject = `[Platform digest] ${totalNew} drift row${totalNew === 1 ? "" : "s"} in the last 24h`;
 
   const orderedBuckets = Array.from(buckets.values()).sort((a, b) => b.count - a.count);
-  const bucketsHtml = orderedBuckets
+  const actionBuckets = orderedBuckets.filter((b) => isAction(b.source));
+  const routineBuckets = orderedBuckets.filter((b) => !isAction(b.source));
+  const actionCount = actionBuckets.reduce((n, b) => n + b.count, 0);
+  const routineCount = routineBuckets.reduce((n, b) => n + b.count, 0);
+
+  const subject = actionCount > 0
+    ? `[Platform] ${actionCount} need${actionCount === 1 ? "s" : ""} you, ${routineCount} routine (last 24h)`
+    : `[Platform] All clear, ${routineCount} routine notice${routineCount === 1 ? "" : "s"} (last 24h)`;
+
+  const actionHtml = actionBuckets
     .map((b) => {
       const samplesHtml = b.samples
         .map((s) => {
@@ -134,20 +198,37 @@ Deno.serve(async (req: Request): Promise<Response> => {
         })
         .join("");
       return `
-        <div style="margin-bottom:18px;padding:10px 14px;border:1px solid #e2e8f0;border-radius:6px;">
-          <p style="margin:0 0 6px 0;"><strong style="font-family:monospace;font-size:13px;">${escapeHtml(b.source)}</strong>
-          <span style="background:#fef3c7;color:#92400e;padding:1px 8px;border-radius:10px;font-size:11px;margin-left:6px;">${b.count}</span></p>
+        <div style="margin-bottom:14px;padding:10px 14px;border:1px solid #fca5a5;border-radius:6px;background:#fef2f2;">
+          <p style="margin:0 0 6px 0;"><strong style="font-size:13px;color:#991b1b;">${escapeHtml(ACTION_LABEL[b.source] ?? b.source)}</strong>
+          <span style="background:#fee2e2;color:#991b1b;padding:1px 8px;border-radius:10px;font-size:11px;margin-left:6px;">${b.count}</span>
+          <br><span style="font-family:monospace;font-size:10px;color:#94a3b8;">${escapeHtml(b.source)}</span></p>
           <ul style="margin:0;padding:0 0 0 16px;">${samplesHtml}</ul>
         </div>`;
     })
     .join("");
 
+  const routineHtml = routineBuckets
+    .map((b) =>
+      `<li style="font-size:12px;color:#475569;margin-bottom:3px;">
+        <strong style="color:#334155;">${escapeHtml(ROUTINE_LABEL[b.source] ?? b.source)}</strong>
+        <span style="color:#94a3b8;"> · ${b.count}</span>
+      </li>`,
+    )
+    .join("");
+
+  const leadLine = actionCount > 0
+    ? `<strong>${actionCount}</strong> thing${actionCount === 1 ? "" : "s"} need${actionCount === 1 ? "s" : ""} a look. <strong>${routineCount}</strong> ${routineCount === 1 ? "is" : "are"} routine drift, nothing to do.`
+    : `Nothing needs you. All <strong>${routineCount}</strong> ${routineCount === 1 ? "row is" : "rows are"} routine drift (sheet and Brevo sync lag, self-healing retries). Clear them on the dashboard whenever.`;
+
   const html = `
     <p>Hi Charlotte,</p>
-    <p>Last 24h on the platform: <strong>${totalNew}</strong> new dead_letter row${totalNew === 1 ? "" : "s"} across <strong>${orderedBuckets.length}</strong> source${orderedBuckets.length === 1 ? "" : "s"}. Total unresolved all-time: <strong>${totalUnresolved}</strong>.</p>
-    ${bucketsHtml}
-    <p style="margin-top:18px;font-size:13px;">Open the live list to triage: <a href="${dashboardUrl}">${dashboardUrl}</a>.</p>
-    <p style="font-size:11px;color:#64748b;margin-top:18px;">Daily 06:30 UTC. Replaces the hourly dead-letter alert + per-cron sheet-drift email — same signals, one inbox channel. Replay or flag rows on the dashboard to stop them appearing in tomorrow&apos;s digest. Quiet days send nothing.</p>
+    <p>Last 24h on the platform: ${leadLine}</p>
+    ${actionCount > 0 ? `<h3 style="font-size:14px;color:#991b1b;margin:18px 0 8px;">Needs you (${actionCount})</h3>${actionHtml}` : ""}
+    ${routineCount > 0 ? `<h3 style="font-size:14px;color:#334155;margin:18px 0 8px;">Routine, no action (${routineCount})</h3>
+      <p style="font-size:12px;color:#64748b;margin:0 0 6px;">Sync lag and self-healing retries. Every lead is safe in the database. Bulk-clear any time.</p>
+      <ul style="margin:0;padding:0 0 0 16px;">${routineHtml}</ul>` : ""}
+    <p style="margin-top:18px;font-size:13px;">Open the live list to triage: <a href="${dashboardUrl}">${dashboardUrl}</a>. Total unresolved all-time: <strong>${totalUnresolved}</strong>.</p>
+    <p style="font-size:11px;color:#64748b;margin-top:18px;">Daily 06:30 UTC. "Needs you" are real failures; "routine" are drift notices and self-healing retries that clear themselves or take one click. Quiet days send nothing.</p>
   `.trim();
 
   try {

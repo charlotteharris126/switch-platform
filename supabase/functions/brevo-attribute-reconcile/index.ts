@@ -692,6 +692,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
         const summary = await run(apply);
         await sql.begin(async (trx) => {
           await trx`SET LOCAL ROLE functions_writer`;
+          // Auto-resolve this source's prior rows so the async result log holds
+          // only the latest run, never an accumulating pile (ticket e2b2615f).
+          await trx`
+            UPDATE leads.dead_letter SET replayed_at = now()
+             WHERE source = ${resultSource} AND replayed_at IS NULL
+          `;
           await trx`
             INSERT INTO leads.dead_letter (source, raw_payload, error_context)
             VALUES (
@@ -763,23 +769,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // and the digest can pick up the drift summary. Only writes when there's
     // something to report — clean runs leave no row, the pill defaults to
     // Aligned in their absence.
-    if (!apply && logDrift && summary.contacts_with_drift > 0) {
+    if (!apply && logDrift) {
       try {
         await sql.begin(async (trx) => {
           await trx`SET LOCAL ROLE functions_writer`;
+          // Auto-resolve prior daily-drift summaries first, so a run that finds
+          // zero drift clears the old signal and the table holds at most the
+          // latest run's summary, not weeks of stale rows (ticket e2b2615f).
           await trx`
-            INSERT INTO leads.dead_letter (source, raw_payload, error_context)
-            VALUES (
-              'brevo_attribute_drift',
-              ${sql.json({
-                contacts_with_drift: summary.contacts_with_drift,
-                processed: summary.processed,
-                per_attribute_drift: summary.per_attribute_drift,
-                ran_at: summary.ran_at,
-              })},
-              ${`Brevo attribute reconcile (daily dry-run): ${summary.contacts_with_drift} of ${summary.processed} contacts drift from canonical projection. Run apply via /admin/errors → DB ↔ Brevo → Re-sync.`}
-            )
+            UPDATE leads.dead_letter SET replayed_at = now()
+             WHERE source = 'brevo_attribute_drift' AND replayed_at IS NULL
           `;
+          if (summary.contacts_with_drift > 0) {
+            await trx`
+              INSERT INTO leads.dead_letter (source, raw_payload, error_context)
+              VALUES (
+                'brevo_attribute_drift',
+                ${sql.json({
+                  contacts_with_drift: summary.contacts_with_drift,
+                  processed: summary.processed,
+                  per_attribute_drift: summary.per_attribute_drift,
+                  ran_at: summary.ran_at,
+                })},
+                ${`Brevo attribute reconcile (daily dry-run): ${summary.contacts_with_drift} of ${summary.processed} contacts drift from canonical projection. Run apply via /admin/errors → DB ↔ Brevo → Re-sync.`}
+              )
+            `;
+          }
         });
       } catch (logErr) {
         console.error("brevo drift dead_letter log failed:", String(logErr));

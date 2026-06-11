@@ -163,6 +163,50 @@ const SOURCE_EXPLANATIONS: Record<string, SourceExplanation> = {
     what: "Meta returned valid data but the write to `ads_switchable.meta_daily` failed — schema or constraint issue on our side. Until fixed, those days' spend / lead numbers are missing from the Profit tracker for the affected ads.",
     whatToDo: "Flag for Claude — needs a code/migration fix. The plain-English translation in the row tells you broadly what went wrong; Claude will look at the technical detail next session.",
   },
+  sheet_drift_detected: {
+    headline: "Provider sheet is a step behind",
+    severity: "info",
+    what: "Not an error. The daily check found a provider's Google Sheet showing an older status than our database for a lead, usually because the provider updated the lead in the portal and the sheet hasn't been re-synced. The database is the source of truth and is correct. No lead is lost or stuck.",
+    whatToDo: "Bulk-clean any time. To push the database state back onto the sheet, use the Sheet ↔ DB panel above (Push DB → sheet). The next daily check re-detects anything still out of sync.",
+    bulkNote: "Bulk cleanup, sheet-lag notices. The database is correct; clearing these only removes the notice.",
+    safeBecause: "These are \"the sheet is behind the database\" notices, not failures. The lead is routed and safe, and the sheet is a transitional surface being retired. Dismissing only clears the notice.",
+  },
+  brevo_attribute_drift: {
+    headline: "Brevo contacts a step behind (daily check)",
+    severity: "info",
+    what: "Not an error. The daily Brevo check found some contacts whose details in the email tool are a step behind the database (for example an updated course or status not yet pushed). It is the check reporting its findings, not a failure.",
+    whatToDo: "To bring them in line, use the DB ↔ Brevo panel above (Check drift, then Re-sync). Then bulk-clean these notices.",
+    bulkNote: "Bulk cleanup, Brevo daily-drift notices. Re-sync via the DB ↔ Brevo panel, then clear.",
+    safeBecause: "These are check-run summaries, not failed writes. No lead is lost. The contacts simply hold a slightly stale attribute until the next re-sync.",
+  },
+  brevo_attribute_reconcile_async_check_result: {
+    headline: "Brevo check run log",
+    severity: "info",
+    what: "Not an error. This is the Brevo reconcile logging the result of one of its background runs (how many contacts it checked, how many drifted). It is a diagnostic line, not a problem.",
+    whatToDo: "Bulk-clean any time.",
+    bulkNote: "Bulk cleanup, Brevo check run logs.",
+    safeBecause: "Pure run logs from the daily Brevo check. Nothing to act on; clearing only tidies the list.",
+  },
+  edge_function_labs_event: {
+    headline: "Labs analytics event couldn't be saved",
+    severity: "fix",
+    what: "A Switchable Labs funnel event (someone using a Labs tool) failed to write to the database with a permission error. No lead or customer is affected; only Labs smoke-test analytics drop for those events.",
+    whatToDo: "Flag for Claude. The Labs events table is missing a database permission, a code/migration fix.",
+  },
+  fastrack_form: {
+    headline: "Fastrack form couldn't link to a lead",
+    severity: "fix",
+    what: "A fastrack thank-you form arrived without a valid link back to its original funded lead (the parent reference was missing or malformed). Usually this is someone landing on the fastrack page directly, without coming through a funded form, so there is no lead to attach it to. Occasionally it can mean a real learner's link got stripped.",
+    whatToDo: "Open the row and read the payload. If it is a real person with contact details, follow up manually. If it is a direct or bot hit with no usable details, clear it. If these recur for real learners, Flag for Claude to check the funded-form redirect.",
+  },
+  brevo_transactional_sms: {
+    headline: "SMS didn't send (Brevo credits)",
+    severity: "clean",
+    what: "A learner SMS (call reminder or fastrack prompt) didn't send because the Brevo SMS credit balance ran out. The lead is safe and was emailed; only the text message didn't go.",
+    whatToDo: "Top up SMS credits in Brevo, then bulk-clean. This is an account top-up, not a code fix.",
+    bulkNote: "Bulk cleanup, SMS credit failures. Top up Brevo SMS credits to restore sending.",
+    safeBecause: "The lead is routed and emailed; only the SMS channel was affected. Clearing the notice doesn't lose anything once credits are topped up.",
+  },
 };
 
 const DEFAULT_EXPLANATION: SourceExplanation = {
