@@ -59,7 +59,7 @@ export function ReconcileSheetPanel({
   const [republishResult, setRepublishResult] = useState<RepublishSheetResult | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [confirmApply, setConfirmApply] = useState<
-    "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | null
+    "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | null
   >(null);
 
   function resetResults() {
@@ -186,11 +186,10 @@ export function ReconcileSheetPanel({
   // classified the rows as sheet-fresher (e.g. EMS, who moved off the sheet
   // so the DB carries the live truth — the sheet just needs overwriting).
   // Mirror of fireApplySheetToDb, opposite direction.
-  function fireRepublishSelected(apply: boolean) {
-    if (!providerId || selectedIds.size === 0) return;
+  function fireRepublishIds(ids: number[], apply: boolean) {
+    if (!providerId || ids.length === 0) return;
     setRepublishResult(null);
     setPendingMode(apply ? "republish_selected_apply" : "republish_selected_dry_run");
-    const ids = [...selectedIds];
     startTransition(async () => {
       try {
         const r = await republishSheetAction({
@@ -221,6 +220,10 @@ export function ReconcileSheetPanel({
         setConfirmApply(null);
       }
     });
+  }
+
+  function fireRepublishSelected(apply: boolean) {
+    fireRepublishIds([...selectedIds], apply);
   }
 
   const eligibleChanges = useMemo<ReconcileProposedChange[]>(
@@ -282,6 +285,7 @@ export function ReconcileSheetPanel({
           fireApplySheetToDb={fireApplySheetToDb}
           fireRepublish={fireRepublish}
           fireRepublishSelected={fireRepublishSelected}
+          fireRepublishIds={fireRepublishIds}
           pending={pending}
           pendingMode={pendingMode}
         />
@@ -328,6 +332,7 @@ function DriftReport({
   fireApplySheetToDb,
   fireRepublish,
   fireRepublishSelected,
+  fireRepublishIds,
   pending,
   pendingMode,
 }: {
@@ -335,16 +340,18 @@ function DriftReport({
   eligibleChanges: ReconcileProposedChange[];
   selectedIds: Set<number>;
   setSelectedIds: (s: Set<number>) => void;
-  confirmApply: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | null;
-  setConfirmApply: (v: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | null) => void;
+  confirmApply: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | null;
+  setConfirmApply: (v: "sheet_to_db" | "db_to_sheet" | "db_to_sheet_selected" | "db_to_sheet_skipped" | null) => void;
   fireApplySheetToDb: () => void;
   fireRepublish: (apply: boolean) => void;
   fireRepublishSelected: (apply: boolean) => void;
+  fireRepublishIds: (ids: number[], apply: boolean) => void;
   pending: boolean;
   pendingMode: string | null;
 }) {
   const allClear = summary.drift_eligible_total === 0
     && summary.drift_skipped_db_fresher === 0;
+  const targetDisallowed = summary.drift_target_disallowed_details ?? [];
 
   return (
     <div className="space-y-3">
@@ -372,11 +379,11 @@ function DriftReport({
             </li>
           )}
         </ul>
-        {summary.drift_target_disallowed_details && summary.drift_target_disallowed_details.length > 0 && (
+        {targetDisallowed && targetDisallowed.length > 0 && (
           <div className="mt-3 pt-3 border-t border-amber-200/60">
             <p className="text-xs font-semibold text-amber-900 mb-1.5">Skipped leads (open in admin to mark outcome):</p>
             <ul className="text-xs space-y-0.5">
-              {summary.drift_target_disallowed_details.map((d) => (
+              {targetDisallowed.map((d) => (
                 <li key={d.submission_id}>
                   <a
                     href={`/admin/leads/${d.submission_id}`}
@@ -390,6 +397,44 @@ function DriftReport({
                 </li>
               ))}
             </ul>
+            <div className="mt-2.5">
+              <p className="text-[11px] text-amber-800/80 mb-1.5">
+                These can&apos;t be pulled <em>into</em> the database from the sheet (that needs the billing-safe outcome
+                path), but the database is correct, so you can push its value <em>out</em> to the sheet to clear the drift.
+              </p>
+              {confirmApply !== "db_to_sheet_skipped" ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmApply("db_to_sheet_skipped")}
+                  disabled={pending}
+                  className="px-3 py-1.5 bg-teal-700 text-white rounded-md text-xs font-semibold hover:bg-teal-800 disabled:opacity-60 cursor-pointer"
+                >
+                  Push these {targetDisallowed.length} to sheet (DB → sheet)
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 bg-teal-50 border border-teal-200 rounded-md px-3 py-1.5">
+                  <span className="text-xs text-teal-900 font-semibold">
+                    Write the database&apos;s status to the sheet for these {targetDisallowed.length} lead{targetDisallowed.length === 1 ? "" : "s"}?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => fireRepublishIds(targetDisallowed.map((d) => d.submission_id), true)}
+                    disabled={pending}
+                    className="px-3 py-1 bg-teal-700 text-white rounded-md text-xs font-semibold hover:bg-teal-800 disabled:opacity-60 cursor-pointer"
+                  >
+                    {pendingMode === "republish_selected_apply" ? "Pushing…" : "Yes, push DB → sheet"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmApply(null)}
+                    disabled={pending}
+                    className="px-3 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -490,8 +535,8 @@ function DriftReport({
         )}
         {!confirmApply && summary.drift_eligible_total > 0 && (
           <p className="basis-full text-[11px] text-slate-400 leading-relaxed">
-            Two directions for the ticked rows: <span className="text-rose-700 font-medium">sheet → DB</span> pulls the
-            sheet&apos;s value into the database (use when the provider works in the sheet);{" "}
+            Two directions for the ticked rows: <span className="text-rose-700 font-medium">sheet → DB</span>{" "}
+            pulls the sheet&apos;s value into the database (use when the provider works in the sheet);{" "}
             <span className="text-teal-700 font-medium">DB → sheet</span> overwrites the sheet from the database (use when
             the database is the trusted side, e.g. the provider works elsewhere).
           </p>
