@@ -290,6 +290,7 @@ CREATE TABLE leads.submissions (
   -- Routing state (updated by the Edge Function after the owner confirms routing)
   is_dq                      BOOLEAN NOT NULL DEFAULT false,
   dq_reason                  TEXT,
+  pay_route                  TEXT, -- private-pay fallback. 'private' when the learner DQ'd from funding and chose to pay for the course; NULL otherwise. Routes to the provider despite is_dq=true (router + routeLead branch on it); forces owner-confirm (never auto-route) so the owner sees the PRIVATE PAY banner. Migration 0207.
   primary_routed_to          TEXT, -- provider_id; null if DQ or multi-route
   routed_at                  TIMESTAMPTZ,
 

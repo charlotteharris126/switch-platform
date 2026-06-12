@@ -94,6 +94,9 @@ export interface SubmissionRow {
   primary_routed_to: string | null;
   archived_at: string | null;
   marketing_opt_in: boolean;
+  // Private-pay fallback (migration 0207). 'private' = learner failed funding
+  // and chose to pay; routes despite is_dq. NULL on normal funded leads.
+  pay_route: string | null;
   preferred_intake_id: string | null;
   acceptable_intake_ids: string[] | null;
   referral_code: string | null;
@@ -175,7 +178,7 @@ export async function routeLead(
              postcode, region, reason, interest, situation,
              qualification, start_when, budget, courses_selected,
              is_dq, dq_reason, primary_routed_to, archived_at,
-             marketing_opt_in,
+             marketing_opt_in, pay_route,
              preferred_intake_id, acceptable_intake_ids,
              referral_code, client_nonce,
              start_timing, interest_breadth, investment_willingness,
@@ -185,7 +188,11 @@ export async function routeLead(
        WHERE id = ${submissionId}
     `;
     if (!submissionRow) return { kind: "submission_not_found", submissionId };
-    if (submissionRow.is_dq) return { kind: "submission_dq", submissionId };
+    // Private-pay leads carry is_dq=true (failed funding) but ARE routable: the
+    // learner chose to pay. Only block routing for genuine (non-paying) DQ rows.
+    if (submissionRow.is_dq && submissionRow.pay_route !== "private") {
+      return { kind: "submission_dq", submissionId };
+    }
     if (submissionRow.archived_at) {
       return { kind: "submission_archived", submissionId, archivedAt: submissionRow.archived_at };
     }

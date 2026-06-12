@@ -184,13 +184,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // owner-confirm flow.
   const runtime0 = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
 
-  if (row.is_dq || row.provider_ids.length === 0) {
+  // Private-pay leads carry is_dq=true (they did not qualify for funding) but
+  // are real routable enrolment leads, so they take the routing path below, not
+  // the no_match path. The learner chose to pay; route to the provider.
+  const isPrivatePay = row.pay_route === "private";
+
+  if ((row.is_dq && !isPrivatePay) || row.provider_ids.length === 0) {
     const noMatchTask = upsertLearnerInBrevoNoMatch(sql, result.id, "no_match")
       .catch((err) => console.error("Brevo no_match upsert failed:", describeError(err)));
     if (runtime0?.waitUntil) runtime0.waitUntil(noMatchTask);
   }
 
-  if (!row.is_dq && row.provider_ids.length > 0) {
+  if ((!row.is_dq || isPrivatePay) && row.provider_ids.length > 0) {
     const isSingleCandidate = row.provider_ids.length === 1;
     const candidateProviderId: string | null = isSingleCandidate ? row.provider_ids[0] : null;
 
@@ -207,7 +212,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     let autoRouteEligible = false;
 
-    if (isSingleCandidate && !isSameProviderReApplication) {
+    // Private-pay leads never auto-route: they always go through the owner-
+    // confirm flow so Charlotte sees the PRIVATE PAY banner and forwards to the
+    // provider with the "they are paying, bill the learner" context. Auto-route
+    // would drop a funded-looking row straight onto the provider sheet.
+    if (isSingleCandidate && !isSameProviderReApplication && !isPrivatePay) {
       try {
         const [eligibility] = await sql<Array<{ auto_route_enabled: boolean; active: boolean; archived_at: string | null }>>`
           SELECT auto_route_enabled, active, archived_at
@@ -530,6 +539,7 @@ function composeOwnerEmailHtml(
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:640px;margin:0 auto;padding:24px;color:#111;line-height:1.5;">
 <h2 style="margin:0 0 8px;font-size:20px;">New lead ${escapeHtml(leadId)}</h2>
 <p style="color:#666;margin:0 0 24px;">Course: <strong>${escapeHtml(humaniseSlug(row.course_id))}</strong> &middot; Funding: <strong>${escapeHtml(row.funding_category ?? "-")}${row.funding_route ? ` / ${escapeHtml(row.funding_route)}` : ""}</strong></p>
+${row.pay_route === "private" ? `<p style="margin:0 0 24px;padding:12px 16px;background:#fff3cd;border:1px solid #e0c200;border-radius:6px;color:#664d03;font-weight:600;">PRIVATE PAY: this learner did not qualify for funding and chose to pay for the course. Route them to the provider as a paying enrolment. The provider bills the learner the course fee; do not enrol them as funded. Our fee to the provider is the standard enrolment fee.</p>` : ""}
 
 <div style="margin:0 0 24px;">${buttons}</div>
 

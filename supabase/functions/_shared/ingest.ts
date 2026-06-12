@@ -82,6 +82,12 @@ export interface CanonicalSubmission {
   dq_reason: string | null;
   session_id: string | null;
 
+  // Private-pay fallback (platform migration 0207). 'private' only when the
+  // learner DQ'd from funding and took the pay offer on the switchable-funded
+  // form; NULL otherwise. A private row carries is_dq=true (it failed funding)
+  // but keeps its provider_ids and routes to the provider as a paying enrolment.
+  pay_route: string | null;
+
   // A/B experiment attribution (platform migration 0061). Set when the
   // submission came from a page running an experiment; both NULL otherwise.
   // Variant is "a" (canonical / control) or "b" (challenger). Populated from
@@ -221,6 +227,10 @@ export function normaliseAndOverride(
  */
 function applyDqOverride(row: CanonicalSubmission): CanonicalSubmission {
   if (!row.is_dq || row.provider_ids.length === 0) return row;
+  // Private-pay leads carry is_dq=true (they failed funding) but must keep
+  // their provider_ids so the router can route them to the provider as a
+  // paying enrolment. Only clamp non-private DQ rows.
+  if (row.pay_route === "private") return row;
   return { ...row, provider_ids: [] };
 }
 
@@ -305,7 +315,7 @@ export async function insertSubmission(
         postcode, region, reason, interest, situation, qualification,
         start_when, budget, courses_selected,
         terms_accepted, marketing_opt_in,
-        is_dq, dq_reason, session_id,
+        is_dq, dq_reason, session_id, pay_route,
         experiment_id, experiment_variant,
         client_nonce,
         start_timing, interest_breadth, investment_willingness, current_qualification,
@@ -324,7 +334,7 @@ export async function insertSubmission(
         ${row.postcode}, ${row.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
         ${row.terms_accepted}, ${row.marketing_opt_in},
-        ${row.is_dq}, ${row.dq_reason}, ${row.session_id},
+        ${row.is_dq}, ${row.dq_reason}, ${row.session_id}, ${row.pay_route},
         ${row.experiment_id}, ${row.experiment_variant},
         ${row.client_nonce},
         ${row.start_timing}, ${row.interest_breadth}, ${row.investment_willingness}, ${row.current_qualification},
@@ -524,6 +534,12 @@ function normalise(
     is_dq: clientSaysDq,
     dq_reason: dqReason,
     session_id: parseSessionId(data["session_id"]),
+
+    // Private-pay fallback. Only "private" is meaningful; "" / absent / any
+    // other value normalises to NULL so the column only ever holds 'private'
+    // or NULL. Read generically at the base; the switchable-funded form is the
+    // only producer today.
+    pay_route: firstString(data["pay_route"]) === "private" ? "private" : null,
 
     // Experiment attribution fields. Empty hidden inputs (the default for
     // pages with no live experiment) come through as empty strings;
