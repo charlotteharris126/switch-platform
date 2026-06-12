@@ -87,7 +87,12 @@ type LeadRow = {
   dq_reason: string | null;
   utm_campaign: string | null;
   re_submission_count: number;
+  fastracked_at: string | null;
 };
+
+// Fastrack DQ reasons (set by fastrack-receive on the two auto-lost paths).
+// A fastracked lead is a "pass" unless its enrolment was lost for one of these.
+const FASTRACK_DQ_REASONS = new Set(["l3_mismatch_self_reported", "cohort_decline"]);
 
 export default async function LeadsPage({
   searchParams,
@@ -254,7 +259,7 @@ export default async function LeadsPage({
   }
 
   const SUBMISSION_COLS =
-    "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign,re_submission_count";
+    "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign,re_submission_count,fastracked_at";
 
   let data: LeadRow[] | null = null;
   let count: number | null = null;
@@ -599,6 +604,27 @@ export default async function LeadsPage({
                           Reapplied {r.re_submission_count}×
                         </Badge>
                       )}
+                      {(() => {
+                        // Fastrack "passed" badge: learner completed the fastrack
+                        // form (fastracked_at set) and was NOT auto-lost on one of
+                        // the two fastrack DQ paths. Fastracked-but-failed leads
+                        // already read their lost status above, so no badge there.
+                        if (!r.fastracked_at) return null;
+                        const enrol = enrolmentBySubId.get(r.id);
+                        const failedFastrack =
+                          enrol?.status === "lost" &&
+                          !!enrol.lost_reason &&
+                          FASTRACK_DQ_REASONS.has(enrol.lost_reason);
+                        if (failedFastrack) return null;
+                        return (
+                          <Badge
+                            className="text-xs bg-sky-100 text-sky-800 hover:bg-sky-100"
+                            title={`Fastrack passed · ${formatDateTime(r.fastracked_at)}`}
+                          >
+                            Fastracked ✓
+                          </Badge>
+                        );
+                      })()}
                     </div>
                   </TableCell>
                   <TableCell className="text-xs">

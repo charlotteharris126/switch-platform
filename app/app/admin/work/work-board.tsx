@@ -227,6 +227,17 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
     return r;
   }
 
+  // One-click status flip from a card's tick button. Tick a live task → Completed
+  // (it drops out of its column into the hidden Completed stash). Tick a done task
+  // → reopen to This Week. Optimistic, reverts on failure.
+  function toggleDone(t: WorkTask) {
+    const next: WorkTask["status"] = t.status === "done" ? "this_week" : "done";
+    patchLocal(t.id, { status: next });
+    updateWorkTaskAction(t.id, { status: next }).then((r) => {
+      if (!r.ok) patchLocal(t.id, { status: t.status });
+    });
+  }
+
   // Opening a card marks it seen — so an agent-added "New" task stops being new
   // the moment you look at it. (Tasks you added yourself are never "New".)
   function openTask(t: WorkTask) {
@@ -320,7 +331,7 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
           className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start lg:[grid-template-columns:repeat(var(--cols),minmax(0,1fr))]"
           style={{ ["--cols"]: String(visibleColumns.length) } as CSSProperties}>
           {visibleColumns.map((col) => (
-            <Column key={col.status} status={col.status} label={col.label} tasks={byColumn[col.status]} onOpen={openTask} />
+            <Column key={col.status} status={col.status} label={col.label} tasks={byColumn[col.status]} onOpen={openTask} onToggleDone={toggleDone} />
           ))}
         </div>
         <DragOverlay>{dragTask ? <CardView task={dragTask} overlay /> : null}</DragOverlay>
@@ -338,8 +349,8 @@ export function WorkBoard({ initialTasks, initialView }: { initialTasks: WorkTas
   );
 }
 
-function Column({ status, label, tasks, onOpen }: {
-  status: string; label: string; tasks: WorkTask[]; onOpen: (t: WorkTask) => void;
+function Column({ status, label, tasks, onOpen, onToggleDone }: {
+  status: string; label: string; tasks: WorkTask[]; onOpen: (t: WorkTask) => void; onToggleDone: (t: WorkTask) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
   return (
@@ -351,13 +362,13 @@ function Column({ status, label, tasks, onOpen }: {
         <span className="text-[11px] font-semibold text-[#5a6a72] tabular-nums">{tasks.length}</span>
       </div>
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-        <div className="space-y-2">{tasks.map((t) => <Card key={t.id} task={t} onOpen={onOpen} />)}</div>
+        <div className="space-y-2">{tasks.map((t) => <Card key={t.id} task={t} onOpen={onOpen} onToggleDone={onToggleDone} />)}</div>
       </SortableContext>
     </div>
   );
 }
 
-function Card({ task, onOpen }: { task: WorkTask; onOpen?: (t: WorkTask) => void }) {
+function Card({ task, onOpen, onToggleDone }: { task: WorkTask; onOpen?: (t: WorkTask) => void; onToggleDone?: (t: WorkTask) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
     <div
@@ -368,21 +379,39 @@ function Card({ task, onOpen }: { task: WorkTask; onOpen?: (t: WorkTask) => void
       onClick={() => { if (!isDragging) onOpen?.(task); }}
       className={isDragging ? "opacity-30" : ""}
     >
-      <CardView task={task} />
+      <CardView task={task} onToggleDone={onToggleDone} />
     </div>
   );
 }
 
-function CardView({ task, overlay }: { task: WorkTask; overlay?: boolean }) {
+function CardView({ task, overlay, onToggleDone }: { task: WorkTask; overlay?: boolean; onToggleDone?: (t: WorkTask) => void }) {
   const isNew = !task.seen_by_owner && task.added_by !== "charlotte";
   const overdue = task.due_date && task.status !== "done" && task.status !== "backlog" && new Date(task.due_date) < new Date(new Date().toDateString());
+  const done = task.status === "done";
 
   return (
     <div
       className={`rounded-lg border border-[#e0dacf] bg-white p-2.5 shadow-sm cursor-grab active:cursor-grabbing ${overlay ? "shadow-lg rotate-1" : ""}`}>
       <div className="flex items-start gap-2">
+        {onToggleDone && (
+          // Tick to complete (or re-open). stopPropagation so it neither opens
+          // the card nor starts a drag. PointerSensor's 5px threshold also helps.
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onToggleDone(task); }}
+            title={done ? "Re-open task" : "Mark done"}
+            aria-label={done ? "Re-open task" : "Mark done"}
+            className={`mt-0.5 shrink-0 w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
+              done ? "bg-emerald-500 border-emerald-500 text-white" : "border-[#c3bcb0] text-transparent hover:border-emerald-500 hover:text-emerald-500"}`}
+          >
+            <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2.5 6.2L5 8.5L9.5 3.5" />
+            </svg>
+          </button>
+        )}
         {task.blocked && <span className="mt-0.5 inline-block w-2 h-2 rounded-full bg-rose-500 shrink-0" title={task.blocked_reason ?? "Blocked"} />}
-        <p className="text-sm text-[#11242e] leading-snug flex-1">{task.title}</p>
+        <p className={`text-sm leading-snug flex-1 ${done ? "text-[#5a6a72] line-through" : "text-[#11242e]"}`}>{task.title}</p>
       </div>
       <div className="mt-2 flex items-center gap-1.5 flex-wrap">
         {task.priority !== "normal" && (
