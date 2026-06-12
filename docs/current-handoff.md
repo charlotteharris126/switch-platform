@@ -1,37 +1,37 @@
-# Platform Handoff, Session 71, 2026-06-10
+# Platform Handoff, Session 72, 2026-06-12
 
 ## Current state
-Provider-portal "Mark not signed" bug fixed and deployed. Freya (Riverside) reported the employer "not signed" outcome with the "No response" reason erroring; root cause was the server action silently dropping every employer not_signed reason (it only ever persisted a reason for the learner "lost" flow). The action now validates and writes the reason; pushed to main, Netlify built. The Session 70 lead-pipeline state still stands underneath: the Netlify -> `netlify-lead-router` webhook has a known ~3% intermittent drop, mitigated (not eliminated) by the reconcile sweep running every 2 min with a 2-min grace window. No new pipeline work this session.
+Data health (`/admin/errors`) and the daily digest email now separate real failures from routine drift, and the dead_letter backlog was reset to a clean slate (migration 0206). EMS and Riverside sheet vs DB drift was reconciled this session with the database treated as the trusted source throughout; the sheet reconcile panel gained four push directions and a relabelled, honest status pill.
 
 ## What was done this session
-- Traced Freya's "Mark not signed / No response errors and goes back" report end to end. Confirmed against production: the `lost_reason` CHECK (migration 0187), the `status` CHECK, the employer transition rules, and the provider column-level UPDATE grant (0180, includes `lost_reason`) all already permit `not_signed` + `no_response`. DB was never the blocker.
-- Found the real bug: `app/app/provider/leads/[id]/actions.ts` `markOutcomeAction` only validated/persisted a reason for `lost`; for `not_signed` it dropped the reason to null. Audit proof: Freya's marks today (audit ids 1490/1492, `attempt_3_no_answer -> not_signed`) succeeded but recorded `lost_reason: null`; all 16 `not_signed` rows in the DB carried null. The vanishing reason on re-render read to her as a failure.
-- Fixed: action now validates the employer reason against `VALID_NOT_SIGNED_REASONS` and writes it to `lost_reason`, and accepts the optional outcome note for `not_signed`. Typecheck clean. Committed + pushed (4abe890); Netlify deploying the provider portal.
-- Logged the fix + a correction to migration 0187's mistaken diagnosis in `docs/changelog.md`.
-- CROSS-PROJECT (switchable/email): on Charlotte's request, removed the word "apprenticeship" -> "training" in the two visible S4B employer email templates (`html-exports/u1-employer.html`, `u-employer-chaser.html`). Source files only; the live Brevo templates still need updating. Pushed to switchable/email handoff + Work Hub.
+- **Data health overhaul (deployed).** `app/app/admin/errors/page.tsx`: added plain-English `SOURCE_EXPLANATIONS` for the six drift sources that fell through to "Unknown error -> Flag for Claude". `drift-digest-daily` EF: split "Needs you" vs "Routine, no action" and leads with the count (the 06:12 email confirmed it reads "All clear" on a routine day). `brevo-attribute-reconcile` EF: auto-resolves its own prior summary rows each run so the Brevo logs stop accumulating (ticket e2b2615f). Sheet-drift cron already self-cleans.
+- **Clean-slate wipe.** Migration 0206 resolved 100 routine/transient/test dead_letter rows. Left `brevo_attribute_drift` (14, needs a Brevo Re-sync) and `reconcile_backfill` (3, owner ack) deliberately.
+- **"4 bugs" investigated, all non-bugs.** fastrack #1005 = a test submission; netlify_audit #998 = transient (URL live); labs_event x2 = transient blip during the 3 Jun 0184/0185 deploy (functions_writer inserts fine since, verified 4 events in `labs.events_analytics`); brevo_transactional_sms = Brevo SMS credits ran out (owner top-up).
+- **Sheet reconcile panel, four DB->sheet capabilities added** (`reconcile-sheet-panel.tsx`): "Push selected DB -> sheet", "Push these N to sheet" (for billing-guarded skipped rows), "Push whole sheet from DB" (full republish), and a visible list of the db-fresher submission_ids. Status pill relabelled "Aligned" -> "No drift flagged" (grey) with a "reflects the last daily check, not live" note. DB-sanity card now renders the reconciliation as an explicit equation.
+- **EMS + Riverside reconciled.** Established via `crm.sheet_edits_log` provenance that the DB is the trusted side (DB changed after the sheet's last edit on all 42 EMS leads; Riverside has zero edit-log rows, its sheet is one-way). EMS pushed DB->sheet via the panel. Riverside's last 6 (stuck at `open` in the sheet while DB had Attempt 1/2/3) fixed by typing the values into the sheet directly, because the whole-sheet push times out with no result box.
+- **Cross-project (switchable/site, done in this session):** team-leading page `legacy` intake-id fix + new `cohort-ssot` audit guard shipped (commit db384d4 in the switchable-site repo). New EMS course `build-an-online-shop-tees-valley` verified wired end to end (routing, sheet, email/SMS, fastrack, portal).
 
 ## Next steps
-1. Owner + Mira decide the durable lead-webhook fix: add a client-side direct POST from the form to the router (deduped on `client_nonce`/`session_id`) to remove the Netlify-webhook dependency entirely, OR accept the 2-min self-healing backup as sufficient for pilot. Architecture decision, Mira signs off.
-2. If durable fix is a go: scope `client_nonce` dedup in `_shared/ingest.ts` (touches every importer -> redeploy all) + CORS on the router for browser POSTs.
-3. Dead_letter redesign (ticketed `e2b2615f`, Mira): route drift-notices to their own log table or auto-resolve on write, so the section-10 "anything old = a real problem" signal works again.
-4. Optional: mirror provider-notification sends into `crm.email_log` (currently only in `audit.actions`); read Netlify's webhook delivery log to confirm failing-vs-not-attempted (dashboard only).
-5. Carries: rotate BREVO_API_KEY + ROUTING_CONFIRM_SHARED_SECRET + the 3 leaked creds in `~/.zsh_history` (owner-driven security); ClickUp cutover (wire Rosa/Nell to task-upsert); billing reconciliation (`/admin/billing`).
-6. PUSH FROM Iris (switchable/ads) 2026-06-09: add a "Waiting on" column to the Work Hub. Design signed off by Charlotte. Hub task 811389d0 (status review, area platform) holds the full spec + infra impact assessment: new `waiting_on` status via migration + new columns `waiting_on_what` (text, required when status=waiting_on) and `review_after` (date, nullable); task-upsert validation; `/admin/work` UI (column, DnD, mandatory-blocker input, overdue badge); CLAUDE.md "Column meaning" + ticketing docs; Mira Monday-audit resurface guard (flag past-date OR undated-and-parked >3 weeks); new-business template. Needs Charlotte to move it out of review when she wants it built.
+1. Make `republish-provider-sheet` run in the **background** with a "started, check back in ~1 min" response (mirror the `brevo-attribute-reconcile` async pattern), so a big sheet (Riverside ~40 rows) stops timing out and silently showing no result box.
+2. Decide whether **one-way provider sheets auto-republish on DB status change**. Root cause of the recurring Riverside drift: when Freya logs call attempts in the portal (DB), nothing pushes DB->sheet until a manual republish, so the sheet drifts to stale `open`. EMS mirrors back so it self-corrects; Riverside does not.
+3. Tighten the sheet-drift copy: "self-healing" overclaims for stuck cases. Say "clears once reconciled".
+4. Consolidate the reconcile panel (now four push buttons) into a cleaner two-direction design.
+5. Carried from S71: durable lead-webhook fix decision (direct-POST vs accept the 2-min backup, Mira's call) + `client_nonce` dedup scope; billing reconciliation (`/admin/billing`); ClickUp cutover (wire Rosa/Nell to task-upsert); rotate BREVO_API_KEY + ROUTING_CONFIRM_SHARED_SECRET + the 3 leaked `~/.zsh_history` creds.
 
 ## Decisions and open questions
-- Decision: fixed the not_signed bug app-side (persist the reason) rather than touch the DB, because the DB was already correctly set up by 0187 + 0180. The earlier migration 0187 diagnosed it as a constraint problem on the assumption the action wrote the reason; it never did. WHY logged in changelog.
-- Carried from S70 - Decision (owner-authorised): speed reconcile to `*/2` + grace window as interim mitigation rather than chase Netlify's flakiness.
-- Carried open: durable-fix go/no-go (step 1) and dead_letter redesign (step 3) are Mira's calls.
-- Carried open: is the lead lag baseline ~3% flakiness amplified by volume, or a worse-than-usual Netlify spell? Cannot confirm without Netlify's delivery log.
+- **Decision: the database is the trusted source of truth for sheet vs DB drift on EMS and Riverside, so reconcile is always DB -> sheet, never sheet -> DB.** WHY: providers work via the portal/DB; the sheets are stale (EMS mirrors back but lags) or one-way (Riverside never syncs back). Verified against `crm.sheet_edits_log`. Trusting the DB preserved EMS enrolments (#247, #302) that a sheet->DB apply would have wrongly marked lost.
+- Decision: cleared the routine dead_letter backlog (0206) to restore "anything unresolved = a real problem", rather than leave 109 routine rows.
+- Open: should one-way sheets auto-republish on status change (step 2)? Owner/Mira call.
+- Open: panel button consolidation (step 4).
 
 ## Watch items
-- Provider portal: have Freya retry "Mark not signed / No response" once Netlify finishes deploying. Expected: mark goes through and the reason now persists. If she still sees a literal error popup (not just a page reset), it points elsewhere; get exact wording.
-- The 16 existing `not_signed` rows keep null reasons (historical, not backfillable). New ones from now carry the real reason.
-- Next real leads: `submit_to_insert` ~2s (webhook) or <=~4 min (backup); no false "back-filled" alerts on healthy leads.
-- Every new lead should show `provider_notified=true` in `audit.actions` + a `crm.email_log` learner row + a `crm.sms_log` row.
-- dead_letter row count still climbing from daily drift-notices until the redesign lands.
+- Tomorrow's 06:00 sheet-drift cron + 06:30 digest: EMS should show no drift; Riverside should show 0 after the manual fix; the section pills should now read honestly ("No drift flagged", not a false "Aligned").
+- The 14 `brevo_attribute_drift` rows persist until Charlotte runs DB <-> Brevo "Check drift" -> "Re-sync" (genuinely reconciles the contacts, then auto-resolves via the redeployed cron).
+- 3 `reconcile_backfill` rows (today's recovered leads, verified handled, Olamide #604 reached EMS) persist until owner clicks "Mark all resolved".
+- Brevo SMS sending stays down until credits topped up.
+- Confirm the redeployed `brevo-attribute-reconcile` auto-resolve works on the next daily run (the two Brevo sources should stop accumulating).
 
 ## Next session
 - **Folder:** platform (Sasha)
-- **First task:** Take the durable-fix decision (direct-POST vs accept backup) to Mira; if go, scope the `client_nonce` dedup + `_shared/ingest.ts` change.
-- **Cross-project:** switchable/email - apprenticeship->training copy edit made in the two S4B employer templates this session; the live Brevo templates still need updating (pushed to switchable/email handoff + Work Hub task).
+- **First task:** Make `republish-provider-sheet` background-mode (Next step 1), then take the one-way-sheet auto-republish decision (Next step 2, Riverside drift root cause) to Mira.
+- **Cross-project:** switchable/site (Mable) - team-leading `legacy` fix + `cohort-ssot` audit guard shipped (commit db384d4, switchable-site repo); build-an-online-shop EMS course verified live. Pushed to switchable/site handoff: confirm the **provisional EMS qualification + awarding body** for build-an-online-shop (was due 2026-06-11, now overdue) and the team-leading `intakes:` normalisation.
