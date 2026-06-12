@@ -144,6 +144,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // AEB fastrack only (team-leading): learner reconfirms they earn under £30k.
   // NULL on FCFJ fastracks (the question isn't asked). Extra due-diligence signal.
   const earningsReconfirmed = toBool(data.earnings_reconfirmed);
+  // Tree A pay fork (private-pay). True when the learner failed the funding
+  // reconfirm (L3 mismatch / earnings over £30k) but chose to pay for the
+  // course on the thank-you fastrack. Converts them to a private enrolment
+  // instead of auto-losing them. Hidden field set by the fastrack form.
+  const fastrackPay = toBool(data.fastrack_pay) === true;
+  const earningsOverFlag = earningsReconfirmed === false;
   const voiceRaw = firstString(data.voice_of_learner_intro);
   const voice = voiceRaw
     ? voiceRaw.trim().slice(0, VOICE_OF_LEARNER_MAX_LEN)
@@ -268,8 +274,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // Step 8: DQ flip. L3 mismatch wins precedence over cohort decline.
+  // Tree A pay fork: a learner who admits the L3 mismatch but chooses to PAY
+  // is NOT lost - they convert to a private enrolment (pay_route set in Step
+  // 8.4 below), so the enrolment stays open. Cohort decline still loses even
+  // for a payer (dates are the one thing paying can't fix).
   let lostReason: LostReason | null = null;
-  if (l3MismatchFlag) lostReason = "l3_mismatch_self_reported";
+  if (l3MismatchFlag && !fastrackPay) lostReason = "l3_mismatch_self_reported";
   else if (cohortDeclineFlag) lostReason = "cohort_decline";
 
   // Tracks whether Step 8's DB flip actually succeeded. When false, we
@@ -375,6 +385,37 @@ Deno.serve(async (req: Request): Promise<Response> => {
       await persistSideEffectFailure(
         rawBody,
         `fastrack: enrolment status flip failed for submission_id=${parent.id} reason=${lostReason}: ${describeError(err)}`,
+        parent.id,
+      );
+    }
+  }
+
+  // Step 8.4: Tree A pay fork. The learner failed the funding reconfirm (L3
+  // mismatch or earnings over £30k) but chose to pay. Flag the parent
+  // submission private-pay so billing + reporting know, and leave the
+  // enrolment OPEN (no lostReason was set for them above). Best-effort.
+  if (fastrackPay && (l3MismatchFlag || earningsOverFlag)) {
+    try {
+      await sql.begin(async (trx) => {
+        await trx`SET LOCAL ROLE functions_writer`;
+        await trx`UPDATE leads.submissions SET pay_route = 'private' WHERE id = ${parent.id}`;
+        if (parent.primary_routed_to) {
+          await trx`
+            INSERT INTO crm.lead_notes (
+              submission_id, provider_id, provider_user_id,
+              author_role, author_user_id, author_display_name, body
+            ) VALUES (
+              ${parent.id}, ${parent.primary_routed_to}, NULL,
+              'system', NULL, 'Switchable',
+              'Learner did not qualify for funding on the fastrack but chose to PAY for the course. Treat as a paying enrolment: bill the learner the course fee.'
+            )
+          `;
+        }
+      });
+    } catch (err) {
+      await persistSideEffectFailure(
+        rawBody,
+        `fastrack: pay_route update failed for submission_id=${parent.id}: ${describeError(err)}`,
         parent.id,
       );
     }
