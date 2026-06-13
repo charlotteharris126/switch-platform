@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -38,6 +39,8 @@ interface SubmissionRow {
   experiment_variant: string | null;
   is_dq: boolean | null;
   submitted_at: string;
+  course_id: string | null;
+  lead_type: string | null;
 }
 
 interface EnrolmentRow {
@@ -80,6 +83,8 @@ interface ExperimentSummary {
   totalLoadsAll: number;
   earliest: string | null;
   latest: string | null;
+  courseIds: Set<string>;     // distinct course_id seen across this experiment's leads
+  hasEmployerLeads: boolean;  // any employer_apprenticeship lead → it's a /business/ page test
 }
 
 // Canonical enrolment status enum: migration 0151 enrolments_status_check.
@@ -127,6 +132,58 @@ function pct(num: number, denom: number): string {
   return `${((num / denom) * 100).toFixed(1)}%`;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Turn an experiment slug into a readable title. Pulls a trailing date suffix
+// (-YYYY-MM or -YYYY-MM-DD) out as a tidy period tag and title-cases the rest.
+// The raw slug is kept and shown separately for cross-reference. The slug is
+// the only identifier the manifest carries — there's no human name field — so
+// this is presentation only, no data dependency.
+function humaniseExperimentId(id: string): { title: string; period: string | null } {
+  const m = id.match(/-(\d{4})-(\d{2})(?:-\d{2})?$/);
+  let base = id;
+  let period: string | null = null;
+  if (m) {
+    base = id.slice(0, m.index);
+    const monthIdx = parseInt(m[2], 10) - 1;
+    if (monthIdx >= 0 && monthIdx < 12) period = `${MONTHS[monthIdx]} ${m[1]}`;
+  }
+  const title = base
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+  return { title: title || id, period };
+}
+
+// What page/form is this experiment actually testing? The slug doesn't say,
+// so resolve it from real signals: the course_id its leads carry (course
+// pages), an employer-lead marker (/business/ pages), or the live manifest
+// page URL (covers brand-new experiments with no leads yet).
+function describeTarget(
+  courseIds: Set<string>,
+  hasEmployerLeads: boolean,
+  pageUrl: string | null,
+): { label: string; value: string } | null {
+  if (courseIds.size > 0) {
+    return { label: "Course", value: Array.from(courseIds).join(", ") };
+  }
+  if (pageUrl?.startsWith("/funded/")) {
+    return { label: "Course", value: pageUrl.replace(/^\/funded\/|\/$/g, "") };
+  }
+  if (hasEmployerLeads || pageUrl?.startsWith("/business")) {
+    // pageUrl is the reliable discriminator (universal vs a sector page). Ended
+    // employer experiments have no manifest, and their leads can't tell sectors
+    // apart, so stay generic rather than guess — the ID line below still shows
+    // the slug (e.g. construction-hero-deputy) for the specifics.
+    const sector = pageUrl?.match(/^\/business\/([^/]+)\/?$/)?.[1];
+    const value = sector ? `${sector} (${pageUrl})` : pageUrl ?? "apprenticeship lead form";
+    return { label: "Employer page", value };
+  }
+  if (pageUrl) return { label: "Page", value: pageUrl };
+  return null;
+}
+
 function emptyVariantStats(): VariantStats {
   return {
     count: 0,
@@ -158,7 +215,12 @@ async function fetchManifest(): Promise<{ manifest: Manifest | null; error: stri
   }
 }
 
-export default async function ExperimentsPage() {
+export default async function ExperimentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ show_ended?: string }>;
+}) {
+  const showEnded = (await searchParams).show_ended === "1";
   const supabase = await createClient();
 
   // 1. Pull every submission with experiment_id (re-applications excluded
@@ -169,7 +231,7 @@ export default async function ExperimentsPage() {
   const submissionsQuery = await supabase
     .schema("leads")
     .from("submissions")
-    .select("id, experiment_id, experiment_variant, is_dq, submitted_at")
+    .select("id, experiment_id, experiment_variant, is_dq, submitted_at, course_id, lead_type")
     .not("experiment_id", "is", null)
     .is("parent_submission_id", null)
     .is("archived_at", null)
@@ -263,6 +325,8 @@ export default async function ExperimentsPage() {
         totalLoadsAll: 0,
         earliest: null,
         latest: null,
+        courseIds: new Set<string>(),
+        hasEmployerLeads: false,
       };
       byExperiment.set(id, s);
     }
@@ -283,6 +347,9 @@ export default async function ExperimentsPage() {
     v.count += 1;
     if (row.is_dq) v.dqCount += 1;
     else v.qualifiedCount += 1;
+
+    if (row.course_id) summary.courseIds.add(row.course_id);
+    if (row.lead_type === "employer_apprenticeship") summary.hasEmployerLeads = true;
 
     if (!v.earliest || row.submitted_at < v.earliest) v.earliest = row.submitted_at;
     if (!v.latest || row.submitted_at > v.latest) v.latest = row.submitted_at;
@@ -342,6 +409,14 @@ export default async function ExperimentsPage() {
     return bDate.localeCompare(aDate);
   });
 
+  // Ended = in the DB with collected data but no longer in the live manifest.
+  // Hidden by default to keep the page focused on what's running; revealed by
+  // the Show ended toggle (?show_ended=1).
+  const endedCount = experiments.filter((e) => e.manifest == null).length;
+  const visibleExperiments = showEnded
+    ? experiments
+    : experiments.filter((e) => e.manifest != null);
+
   return (
     <div className="max-w-6xl space-y-8">
       <PageHeader
@@ -377,8 +452,31 @@ export default async function ExperimentsPage() {
         }
       />
 
-      {experiments.map((exp) => {
+      {endedCount > 0 && (
+        <div className="flex items-center gap-3 -mt-4">
+          <Link
+            href={showEnded ? "/experiments" : "/experiments?show_ended=1"}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border border-[#dad4cb] bg-white text-[#5a6a72] hover:border-[#11242e] hover:text-[#11242e] transition-colors"
+          >
+            {showEnded ? "Hide ended" : `Show ended (${endedCount})`}
+          </Link>
+        </div>
+      )}
+
+      {experiments.length > 0 && visibleExperiments.length === 0 && (
+        <p className="text-sm text-[#5a6a72]">
+          No experiments are running right now. {endedCount} ended —{" "}
+          <Link href="/experiments?show_ended=1" className="underline hover:text-[#11242e]">
+            show ended
+          </Link>
+          .
+        </p>
+      )}
+
+      {visibleExperiments.map((exp) => {
         const isRunning = exp.manifest != null;
+        const { title: expTitle, period: expPeriod } = humaniseExperimentId(exp.id);
+        const target = describeTarget(exp.courseIds, exp.hasEmployerLeads, exp.manifest?.page_url ?? null);
         const variantA = exp.variants.get("a") ?? emptyVariantStats();
         const variantB = exp.variants.get("b") ?? emptyVariantStats();
         const aQual = variantA.qualifiedCount;
@@ -440,7 +538,10 @@ export default async function ExperimentsPage() {
           >
             <div className="flex items-baseline justify-between gap-4 flex-wrap">
               <div className="flex items-baseline gap-3 flex-wrap">
-                <h2 className="font-extrabold text-[#11242e] text-lg">{exp.id}</h2>
+                <h2 className="font-extrabold text-[#11242e] text-lg">{expTitle}</h2>
+                {expPeriod && (
+                  <span className="text-xs font-semibold text-[#5a6a72]">{expPeriod}</span>
+                )}
                 {isRunning ? (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-[#dcefea] text-[#1f5f5e] border border-[#bcdfd8]">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#2A9D8F]"></span>
@@ -468,11 +569,19 @@ export default async function ExperimentsPage() {
               </span>
             </div>
 
-            {isRunning && exp.manifest && (
-              <div className="text-xs text-[#5a6a72] -mt-2">
-                Page: <code className="text-[#11242e]">{exp.manifest.page_url}</code>
+            {target && (
+              <div className="-mt-2 text-sm text-[#11242e]">
+                <span className="text-[#5a6a72]">Testing: </span>
+                <span className="font-semibold">{target.label}</span>
+                {" — "}
+                <code className="text-[#11242e]">{target.value}</code>
               </div>
             )}
+
+            <div className="text-xs text-[#5a6a72] flex items-center gap-2 flex-wrap">
+              <span className="uppercase tracking-wider text-[10px] font-semibold">ID</span>
+              <code className="text-[#5a6a72]">{exp.id}</code>
+            </div>
 
             <Table>
               <TableHeader>
