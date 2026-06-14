@@ -1,7 +1,7 @@
 # Platform Handoff, Session 73, 2026-06-14
 
 ## Current state
-The full Wren-handoff Sasha set is shipped: fastrack-flag per-course fix, alumni-list graduation, employer email wording, plus the entire waitlist capture fix (existing 36 backfilled, going-forward router inheritance, and Mable's form course_id capture). All deployed and verified. Carry-forward platform work from S72 (provider-sheet republish background mode, one-way-sheet auto-republish decision, secret rotation) is untouched and still open.
+The full Wren-handoff Sasha set is shipped: fastrack-flag per-course fix, alumni-list graduation, employer email wording, plus the entire waitlist capture fix (existing 36 backfilled, going-forward router inheritance, and Mable's form course_id capture). Riverside's Google sheet was retired (migration 0209) so the recurring sheet-drift noise is gone, leaving 17 EMS notice rows that are the dead_letter governance cleanup. Credential rotation triaged to GitHub-PAT-only. All deployed and verified.
 
 ## What was done this session
 - **Fastrack flag bug fixed + deployed.** `_shared/route-lead.ts` `loadEmailAggregateState`: `SW_FASTRACK_COMPLETED` changed from the single-canonical-submission flag to a per-canonical-course `bool_or(fastracked_at)`. Fixes the same-course re-application wipe (Kirsty #233 was the lone live victim). Deployed to the 6 writers: `netlify-lead-router`, `routing-confirm`, `fastrack-receive`, `brevo-attribute-reconcile`, `admin-brevo-resync`, `netlify-employer-lead-router`. Charlotte resynced Kirsty via the DB↔Brevo panel.
@@ -10,20 +10,24 @@ The full Wren-handoff Sasha set is shipped: fastrack-flag per-course fix, alumni
 - **Employer email wording (item 2) closed.** "apprenticeship" → "training" already in source; Charlotte pasted the updated HTML into Brevo templates 61 (`s4b_employer_u1` welcome) and 66 (`s4b_employer_chaser`). Template IDs pulled from `crm.email_log`.
 - **Admin UI (deployed via Netlify).** Leads list: sky "Fastracked ✓" badge for fastrack-passed leads. Work board: one-click tick to complete / re-open a card. Experiments page: humanised slug titles + period tag, a "Testing:" line resolving each test's course/employer page from real data, and a "Show ended" toggle that hides ended experiments by default.
 - **Item 1.** Build an Online Shop campaign sent by Charlotte after the backfill + segment resync.
+- **Riverside sheet retired (migration `0209`, applied).** Per Mira's reframe + owner decision: Riverside is portal-only and never used their Google sheet, so NULLed `crm.providers.sheet_webhook_url` for `riverside-training` (the drift cron only loops over providers with a hook set) and resolved the 2 moot Riverside drift notices. Verified: hook nulled, Riverside drift cleared, open sheet-drift queue down to 17 (all EMS). Policy set: no sheets for NEW providers going forward; EMS/WYK/CD keep theirs until they move onto the portal.
+- **Credential rotation triaged down.** Owner decision: revoke the leaked GitHub PAT only; Notion key + DB password rotation dropped (exposure is local `~/.zsh_history` only, not public; DB rotation is disruptive and lowest-risk). Hub task `45a34329` retitled "Revoke leaked GitHub PAT", downgraded to normal — Charlotte to delete the token in GitHub Developer settings, then close.
 
 ## Next steps
-1. **Make `republish-provider-sheet` background-mode** (carry S72): "started, check back in ~1 min" response, mirror the `brevo-attribute-reconcile` async pattern, so a big sheet (Riverside ~40 rows) stops timing out with no result box.
-2. **Decide one-way-sheet auto-republish on DB status change** (carry S72, Mira's call): root cause of recurring Riverside drift — Freya logs attempts in the portal/DB but nothing pushes DB→sheet until a manual republish.
+1. **EMS sheet-drift + dead_letter governance (the real remaining drift work):** 17 EMS `sheet_drift_detected` rows are notice pile-up — the cron logs drift each morning but `replayed_at` is never set even after EMS self-corrects (it mirrors back). Fix is the dead_letter redesign (Work Hub `e2b2615f`): mark drift notices resolved when handled so the failure queue stops clogging. Decide per-row whether any are real EMS drift needing a DB→sheet republish (Work Hub `2022de55`).
+2. **Make `republish-provider-sheet` background-mode** (carry S72): "started, check back in ~1 min" response, mirror the `brevo-attribute-reconcile` async pattern, so a big sheet stops timing out with no result box. (Lower urgency now Riverside is out of the loop; EMS sheet can still be large.)
 3. **Tighten sheet-drift copy** (carry S72): "self-healing" overclaims for stuck cases; say "clears once reconciled".
 4. **Consolidate the reconcile panel** (carry S72): four push buttons → cleaner two-direction design.
-5. **Carry from S71/S72:** durable lead-webhook fix decision (direct-POST vs the 2-min backup, Mira's call) + `client_nonce` dedup scope; billing reconciliation (`/admin/billing`); ClickUp cutover (wire Rosa/Nell to `task-upsert`); rotate `BREVO_API_KEY` + `ROUTING_CONFIRM_SHARED_SECRET` + the 3 leaked `~/.zsh_history` creds.
-6. **Alumni sweep efficiency (low priority):** the `email-u4-cron` sweep re-adds every enrolled contact to list 9 each run — fine at pilot scale; switch to a tracked flag (DB column or email_log marker) if enrolled volume grows large.
+5. **Stop the new-provider flow setting `sheet_webhook_url`** (from the 0209 policy): update `.claude/skills/new-apprenticeship-provider` + provider-onboarding-playbook to portal-only by default.
+6. **Carry from S71/S72:** durable lead-webhook fix decision (direct-POST vs the 2-min backup, Mira's call) + `client_nonce` dedup scope; billing reconciliation (`/admin/billing`); ClickUp cutover (wire Rosa/Nell to `task-upsert`); rotate `BREVO_API_KEY` + `ROUTING_CONFIRM_SHARED_SECRET`.
+7. **Alumni sweep efficiency (low priority):** the `email-u4-cron` sweep re-adds every enrolled contact to list 9 each run — fine at pilot scale; switch to a tracked flag (DB column or email_log marker) if enrolled volume grows large.
 
 ## Decisions and open questions
 - **Decision: `SW_FASTRACK_COMPLETED` is a per-canonical-course `bool_or`, not a single-row read.** WHY: the single-row fix (Wren 2026-05-25) broke the opposite way — a same-course re-application child (fastracked_at NULL) became canonical and wiped a real completion. The bool_or scoped to the canonical course is correct in both directions.
 - **Decision: alumni graduation is add-only, no removal from any list.** WHY: Brevo already moves nurtured prospects to the newsletter list after the nurture sequence, so the only missing step was adding enrolled learners to the alumni list (9).
 - **Decision: waitlist test row 634 left archived, not hard-deleted.** WHY: it auto-archived via `dummy_test_email` and left zero downstream artefacts; archive is the established test-lead pattern (migration 0205) and avoids FK/orphan risk.
-- **Open (carry, Mira): one-way provider sheets auto-republish on status change?** (Next step 2.)
+- **Decision (Mira + owner): retire the Riverside sheet rather than build auto-republish.** WHY: Riverside is portal-only and never used the sheet, so auto-republishing to a dead sheet was the wrong fix. NULL the hook so the cron skips them. Closes the "one-way sheet" open question — resolved, not carried.
+- **Decision (owner): drop Notion + DB password rotation, revoke GitHub PAT only.** WHY: local-history-only exposure (not public), no compromised-Mac signal, DB rotation disruptive for lowest risk.
 
 ## Watch items
 - **Tomorrow's 09:30 UTC `email-u4-cron` run:** first real alumni sweep. Expect ~27 contacts added to Brevo list 9. Confirm via the function response `alumni_added` / `alumni_failed`, or glance at list 9's count in Brevo. No DB-side signal exists for it.
@@ -32,5 +36,6 @@ The full Wren-handoff Sasha set is shipped: fastrack-flag per-course fix, alumni
 
 ## Next session
 - **Folder:** platform (Sasha)
-- **First task:** Make `republish-provider-sheet` background-mode (Next step 1), then take the one-way-sheet auto-republish decision (Next step 2) to Mira.
+- **First task:** The dead_letter governance redesign (Work Hub `e2b2615f`) so the 17 EMS sheet-drift notices stop clogging the failure queue (Next step 1) — that's the real remaining drift work now Riverside is retired.
+- **Owner to close:** delete the leaked GitHub PAT in GitHub Developer settings, then tell Sasha to close Hub task `45a34329`.
 - **Cross-project:** None outstanding. The waitlist coordination with switchable/site (Mable) completed this session — Mable shipped the `/waitlist/` form course_id capture, verified live (row 634), and the platform doc `waitlist-capture-fix.md` is marked closed. No pending push to Mable.
