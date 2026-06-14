@@ -268,11 +268,26 @@ export async function insertSubmission(
     // parent_ref-first means a fastrack-cohort-decline learner's enrichment
     // attaches to their original funded submission, not to whichever parent
     // their email last matched.
+    // Parent identity carried alongside the id so a waitlist/enrichment child
+    // can inherit name + location it doesn't collect itself (see the eff* block
+    // before the INSERT). Selected for every parent lookup; only applied to
+    // waitlist rows.
+    type ParentRow = {
+      id: number;
+      primary_routed_to: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      postcode: string | null;
+      region: string | null;
+      la: string | null;
+      current_qualification: string | null;
+    };
     let parentSubmissionId: number | null = null;
     let parentPrimaryRoutedTo: string | null = null;
+    let parentIdentity: ParentRow | null = null;
     if (row.parent_ref) {
-      const [parent] = await trx<Array<{ id: number; primary_routed_to: string | null }>>`
-        SELECT id, primary_routed_to
+      const [parent] = await trx<Array<ParentRow>>`
+        SELECT id, primary_routed_to, first_name, last_name, postcode, region, la, current_qualification
           FROM leads.submissions
          WHERE client_nonce = ${row.parent_ref}::uuid
            AND archived_at IS NULL
@@ -282,11 +297,12 @@ export async function insertSubmission(
       if (parent) {
         parentSubmissionId = Number(parent.id);
         parentPrimaryRoutedTo = parent.primary_routed_to;
+        parentIdentity = parent;
       }
     }
     if (parentSubmissionId === null && row.email) {
-      const [parent] = await trx<Array<{ id: number; primary_routed_to: string | null }>>`
-        SELECT id, primary_routed_to
+      const [parent] = await trx<Array<ParentRow>>`
+        SELECT id, primary_routed_to, first_name, last_name, postcode, region, la, current_qualification
           FROM leads.submissions
          WHERE LOWER(email) = LOWER(${row.email})
            AND course_id IS NOT DISTINCT FROM ${row.course_id}
@@ -299,8 +315,38 @@ export async function insertSubmission(
       if (parent) {
         parentSubmissionId = Number(parent.id);
         parentPrimaryRoutedTo = parent.primary_routed_to;
+        parentIdentity = parent;
       }
     }
+
+    // Waitlist identity inheritance. A /waitlist/ (enrichment) submission is
+    // born with NULL name/location because the person already gave those on the
+    // earlier form they bounced off — which is exactly the parent we just
+    // resolved. Without this, the child row (and the Brevo contact its upsert
+    // drives) goes blank and renders "Hi ,". Inherit NULL-fields-only from the
+    // parent. Course interest is deliberately not inherited — the parent usually
+    // lacks it too; new signups capture it via the /waitlist/ form carrying the
+    // originating course_id (switchable-site, separate). Existing rows: backfill
+    // via crm.backfill_waitlist_identity_from_parent (migration 0208).
+    const isWaitlistRow =
+      row.dq_reason === "waitlist_enrichment" || row.source_form === "switchable-waitlist";
+    const eff = isWaitlistRow && parentIdentity
+      ? {
+          first_name: row.first_name ?? parentIdentity.first_name,
+          last_name: row.last_name ?? parentIdentity.last_name,
+          la: row.la ?? parentIdentity.la,
+          postcode: row.postcode ?? parentIdentity.postcode,
+          region: row.region ?? parentIdentity.region,
+          current_qualification: row.current_qualification ?? parentIdentity.current_qualification,
+        }
+      : {
+          first_name: row.first_name,
+          last_name: row.last_name,
+          la: row.la,
+          postcode: row.postcode,
+          region: row.region,
+          current_qualification: row.current_qualification,
+        };
 
     const inserted = await trx<Array<{ id: number }>>`
       INSERT INTO leads.submissions (
@@ -327,17 +373,17 @@ export async function insertSubmission(
         ${row.region_scheme}, ${row.funding_category}, ${row.funding_route},
         ${row.utm_source}, ${row.utm_medium}, ${row.utm_campaign}, ${row.utm_content},
         ${row.fbclid}, ${row.gclid}, ${row.referrer},
-        ${row.first_name}, ${row.last_name}, ${row.email}, ${row.phone}, ${row.la}, ${row.age_band},
+        ${eff.first_name}, ${eff.last_name}, ${row.email}, ${row.phone}, ${eff.la}, ${row.age_band},
         ${row.employment_status}, ${row.prior_level_3_or_higher}, ${row.can_start_on_intake_date},
         ${row.outcome_interest}, ${row.why_this_course}, ${row.earnings_band},
         ${row.preferred_intake_id}, ${row.acceptable_intake_ids},
-        ${row.postcode}, ${row.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
+        ${eff.postcode}, ${eff.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
         ${row.terms_accepted}, ${row.marketing_opt_in},
         ${row.is_dq}, ${row.dq_reason}, ${row.session_id}, ${row.pay_route},
         ${row.experiment_id}, ${row.experiment_variant},
         ${row.client_nonce},
-        ${row.start_timing}, ${row.interest_breadth}, ${row.investment_willingness}, ${row.current_qualification},
+        ${row.start_timing}, ${row.interest_breadth}, ${row.investment_willingness}, ${eff.current_qualification},
         ${row.source_form}, ${row.enriched_at},
         ${trx.json(row.raw_payload)}, ${row.archived_at},
         ${parentSubmissionId}

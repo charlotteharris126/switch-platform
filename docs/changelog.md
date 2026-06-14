@@ -11,6 +11,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 - Impact: both changes are additive/corrective. No reader breaks. Nothing applied or deployed yet.
 - Signed off: owner (session 2026-06-14) for the backfill build + course-blank decision; deploy on explicit go.
 
+## 2026-06-14 — DEPLOYED: 0208 applied, fastrack fix + waitlist ingest inheritance live
+- Migration 0208 applied to production (`supabase db push`). Admin app pushed (backfill panel ships via Netlify). Backfill button itself NOT yet clicked by owner — the 36 are still name-blank until run.
+- Fastrack per-course bool_or fix deployed to: `netlify-lead-router`, `routing-confirm`, `fastrack-receive`, `brevo-attribute-reconcile`, `admin-brevo-resync`, `netlify-employer-lead-router`. Kirsty (#233) shows as the expected 1 drifter on the DB↔Brevo panel (Brevo holds old false, corrected code projects true) — clears on resync / next reconcile tick.
+- Going-forward waitlist fix DEPLOYED: `_shared/ingest.ts` carries the resolved parent's name/postcode/region/la/current_qualification onto a new waitlist/enrichment child (NULL-fill only), so new signups aren't born blank. Deployed to `netlify-lead-router` + `netlify-leads-reconcile`. Course interest still needs the switchable-site `/waitlist/` form to carry the originating course_id (Mable, not built).
+- Local deno check surfaces one PRE-EXISTING unrelated type warning (route-lead.ts:1812 `trx.json(payload)` vs JSONValue/Date) — cosmetic, non-blocking, present before today; bundling/deploy unaffected.
+- Signed off: owner (session 2026-06-14, "deploy").
+
 ## 2026-06-12 — Private-pay fallback: pay_route column + router/routeLead branch (LIVE)
 - Migration: `0207_submissions_pay_route.sql` — added `leads.submissions.pay_route TEXT` (nullable). Additive, no schema_version bump. Applied to production via `supabase db push`. `readonly_analytics` already holds SELECT on the table (legacy grant); pay_route is a non-PII flag so no view change needed.
 - Context: the switchable/site private-pay fallback shipped earlier today (commit c8634e6). A funded-DQ learner who chooses to pay submits the main `switchable-funded` form with hidden `pay_route=private` (+ `dq=true`). Until this, the lead reached `netlify-lead-router` as a normal funded DQ (pay_route only in raw_payload), hit the no_match branch, and never routed — so a paying learner would have looked funded to EMS.

@@ -10,7 +10,9 @@ Decisions (owner, 2026-06-14):
 - **Backfill the existing 36 from their parent** (name/location/qualification). Built: migration `0208_backfill_waitlist_identity_fn.sql` (`crm.backfill_waitlist_identity_from_parent()`, idempotent) + one-click panel `/admin/data-ops/backfill-waitlist-identity`. Pending owner go to apply + run.
 - **Leave course interest blank for the existing 36** — no re-engagement email. Going-forward form fix captures course for new signups.
 
-Still TODO (the going-forward fix, NOT built yet): the `netlify-lead-router` change so a NEW waitlist signup inherits name/location from its parent and stops blanking the Brevo name, plus deriving region/LA from postcode; and the switchable-site `/waitlist/` form carrying the originating `course_id` (Mable). The sections below remain the spec for that.
+Going-forward router fix — DONE 2026-06-14 (Sasha). `_shared/ingest.ts` now carries the resolved parent's `first_name / last_name / postcode / region / la / current_qualification` down onto a NEW waitlist/enrichment child (NULL-fill only), so the row — and the Brevo contact its upsert drives — is no longer born blank. Deployed to `netlify-lead-router` + `netlify-leads-reconcile`. Region/LA still come through only as far as the parent has them (parents carry postcode but usually NULL region/LA); postcode is enough to derive downstream, and a postcode→LA derivation is out of scope here (no such derivation exists on the main form path to mirror).
+
+Still TODO (switchable-site / Mable, NOT built): the `/waitlist/` form carrying the originating `course_id` so course interest is captured for NEW signups (parent inheritance can't supply it — parents usually lack a course_id too). The existing 36 stay course-blank by owner decision. The sections below remain the spec for the form side.
 
 ---
 
