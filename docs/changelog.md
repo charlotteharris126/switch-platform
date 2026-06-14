@@ -11,6 +11,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 - Impact: both changes are additive/corrective. No reader breaks. Nothing applied or deployed yet.
 - Signed off: owner (session 2026-06-14) for the backfill build + course-blank decision; deploy on explicit go.
 
+## 2026-06-14 — Retire Riverside provider sheet (stop recurring drift noise)
+- Migration `0209_retire_riverside_sheet.sql` (applied): NULLs `crm.providers.sheet_webhook_url` for `riverside-training` so `sheet-drift-reconcile-daily` (WHERE active AND sheet_webhook_url IS NOT NULL) skips them; resolves the 2 moot Riverside `sheet_drift_detected` dead_letter rows. Riverside is portal-only and never used the sheet. Verified: hook nulled, Riverside drift rows cleared, open sheet-drift queue now 17 (all EMS).
+- Why a migration not a UI edit: Mira's reframe (Work Hub c5268aab) + the cron is code, config lives in the DB.
+- Owner policy (2026-06-14): no Google sheets for NEW providers going forward — portal-only by default. EMS / WYK / Courses Direct keep their sheets until they move onto the portal. FOLLOW-UP (not done): the new-provider onboarding flow (`.claude/skills/new-apprenticeship-provider`, provider-onboarding-playbook) should stop setting `sheet_webhook_url`.
+- Remaining: 17 EMS sheet-drift notices are bookkeeping pile-up (notice rows never get `replayed_at` set even after the drift self-corrects) — the dead_letter governance redesign (Work Hub e2b2615f), not live data loss.
+- Signed off: owner (session 2026-06-14).
+
 ## 2026-06-14 — Alumni list graduation hook (item 4, DEPLOYED)
 - `email-u4-cron`: after the U4 send loop, a daily idempotent sweep adds every enrolled/presumed_enrolled contact to the Switchable alumni list via `addBrevoContactToList`. Add-only — no removal (owner: Brevo already moves nurtured prospects to the newsletter list on its own, so we only need to graduate enrolled learners onto the alumni list). List id from new secret `BREVO_LIST_ID_SWITCHABLE_ALUMNI` (set to 9). Sweep (not one-shot) so the 7 already-U4'd enrolled contacts get added alongside the 20 not-yet-U4'd + all future. Idempotent re-adds are a no-op; revisit with a tracked flag if enrolled volume grows large. Reports `alumni_added` / `alumni_failed`. Deployed `email-u4-cron --no-verify-jwt`. 27 enrolled contacts get added on the next 09:30 UTC tick.
 - Closes item 4 of the Wren-handoff Sasha set.
