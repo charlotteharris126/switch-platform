@@ -572,9 +572,11 @@ function mapEnrolStatusForBrevo(dbStatus: string): string {
 // SW_FASTRACK_COMPLETED was historically computed as bool_or(fastracked_at)
 // across every submission for the email — meaning anyone who ever fastracked
 // any past course stayed "completed" forever. Wrong for re-applicants on a
-// new course (Wren push 2026-05-25). It's now read from the canonical
-// submission only (same row driving SW_COURSE_NAME etc.) so the Brevo card
-// stays internally consistent per-course.
+// new course (Wren push 2026-05-25). The first fix read the single canonical
+// submission's flag, which then broke the opposite way: a same-course
+// re-application child (fastracked_at NULL) became canonical and wiped a real
+// completion. It's now a bool_or scoped to the canonical course_id — correct
+// in both directions (per-course, but resilient to re-application children).
 interface EmailAggregateState {
   clientNonce: string | null;
   courseId: string | null;
@@ -622,12 +624,31 @@ async function loadEmailAggregateState(
   ]);
 
   const canonical = optIn[0] ?? anyLatest[0];
+  const canonicalCourseId = canonical?.course_id ?? null;
+
+  // SW_FASTRACK_COMPLETED is a per-canonical-course bool_or, NOT the single
+  // canonical row's flag. A same-course re-application creates a child row with
+  // fastracked_at = NULL; if that child is the latest submission it becomes the
+  // canonical row, and reading only its flag wrongly reports "not fastracked",
+  // overwriting a real completion on an earlier same-course row (the Amanda
+  // Robinson / Kirsty Crowther bug, S19 watch item). Scoping bool_or to the
+  // canonical course keeps Wren's 2026-05-25 cross-course fix intact — a
+  // fastrack on a DIFFERENT course still does not count for this course — while
+  // fixing the within-course re-application case the single-row read broke.
+  const [courseFastrack] = await sql<Array<{ fastracked: boolean }>>`
+    SELECT bool_or(fastracked_at IS NOT NULL) AS fastracked
+      FROM leads.submissions
+     WHERE lower(email) = lower(${email})
+       AND archived_at IS NULL
+       AND course_id IS NOT DISTINCT FROM ${canonicalCourseId}
+  `;
+
   return {
     clientNonce: canonical?.client_nonce ?? null,
-    courseId: canonical?.course_id ?? null,
+    courseId: canonicalCourseId,
     marketingOptIn: canonical?.marketing_opt_in ?? null,
     referralCode: earliestRef[0]?.referral_code ?? null,
-    canonicalFastracked: canonical?.fastracked ?? false,
+    canonicalFastracked: courseFastrack?.fastracked ?? false,
   };
 }
 

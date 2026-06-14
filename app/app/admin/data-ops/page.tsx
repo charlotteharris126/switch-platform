@@ -51,6 +51,15 @@ const TOOLS: Tool[] = [
       "Per-file cap is 10 MB. Project-wide soft cap at 1 GB (Supabase free tier). Hard limit hit means uploads fail; existing images still serve.",
   },
   {
+    href: "/admin/data-ops/backfill-waitlist-identity",
+    title: "Backfill waitlist identity from parent",
+    description:
+      "Copies name, location and qualification onto opted-in /waitlist/ contacts from the form submission they originally came through, then re-syncs to Brevo. Fixes the 'Hi ,' blank-name problem on the 36 opted-in waitlist leads.",
+    status: "throwaway",
+    context:
+      "Backed by migration 0208 (crm.backfill_waitlist_identity_from_parent). Idempotent. Course interest not recovered (not in the data); the going-forward router/form fix captures course for new signups. See platform/docs/waitlist-capture-fix.md.",
+  },
+  {
     href: "/admin/data-ops/port-blog-yaml",
     title: "Port launch blog drafts into the CMS",
     description:
