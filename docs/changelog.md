@@ -11,6 +11,10 @@ Most recent at top. Every schema change, data migration, access policy change, a
 - Impact: both changes are additive/corrective. No reader breaks. Nothing applied or deployed yet.
 - Signed off: owner (session 2026-06-14) for the backfill build + course-blank decision; deploy on explicit go.
 
+## 2026-06-14 — Alumni list graduation hook (item 4, DEPLOYED)
+- `email-u4-cron`: after the U4 send loop, a daily idempotent sweep adds every enrolled/presumed_enrolled contact to the Switchable alumni list via `addBrevoContactToList`. Add-only — no removal (owner: Brevo already moves nurtured prospects to the newsletter list on its own, so we only need to graduate enrolled learners onto the alumni list). List id from new secret `BREVO_LIST_ID_SWITCHABLE_ALUMNI` (set to 9). Sweep (not one-shot) so the 7 already-U4'd enrolled contacts get added alongside the 20 not-yet-U4'd + all future. Idempotent re-adds are a no-op; revisit with a tracked flag if enrolled volume grows large. Reports `alumni_added` / `alumni_failed`. Deployed `email-u4-cron --no-verify-jwt`. 27 enrolled contacts get added on the next 09:30 UTC tick.
+- Closes item 4 of the Wren-handoff Sasha set.
+
 ## 2026-06-14 — DEPLOYED: 0208 applied, fastrack fix + waitlist ingest inheritance live
 - Migration 0208 applied to production (`supabase db push`). Admin app pushed (backfill panel ships via Netlify). Backfill button itself NOT yet clicked by owner — the 36 are still name-blank until run.
 - Fastrack per-course bool_or fix deployed to: `netlify-lead-router`, `routing-confirm`, `fastrack-receive`, `brevo-attribute-reconcile`, `admin-brevo-resync`, `netlify-employer-lead-router`. Kirsty (#233) shows as the expected 1 drifter on the DB↔Brevo panel (Brevo holds old false, corrected code projects true) — clears on resync / next reconcile tick.

@@ -21,7 +21,7 @@
 // Auth: x-audit-key / AUDIT_SHARED_SECRET. Deploy with --no-verify-jwt.
 
 import postgres from "npm:postgres@3";
-import { sendTransactional } from "../_shared/brevo.ts";
+import { sendTransactional, addBrevoContactToList } from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -173,12 +173,51 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
+  // Alumni list graduation (item 4, 2026-06-14). Once a learner enrols they
+  // belong on the "enrolled / alumni" list. Brevo already moves nurtured
+  // prospects to the newsletter list on its own; this just adds enrolled
+  // contacts to the alumni list. Add-only — no removal needed (per owner).
+  // Runs as a daily "ensure every enrolled contact is on the list" sweep
+  // rather than a one-shot, so the 7 contacts who enrolled before this shipped
+  // get picked up too. addBrevoContactToList is idempotent (re-adding is a
+  // no-op), which keeps this safe to run every day. At pilot scale (~27
+  // enrolled) the redundant adds are negligible; if enrolled volume grows
+  // large, switch to a tracked flag so we only add new graduates.
+  let alumniAdded = 0;
+  let alumniFailed = 0;
+  const alumniListId = parseEnvInt("BREVO_LIST_ID_SWITCHABLE_ALUMNI");
+  if (alumniListId != null) {
+    let enrolled: Array<{ email: string }> = [];
+    try {
+      enrolled = await sql<Array<{ email: string }>>`
+        SELECT DISTINCT s.email
+          FROM crm.enrolments e
+          JOIN leads.submissions s ON s.id = e.submission_id
+         WHERE e.status IN ('enrolled','presumed_enrolled')
+           AND s.is_dq = false
+           AND s.archived_at IS NULL
+           AND s.email IS NOT NULL
+      `;
+    } catch (err) {
+      console.error("alumni: enrolled query failed:", String(err));
+    }
+    for (let i = 0; i < enrolled.length; i++) {
+      if (i > 0) await sleep(THROTTLE_MS);
+      const r = await addBrevoContactToList({ email: enrolled[i].email, listId: alumniListId });
+      if (r.ok) alumniAdded++;
+      else { alumniFailed++; console.error(`alumni: add ${enrolled[i].email} -> list ${alumniListId} failed: ${r.error}`); }
+    }
+  }
+
   return json({
     candidates: candidates.length,
     sent: sentCount,
     skipped: skippedCount,
     failed: failedCount,
     missing_template_env: missingTemplate,
+    alumni_list_id: alumniListId,
+    alumni_added: alumniAdded,
+    alumni_failed: alumniFailed,
     outcomes,
   }, 200);
 });
