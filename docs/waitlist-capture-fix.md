@@ -12,7 +12,9 @@ Decisions (owner, 2026-06-14):
 
 Going-forward router fix — DONE 2026-06-14 (Sasha). `_shared/ingest.ts` now carries the resolved parent's `first_name / last_name / postcode / region / la / current_qualification` down onto a NEW waitlist/enrichment child (NULL-fill only), so the row — and the Brevo contact its upsert drives — is no longer born blank. Deployed to `netlify-lead-router` + `netlify-leads-reconcile`. Region/LA still come through only as far as the parent has them (parents carry postcode but usually NULL region/LA); postcode is enough to derive downstream, and a postcode→LA derivation is out of scope here (no such derivation exists on the main form path to mirror).
 
-Still TODO (switchable-site / Mable, NOT built): the `/waitlist/` form carrying the originating `course_id` so course interest is captured for NEW signups (parent inheritance can't supply it — parents usually lack a course_id too). The existing 36 stay course-blank by owner decision. The sections below remain the spec for the form side.
+Form course_id capture — DONE 2026-06-14 (Mable, switchable-site). The enrichment form now carries the originating `course_id` (via `?course=` on the cohort-closed CTA and sessionStorage on the course-page waitlist forms — kept off the POST action to dodge Netlify's query-param drop). Generic arrivals fall back to the free-text interest field. No name/location added (the router inheritance above handles those). Verified live: test row 634 (`switchable-waitlist`, `course_id = build-an-online-shop-tees-valley`) — auto-archived via `dummy_test_email`, left zero downstream artefacts (no Brevo contact / routing / email log), so no cleanup needed.
+
+**Whole waitlist capture fix is now closed.** Existing 36 backfilled (migration 0208), going-forward router inheritance live (`_shared/ingest.ts`), form course_id capture live (Mable). The "Required capture" / "Touch points" sections below are retained as the historical spec.
 
 ---
 
