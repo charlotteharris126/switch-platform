@@ -74,18 +74,20 @@ export default async function PreviewHomePage({ params }: Props) {
   // Same fan-out as /provider/page.tsx but scoped manually to providerId
   // since we bypass RLS via the admin client.
   // Admin client bypasses RLS, so we manually mirror the production
-  // provider RLS policy (migration 0143): scope by primary_routed_to
-  // AND exclude is_dq=true. Earlier attempt used supabase-js nested-
-  // relation filtering (.eq("submission.is_dq", false)) which silently
-  // dropped every row and made the preview report "every lead tried".
-  // Replaced with a straight two-step: load the non-DQ submission IDs
-  // first, then load enrolments + fastrack scoped to those IDs.
+  // provider RLS policy (migration 0143, widened in 0210): scope by
+  // primary_routed_to AND exclude is_dq=true EXCEPT private-pay leads
+  // (pay_route='private'), which route to the provider as paying
+  // enrolments. Earlier attempt used supabase-js nested-relation
+  // filtering (.eq("submission.is_dq", false)) which silently dropped
+  // every row and made the preview report "every lead tried". Replaced
+  // with a straight two-step: load the visible submission IDs first,
+  // then load enrolments + fastrack scoped to those IDs.
   const dqSafeSubsRes = await admin
     .schema("leads")
     .from("submissions")
     .select("id, first_name, last_name, email, course_id, routed_at, utm_source")
     .eq("primary_routed_to", providerId)
-    .not("is_dq", "is", true)
+    .or("is_dq.not.is.true,pay_route.eq.private")
     .not("routed_at", "is", null)
     .is("archived_at", null)
     .is("parent_submission_id", null)
