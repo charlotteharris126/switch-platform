@@ -1,41 +1,43 @@
-# Platform Handoff, Session 73, 2026-06-14
+# Platform Handoff, Session 74, 2026-06-15
 
 ## Current state
-The full Wren-handoff Sasha set is shipped: fastrack-flag per-course fix, alumni-list graduation, employer email wording, plus the entire waitlist capture fix (existing 36 backfilled, going-forward router inheritance, and Mable's form course_id capture). Riverside's Google sheet was retired (migration 0209) so the recurring sheet-drift noise is gone, leaving 17 EMS notice rows that are the dead_letter governance cleanup. Credential rotation triaged to GitHub-PAT-only. All deployed and verified.
+Private-pay (self-funded) leads are now fully first-class end to end: they auto-route like any warm lead, show as "Private pay" (not DQ) in admin and the provider portal, carry the price the learner accepted, and get their own welcome email. All migrations applied and functions deployed; platform + switchable-site repos pushed.
 
 ## What was done this session
-- **Fastrack flag bug fixed + deployed.** `_shared/route-lead.ts` `loadEmailAggregateState`: `SW_FASTRACK_COMPLETED` changed from the single-canonical-submission flag to a per-canonical-course `bool_or(fastracked_at)`. Fixes the same-course re-application wipe (Kirsty #233 was the lone live victim). Deployed to the 6 writers: `netlify-lead-router`, `routing-confirm`, `fastrack-receive`, `brevo-attribute-reconcile`, `admin-brevo-resync`, `netlify-employer-lead-router`. Charlotte resynced Kirsty via the DB↔Brevo panel.
-- **Waitlist capture fix — fully closed.** (a) Migration `0208` adds `crm.backfill_waitlist_identity_from_parent()` (idempotent) + one-click panel `/admin/data-ops/backfill-waitlist-identity`; Charlotte ran it, the 36 opted-in waitlist contacts now carry name/postcode from their parent and are live in Brevo. (b) Going-forward: `_shared/ingest.ts` now carries the resolved parent's name/postcode/region/la/current_qualification onto a new waitlist/enrichment child (NULL-fill only); deployed to `netlify-lead-router` + `netlify-leads-reconcile`. (c) Mable shipped the `/waitlist/` form carrying `course_id` (verified live, test row 634 — auto-archived, zero downstream traces). Course interest for the existing 36 deliberately left blank (owner decision).
-- **Alumni list graduation (item 4) built + deployed.** `email-u4-cron` gained a daily idempotent sweep: every enrolled/presumed_enrolled contact is added to the Switchable alumni list (new secret `BREVO_LIST_ID_SWITCHABLE_ALUMNI=9`) via `addBrevoContactToList`. Add-only, no removal (Brevo handles the newsletter move itself). Sweep covers the 7 already-U4'd + 20 pending + all future. Deployed `--no-verify-jwt`.
-- **Employer email wording (item 2) closed.** "apprenticeship" → "training" already in source; Charlotte pasted the updated HTML into Brevo templates 61 (`s4b_employer_u1` welcome) and 66 (`s4b_employer_chaser`). Template IDs pulled from `crm.email_log`.
-- **Admin UI (deployed via Netlify).** Leads list: sky "Fastracked ✓" badge for fastrack-passed leads. Work board: one-click tick to complete / re-open a card. Experiments page: humanised slug titles + period tag, a "Testing:" line resolving each test's course/employer page from real data, and a "Show ended" toggle that hides ended experiments by default.
-- **Item 1.** Build an Online Shop campaign sent by Charlotte after the backfill + segment resync.
-- **Riverside sheet retired (migration `0209`, applied).** Per Mira's reframe + owner decision: Riverside is portal-only and never used their Google sheet, so NULLed `crm.providers.sheet_webhook_url` for `riverside-training` (the drift cron only loops over providers with a hook set) and resolved the 2 moot Riverside drift notices. Verified: hook nulled, Riverside drift cleared, open sheet-drift queue down to 17 (all EMS). Policy set: no sheets for NEW providers going forward; EMS/WYK/CD keep theirs until they move onto the portal.
-- **Credential rotation triaged down.** Owner decision: revoke the leaked GitHub PAT only; Notion key + DB password rotation dropped (exposure is local `~/.zsh_history` only, not public; DB rotation is disruptive and lowest-risk). Hub task `45a34329` retitled "Revoke leaked GitHub PAT", downgraded to normal — Charlotte to delete the token in GitHub Developer settings, then close.
+- **Auto-route private-pay:** removed the owner-confirm gate in `netlify-lead-router` so `pay_route='private'` leads auto-route to an `auto_route_enabled` provider like funded single-candidate leads.
+- **Provider gets the "bill the learner" context:** `_shared/route-lead.ts` adds a PRIVATE PAY note to the sheet `notes`, a `pay_route` field on the sheet payload, and a PII-free callout in the provider notification email.
+- **Admin display:** private-pay leads show an amber "Private pay" badge (not red DQ) on the leads list + detail, and routed ones get full enrolment/U1 tracking. `is_dq` column left unchanged (billing/analytics rely on it = "not a funded place").
+- **Migration 0210:** widened the `provider_read_submissions` RLS to admit private-pay leads (`is_dq IS NOT TRUE OR pay_route='private'`) so the provider portal can see them. Was the reason EMS couldn't see Saranya.
+- **Single source of truth for portal visibility:** new `app/lib/provider-lead-visibility.ts` (`applyProviderLeadVisibility`); real portal (list + home) and admin preview (list + home) both route through it. Fixes the drift where the preview reimplemented the filter and missed the private-pay widening.
+- **Portal display:** "Private pay" badge + "Self-funding learner — bill them directly" banner + "Price-qualified: they were shown and accepted {price}" on the lead detail; "Private pay" sub-label in the list.
+- **Migration 0211 + site capture:** new `leads.submissions.private_price_quoted` column; the funded form captures the course `private_option.price_display` (e.g. "under £1,690") via a hidden field set by `dqPrivatePay`; `_shared/ingest.ts` maps + inserts it.
+- **Per-provider sign-off (switchable-site):** `accepts_private: true` on the page-YAML provider entry gates the private offer + routing per provider per course; set for EMS on Build an Online Shop + Intro to Management. `/new-course-page` skill updated to capture it.
+- **u1_private welcome email:** `sendU1Transactional` now a 3-way branch (funded/self/private). Migration 0212 allows `email_type='u1_private'`. Brevo template `76` built + wired (`BREVO_TEMPLATE_U1_PRIVATE=76`). Fixes private payers previously getting the funded ("confirm you qualify") welcome.
+- **Saranya (639)** routed to EMS via the owner-confirm email (predated the auto-route fix).
+- **Counselling page:** confirmed already waitlist-only (empty `intakes[]` since 22 May); the blank welcome date was an old test contact, not a live issue. No change made.
+- **Deploys:** migrations 0210/0211/0212 applied; `_shared/route-lead.ts` bundlers (14) redeployed across three rounds; `netlify-lead-router` + `netlify-leads-reconcile` for ingest; secret set; platform + switchable-site pushed.
 
 ## Next steps
-1. **EMS sheet-drift + dead_letter governance (the real remaining drift work):** 17 EMS `sheet_drift_detected` rows are notice pile-up — the cron logs drift each morning but `replayed_at` is never set even after EMS self-corrects (it mirrors back). Fix is the dead_letter redesign (Work Hub `e2b2615f`): mark drift notices resolved when handled so the failure queue stops clogging. Decide per-row whether any are real EMS drift needing a DB→sheet republish (Work Hub `2022de55`).
-2. **Make `republish-provider-sheet` background-mode** (carry S72): "started, check back in ~1 min" response, mirror the `brevo-attribute-reconcile` async pattern, so a big sheet stops timing out with no result box. (Lower urgency now Riverside is out of the loop; EMS sheet can still be large.)
-3. **Tighten sheet-drift copy** (carry S72): "self-healing" overclaims for stuck cases; say "clears once reconciled".
-4. **Consolidate the reconcile panel** (carry S72): four push buttons → cleaner two-direction design.
-5. **Stop the new-provider flow setting `sheet_webhook_url`** (from the 0209 policy): update `.claude/skills/new-apprenticeship-provider` + provider-onboarding-playbook to portal-only by default.
-6. **Carry from S71/S72:** durable lead-webhook fix decision (direct-POST vs the 2-min backup, Mira's call) + `client_nonce` dedup scope; billing reconciliation (`/admin/billing`); ClickUp cutover (wire Rosa/Nell to `task-upsert`); rotate `BREVO_API_KEY` + `ROUTING_CONFIRM_SHARED_SECRET`.
-7. **Alumni sweep efficiency (low priority):** the `email-u4-cron` sweep re-adds every enrolled contact to list 9 each run — fine at pilot scale; switch to a tracked flag (DB column or email_log marker) if enrolled volume grows large.
+1. Send a Brevo test of template `76` against a contact whose course has a start date (e.g. a Build an Online Shop / Tees Valley lead) to confirm `SW_COURSE_INTAKE_DATE` renders (counselling has no date, so it shows blank there).
+2. Verify the Netlify builds landed (admin app + switchable-site): EMS preview should show Saranya with a "Private pay" badge + "bill them directly" banner; list sub-label reads "Private pay".
+3. Watch the first brand-new private-pay lead end to end: auto-routes, shows "Private pay", appears in the portal with the price, gets template 76.
+4. (Optional, flagged not built) graceful "which starts X" fallback in the welcome templates when a course has no intake date — twin wording or a fallback attribute, since Brevo conditionals are unreliable.
 
 ## Decisions and open questions
-- **Decision: `SW_FASTRACK_COMPLETED` is a per-canonical-course `bool_or`, not a single-row read.** WHY: the single-row fix (Wren 2026-05-25) broke the opposite way — a same-course re-application child (fastracked_at NULL) became canonical and wiped a real completion. The bool_or scoped to the canonical course is correct in both directions.
-- **Decision: alumni graduation is add-only, no removal from any list.** WHY: Brevo already moves nurtured prospects to the newsletter list after the nurture sequence, so the only missing step was adding enrolled learners to the alumni list (9).
-- **Decision: waitlist test row 634 left archived, not hard-deleted.** WHY: it auto-archived via `dummy_test_email` and left zero downstream artefacts; archive is the established test-lead pattern (migration 0205) and avoids FK/orphan risk.
-- **Decision (Mira + owner): retire the Riverside sheet rather than build auto-republish.** WHY: Riverside is portal-only and never used the sheet, so auto-republishing to a dead sheet was the wrong fix. NULL the hook so the cron skips them. Closes the "one-way sheet" open question — resolved, not carried.
-- **Decision (owner): drop Notion + DB password rotation, revoke GitHub PAT only.** WHY: local-history-only exposure (not public), no compromised-Mac signal, DB rotation disruptive for lowest risk.
+- **Private-pay leads auto-route with no owner approval** (owner decision: a learner who chooses to pay is warmer, not colder).
+- **`is_dq` not flipped** — it stays `true` (= "didn't get a funded place") so billing/analytics still exclude funded counts; only routing + display changed.
+- **`accepts_private` gate is per-provider-per-course** in the page YAML; new providers default off until onboarding records sign-off + price.
+- **Price shown is the learner-facing `price_display`** ("under £1,690"), not the ex-VAT fee; switchable in the YAML if preferred.
+- **Counselling stays waitlist** rather than fully taken down (keeps collecting interest for the next cohort).
+- Open: none blocking.
 
 ## Watch items
-- **Tomorrow's 09:30 UTC `email-u4-cron` run:** first real alumni sweep. Expect ~27 contacts added to Brevo list 9. Confirm via the function response `alumni_added` / `alumni_failed`, or glance at list 9's count in Brevo. No DB-side signal exists for it.
-- **`email-u4-cron` deploy:** the new `addBrevoContactToList` import + `BREVO_LIST_ID_SWITCHABLE_ALUMNI` secret — verify the next run doesn't error on the alumni block (logs).
-- **Carry S72:** 06:00 sheet-drift cron + 06:30 digest read honestly (EMS/Riverside no false "Aligned"); 14 `brevo_attribute_drift` rows clear once Charlotte runs DB↔Brevo "Check drift" → "Re-sync"; 3 `reconcile_backfill` rows persist until "Mark all resolved"; Brevo SMS stays down until credits topped up.
+- Netlify builds for the admin app (platform) + switchable-site were pushed late in the session — confirm they rendered before relying on the portal/site display.
+- Saranya (639) received the funded U1 once (pre-fix, can't unsend) and her `private_price_quoted` is NULL (predates the column). Future private payers are correct.
+- The pre-existing `trx.json` Deno type error in `route-lead.ts` persists (does not block deploy) — untouched.
+- Untracked `docs/capi-server-side-scoping-2026-06-15.md` is not from this session; left in place.
 
 ## Next session
-- **Folder:** platform (Sasha)
-- **First task:** The dead_letter governance redesign (Work Hub `e2b2615f`) so the 17 EMS sheet-drift notices stop clogging the failure queue (Next step 1) — that's the real remaining drift work now Riverside is retired.
-- **Owner to close:** delete the leaked GitHub PAT in GitHub Developer settings, then tell Sasha to close Hub task `45a34329`.
-- **Cross-project:** None outstanding. The waitlist coordination with switchable/site (Mable) completed this session — Mable shipped the `/waitlist/` form course_id capture, verified live (row 634), and the platform doc `waitlist-capture-fix.md` is marked closed. No pending push to Mable.
+- **Folder:** platform
+- **First task:** verify the first real private-pay lead end to end (auto-route, Private pay display, portal price, template 76), or send the template-76 Brevo test against a dated-course contact.
+- **Cross-project:** switchable/site (per-provider `accepts_private` + `private_price_quoted` capture in the funnel) and switchable/email (`u1_private` template 76 live, source at `html-exports/u1-private.html`) — both pushed to their handoffs this session.
