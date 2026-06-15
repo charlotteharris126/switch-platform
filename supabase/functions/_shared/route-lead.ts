@@ -1110,7 +1110,13 @@ async function sendU1Transactional(
     return;
   }
 
-  const isFunded = submission.funding_category === "gov" || submission.funding_category === "loan";
+  // Private-pay learners came through a funded page (funding_category gov/loan)
+  // but are paying the course fee, not taking a funded place. Send them the
+  // self-funded welcome (talks about payment options, not "confirm you qualify")
+  // rather than the funded one.
+  const isFunded =
+    (submission.funding_category === "gov" || submission.funding_category === "loan") &&
+    submission.pay_route !== "private";
   const templateEnvName = isFunded ? "BREVO_TEMPLATE_U1_FUNDED" : "BREVO_TEMPLATE_U1_SELF";
   const emailType: "u1_funded" | "u1_self" = isFunded ? "u1_funded" : "u1_self";
 

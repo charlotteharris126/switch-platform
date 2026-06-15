@@ -4,6 +4,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-15 — Private-pay follow-ups: provider portal visibility + correct welcome email (deployed)
+- Two gaps surfaced after the morning private-pay change went live with Saranya (sub 639, EMS).
+- **Portal visibility (`0210_provider_see_private_pay_leads.sql`, applied):** the `provider_read_submissions` RLS policy on `leads.submissions` gated on `is_dq IS NOT TRUE`, so a routed private-pay lead (is_dq=true) was invisible in the provider portal even though delivered. Widened to `(is_dq IS NOT TRUE OR pay_route = 'private')`. Read-only widening; only admits rows already routed to that provider. No other consumer reads through this policy (analytics has its own true-qual policy; admin uses `admin.is_admin()`). Verified: EMS now sees Saranya.
+- **Welcome email (`_shared/route-lead.ts` `sendU1Transactional`):** U1 funded-vs-self selection keyed on `funding_category` only, so a private payer (funding_category=gov) got the funded welcome ("...confirm you qualify..."), not the self-funded one ("...the call covers payment options..."). Now `isFunded` also requires `pay_route !== 'private'`, so private-pay learners get `u1_self`. Redeployed the 14 `_shared/route-lead.ts` bundlers. Saranya already received the funded U1 (one-off, not re-sent); fix applies to her future + all subsequent private-pay leads.
+- **Signed off:** owner (session 2026-06-15, explicit "apply and redeploy").
+
 ## 2026-06-15 — Private-pay leads auto-route + nurture like any warm lead (deployed)
 - **Trigger:** Saranya Krishnan (sub 639), a private-pay learner on `build-an-online-shop-tees-valley`, sat unrouted, absent from the EMS portal, and showed as a red "DQ: overqualified" badge. Root cause: private-pay leads were deliberately excluded from auto-routing AND tagged `is_dq`, so they never routed, never got learner emails/SMS, and read as rejected. Owner decision: a learner who chooses to pay is warmer, not colder — treat them like any other warm lead.
 - **Routing (`netlify-lead-router/index.ts`):** removed the `!isPrivatePay` guard on the single-candidate auto-route path. Private-pay leads now auto-route to an `auto_route_enabled` provider exactly like funded single-candidate leads (instant route + learner nurture), instead of being held for a manual owner-confirm click.
