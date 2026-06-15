@@ -4,6 +4,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-15 — Single source of truth for provider lead visibility (deployed)
+- Root cause behind the preview/portal drift: the "which leads can this provider see" predicate was hand-written in six files (3 real portal, 3 preview), so widening it for private-pay (0210) reached the RLS policy + some copies but not the preview ones. Charlotte's point: the admin preview must be an identical match to the real portal by construction.
+- New `app/lib/provider-lead-visibility.ts` — `applyProviderLeadVisibility(query, providerId)` applies the one predicate (routed to provider, not archived, top-level, and `is_dq IS NOT TRUE OR pay_route='private'`). Real portal (`provider/page.tsx`, `provider/leads/page.tsx`) and admin preview (`admin/preview/[provider_id]/leads`+`home`) all route through it. The real portal keeps RLS as a security backstop; the helper makes the displayed-row logic shared so preview and portal can't diverge again. Detail pages scope by id + primary_routed_to (no reimplemented predicate), so they were never a drift source.
+- Comment in the helper ties it to the RLS policy (0143/0210): change one, change the other.
+- tsc clean. Ships via Netlify on push.
+- **Signed off:** owner (session 2026-06-15).
+
 ## 2026-06-15 — Private-pay shown as "Private pay" in the provider portal (deployed)
 - After 0210 let providers see private-pay leads, the portal still rendered them as plain "Funded (FCFJ)" with no signal to bill the learner (Charlotte spotted on the EMS preview). The "bill the learner" context only lived on the sheet note + notification email, not the portal — which is the primary surface.
 - Provider lead **detail** (`lead-detail-view.tsx`): added an amber "Private pay" badge in the header, a prominent "Self-funding learner — bill them directly" banner, and the Funding row now reads "Self-funding (learner pays the course fee)" instead of "Funded (...)". Provider lead **list** (`leads-table.tsx`): funding sub-label shows "Private pay". `pay_route` threaded through both provider selects (`provider/leads/page.tsx`, `provider/leads/[id]/page.tsx`) and both admin-preview selects (`admin/preview/[provider_id]/leads/page.tsx` + `.../[lead_id]/page.tsx`) which reuse the same components.

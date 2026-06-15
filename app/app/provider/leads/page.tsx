@@ -20,6 +20,7 @@ import { LeadsSidebar } from "./leads-sidebar";
 import type { LeadStatus } from "@/lib/lead-status";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { isOverdueRow } from "@/lib/lead-overdue";
+import { applyProviderLeadVisibility } from "@/lib/provider-lead-visibility";
 import { bulkMarkOutcomeAction } from "./[id]/actions";
 
 const CONTACTED_STATUSES = new Set<LeadStatus>([
@@ -92,13 +93,13 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
   const slaStaleAttemptHours = providerSla?.sla_stale_attempt_hours ?? 36;
 
   const [submissionsResult, fastrackResult, courseIntakesResult] = await Promise.all([
-    supabase
-      .schema("leads")
-      .from("submissions")
-      .select("id,first_name,last_name,email,course_id,funding_category,pay_route,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region,la")
-      .not("routed_at", "is", null)
-      .is("archived_at", null)
-      .is("parent_submission_id", null)
+    applyProviderLeadVisibility(
+      supabase
+        .schema("leads")
+        .from("submissions")
+        .select("id,first_name,last_name,email,course_id,funding_category,pay_route,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region,la"),
+      ctx.providerId,
+    )
       .order("routed_at", { ascending: false })
       .limit(200),
     supabase

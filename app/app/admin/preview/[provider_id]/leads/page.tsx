@@ -26,6 +26,7 @@ import { requireAdminUser } from "@/lib/auth/require-admin";
 import { LeadsTable, type LeadRow, type Filter } from "@/app/provider/leads/leads-table";
 import { LeadsSidebar } from "@/app/provider/leads/leads-sidebar";
 import type { LeadStatus } from "@/lib/lead-status";
+import { applyProviderLeadVisibility } from "@/lib/provider-lead-visibility";
 import { PreviewHeader } from "../preview-header";
 
 const CONTACTED_STATUSES = new Set<LeadStatus>([
@@ -92,21 +93,18 @@ export default async function PreviewLeadsPage({ params, searchParams }: Props) 
   if (!provider) notFound();
 
   // Match /provider/leads/page.tsx query shape exactly, but manually
-  // scope to this provider via primary_routed_to instead of relying on
-  // RLS (admin client bypasses RLS). The is_dq filter mirrors the
-  // production RLS policy (migration 0143, widened in 0210) — preview must
-  // hide test rows the same way the real portal does, while still showing
-  // private-pay leads (is_dq=true but pay_route='private'), which route to
-  // the provider as a paying enrolment.
-  const submissionsResult = await admin
-    .schema("leads")
-    .from("submissions")
-    .select("id,first_name,last_name,email,course_id,funding_category,pay_route,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region,la")
-    .eq("primary_routed_to", providerId)
-    .or("is_dq.not.is.true,pay_route.eq.private")
-    .not("routed_at", "is", null)
-    .is("archived_at", null)
-    .is("parent_submission_id", null)
+  // Admin client bypasses RLS, so the preview applies the SAME shared
+  // visibility predicate the real portal uses (applyProviderLeadVisibility):
+  // scope by provider, hide test/DQ rows but keep private-pay leads. This is
+  // the single source of truth — the preview is an identical match by
+  // construction and can't drift from the real portal.
+  const submissionsResult = await applyProviderLeadVisibility(
+    admin
+      .schema("leads")
+      .from("submissions")
+      .select("id,first_name,last_name,email,course_id,funding_category,pay_route,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region,la"),
+    providerId,
+  )
     .order("routed_at", { ascending: false })
     .limit(200);
 

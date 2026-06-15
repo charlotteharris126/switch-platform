@@ -17,6 +17,7 @@ import { ProviderHomeView } from "@/app/provider/home-view";
 import type { LeadStatus } from "@/lib/lead-status";
 import { PreviewHeader } from "../preview-header";
 import { isOverdueWorkingHours } from "@/lib/working-hours";
+import { applyProviderLeadVisibility } from "@/lib/provider-lead-visibility";
 
 interface EnrolmentCountRow {
   submission_id: number;
@@ -73,25 +74,20 @@ export default async function PreviewHomePage({ params }: Props) {
 
   // Same fan-out as /provider/page.tsx but scoped manually to providerId
   // since we bypass RLS via the admin client.
-  // Admin client bypasses RLS, so we manually mirror the production
-  // provider RLS policy (migration 0143, widened in 0210): scope by
-  // primary_routed_to AND exclude is_dq=true EXCEPT private-pay leads
-  // (pay_route='private'), which route to the provider as paying
-  // enrolments. Earlier attempt used supabase-js nested-relation
-  // filtering (.eq("submission.is_dq", false)) which silently dropped
-  // every row and made the preview report "every lead tried". Replaced
-  // with a straight two-step: load the visible submission IDs first,
-  // then load enrolments + fastrack scoped to those IDs.
-  const dqSafeSubsRes = await admin
-    .schema("leads")
-    .from("submissions")
-    .select("id, first_name, last_name, email, course_id, routed_at, utm_source")
-    .eq("primary_routed_to", providerId)
-    .or("is_dq.not.is.true,pay_route.eq.private")
-    .not("routed_at", "is", null)
-    .is("archived_at", null)
-    .is("parent_submission_id", null)
-    .order("routed_at", { ascending: false });
+  // Admin client bypasses RLS, so the preview applies the SAME shared
+  // visibility predicate the real portal uses (applyProviderLeadVisibility):
+  // single source of truth, identical to the real portal by construction.
+  // Earlier attempt used supabase-js nested-relation filtering
+  // (.eq("submission.is_dq", false)) which silently dropped every row and
+  // made the preview report "every lead tried"; the helper uses top-level
+  // filters so that doesn't recur.
+  const dqSafeSubsRes = await applyProviderLeadVisibility(
+    admin
+      .schema("leads")
+      .from("submissions")
+      .select("id, first_name, last_name, email, course_id, routed_at, utm_source"),
+    providerId,
+  ).order("routed_at", { ascending: false });
 
   const allDqSafeSubs = (dqSafeSubsRes.data ?? []) as Array<{
     id: number;

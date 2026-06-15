@@ -20,6 +20,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ProviderShell } from "./provider-shell";
 import { ProviderHomeView } from "./home-view";
 import type { LeadStatus } from "@/lib/lead-status";
+import { applyProviderLeadVisibility } from "@/lib/provider-lead-visibility";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { requireProviderUser } from "@/lib/auth/require-provider";
 import { isOverdueWorkingHours } from "@/lib/working-hours";
@@ -94,22 +95,22 @@ export default async function ProviderHomePage() {
         .schema("crm")
         .from("enrolments")
         .select("submission_id, status, status_updated_at, callback_requested_at"),
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id, first_name, last_name, email, course_id, routed_at")
-        .not("routed_at", "is", null)
-        .is("archived_at", null)
-        .is("parent_submission_id", null)
+      applyProviderLeadVisibility(
+        supabase
+          .schema("leads")
+          .from("submissions")
+          .select("id, first_name, last_name, email, course_id, routed_at"),
+        ctx.providerId,
+      )
         .order("routed_at", { ascending: false })
         .limit(5),
-      supabase
-        .schema("leads")
-        .from("submissions")
-        .select("id, routed_at, utm_source")
-        .not("routed_at", "is", null)
-        .is("archived_at", null)
-        .is("parent_submission_id", null),
+      applyProviderLeadVisibility(
+        supabase
+          .schema("leads")
+          .from("submissions")
+          .select("id, routed_at, utm_source"),
+        ctx.providerId,
+      ),
       supabase
         .schema("leads")
         .from("fastrack_submissions")
