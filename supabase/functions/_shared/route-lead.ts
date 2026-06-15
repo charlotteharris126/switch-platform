@@ -1110,17 +1110,37 @@ async function sendU1Transactional(
     return;
   }
 
-  // Private-pay learners came through a funded page (funding_category gov/loan)
-  // but are paying the course fee, not taking a funded place. Send them the
-  // self-funded welcome (talks about payment options, not "confirm you qualify")
-  // rather than the funded one.
+  // Three welcome variants by route:
+  //   - funded (gov/loan, not paying): "your funded place" framing
+  //   - private (paying, came through a funded page): single-course + payment
+  //     framing (u1_private)
+  //   - self (everything else): multi-course self-funded framing
+  const isPrivate = submission.pay_route === "private";
   const isFunded =
     (submission.funding_category === "gov" || submission.funding_category === "loan") &&
-    submission.pay_route !== "private";
-  const templateEnvName = isFunded ? "BREVO_TEMPLATE_U1_FUNDED" : "BREVO_TEMPLATE_U1_SELF";
-  const emailType: "u1_funded" | "u1_self" = isFunded ? "u1_funded" : "u1_self";
+    !isPrivate;
 
-  const templateId = parseEnvInt(templateEnvName);
+  let templateEnvName: string;
+  let emailType: "u1_funded" | "u1_self" | "u1_private";
+  if (isPrivate) {
+    templateEnvName = "BREVO_TEMPLATE_U1_PRIVATE";
+    emailType = "u1_private";
+  } else if (isFunded) {
+    templateEnvName = "BREVO_TEMPLATE_U1_FUNDED";
+    emailType = "u1_funded";
+  } else {
+    templateEnvName = "BREVO_TEMPLATE_U1_SELF";
+    emailType = "u1_self";
+  }
+
+  let templateId = parseEnvInt(templateEnvName);
+  // The private welcome falls back to the self-funded template until the bespoke
+  // u1_private template is built in Brevo and BREVO_TEMPLATE_U1_PRIVATE is set —
+  // private payers still get a sensible paying-learner email (logged as
+  // u1_private) in the meantime, and it auto-upgrades once the env is set.
+  if (templateId == null && isPrivate) {
+    templateId = parseEnvInt("BREVO_TEMPLATE_U1_SELF");
+  }
   if (templateId == null) {
     // Silently skip if the U1 template env var isn't set — no dead_letter
     // spam during shadow setup or template-rebuild windows. Live in

@@ -323,7 +323,7 @@ export async function deleteBrevoContact(args: { email: string }): Promise<Brevo
 const BREVO_TRANSACTIONAL_RETRY_DELAYS_MS = [250, 1000, 4000] as const;
 
 export type EmailLogType =
-  | "u1_funded" | "u1_self"
+  | "u1_funded" | "u1_self" | "u1_private"
   | "stalled_funded" | "stalled_self"
   | "chaser_funded" | "chaser_self"
   | "u4_funded" | "u4_self"

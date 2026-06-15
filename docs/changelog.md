@@ -4,6 +4,15 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-15 — Dedicated u1_private welcome email for private-pay leads (deployed, awaiting Brevo template)
+- Private payers were getting `u1_self`, but that copy says "courses" (plural, built for the multi-select self-funded flow); a private-pay lead comes through one funded course page. They need single-course framing (like funded) + payment framing (like self).
+- **`_shared/route-lead.ts` `sendU1Transactional`:** now a 3-way branch — funded / self / **private**. Private (`pay_route='private'`) → `BREVO_TEMPLATE_U1_PRIVATE`, logged `email_type='u1_private'`. **Fallback:** until that env is set, private sends fall back to the self-funded template (so private welcomes never break) but still log as `u1_private`, and auto-upgrade once the env is set. `EmailLogType` in `_shared/brevo.ts` extended.
+- **Migration `0212_email_log_u1_private_type.sql` (applied):** adds `u1_private` to the `email_log_email_type_check` constraint. Applied before the EF redeploy so the new log type never hits the old constraint.
+- **Template source:** `switchable/email/html-exports/u1-private.html` (clone of u1-funded structure, payment-framed copy: "talk through payment options, when you could start..."). Build the Brevo template from this.
+- Redeployed the 14 `_shared/route-lead.ts` bundlers.
+- **Remaining (Charlotte / Wren):** build the Brevo template from `u1-private.html`, then set `BREVO_TEMPLATE_U1_PRIVATE` (template id) in Supabase EF secrets + one redeploy to activate. Until then private payers get the self-funded template content (logged as u1_private).
+- **Signed off:** owner (session 2026-06-15).
+
 ## 2026-06-15 — Capture + show the price a private-pay learner was qualified at (deployed)
 - Charlotte: the provider portal should show the price the learner accepted, so the provider knows they've been price-qualified.
 - **Migration `0211_submissions_private_price_quoted.sql` (applied):** adds `leads.submissions.private_price_quoted text` (nullable). `authenticated` + `readonly_analytics` both hold table-level SELECT (relacl `authenticated=r`), so the column is auto-readable by the portal with no new grant. Non-PII.
