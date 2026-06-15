@@ -10,7 +10,7 @@ Most recent at top. Every schema change, data migration, access policy change, a
 - **Migration `0212_email_log_u1_private_type.sql` (applied):** adds `u1_private` to the `email_log_email_type_check` constraint. Applied before the EF redeploy so the new log type never hits the old constraint.
 - **Template source:** `switchable/email/html-exports/u1-private.html` (clone of u1-funded structure, payment-framed copy: "talk through payment options, when you could start..."). Build the Brevo template from this.
 - Redeployed the 14 `_shared/route-lead.ts` bundlers.
-- **Remaining (Charlotte / Wren):** build the Brevo template from `u1-private.html`, then set `BREVO_TEMPLATE_U1_PRIVATE` (template id) in Supabase EF secrets + one redeploy to activate. Until then private payers get the self-funded template content (logged as u1_private).
+- **Activated 2026-06-15:** Charlotte built the Brevo template (id `76`); set `BREVO_TEMPLATE_U1_PRIVATE=76` in EF secrets + redeployed `netlify-lead-router` + `routing-confirm`. Private payers now get the bespoke private welcome (template 76); the self-funded fallback no longer applies. Manifest updated.
 - **Signed off:** owner (session 2026-06-15).
 
 ## 2026-06-15 — Capture + show the price a private-pay learner was qualified at (deployed)
