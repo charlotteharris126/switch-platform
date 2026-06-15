@@ -212,11 +212,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     let autoRouteEligible = false;
 
-    // Private-pay leads never auto-route: they always go through the owner-
-    // confirm flow so Charlotte sees the PRIVATE PAY banner and forwards to the
-    // provider with the "they are paying, bill the learner" context. Auto-route
-    // would drop a funded-looking row straight onto the provider sheet.
-    if (isSingleCandidate && !isSameProviderReApplication && !isPrivatePay) {
+    // Private-pay leads auto-route like any other single-candidate lead
+    // (owner decision 2026-06-15: a learner who chose to pay is a warm lead,
+    // not one to gatekeep behind a manual confirm — give them the same instant
+    // routing + nurture as everyone else). The "they are paying, bill the
+    // learner" context the owner-confirm banner used to carry is now carried to
+    // the provider on the routed row itself: pay_route on the sheet payload, a
+    // PRIVATE PAY note in the sheet notes column, and a line in the provider
+    // notification email (see route-lead.ts).
+    if (isSingleCandidate && !isSameProviderReApplication) {
       try {
         const [eligibility] = await sql<Array<{ auto_route_enabled: boolean; active: boolean; archived_at: string | null }>>`
           SELECT auto_route_enabled, active, archived_at

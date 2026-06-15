@@ -287,6 +287,16 @@ export async function routeLead(
     sheetNotes = priorNote;
   }
 
+  // Private-pay learners route like funded leads but pay the course fee
+  // themselves (they did not qualify for funding and chose to pay). The
+  // provider must bill the learner directly, not enrol them as a funded place.
+  // Status stays "Open" (reconcile parses that column), so the flag rides in
+  // the notes column instead, prepended ahead of any prior-submission note.
+  if (submission.pay_route === "private") {
+    const privatePayNote = "PRIVATE PAY — learner self-funds, bill them the course fee directly (not a funded place)";
+    sheetNotes = sheetNotes ? `${privatePayNote}. ${sheetNotes}` : privatePayNote;
+  }
+
   const sheetResult = await appendToProviderSheet(provider, submission, courseTitle, sheetStatus, sheetNotes);
 
   if (!sheetResult.ok) {
@@ -1427,6 +1437,7 @@ async function appendToProviderSheet(
     course_id: lc(submission.course_id),
     funding_category: lc(submission.funding_category),
     funding_route: lc(submission.funding_route),
+    pay_route: lc(submission.pay_route),
     provider: provider.provider_id,
     status: sheetStatus,
     name: lc([submission.first_name, submission.last_name].filter(Boolean).join(" ")),
@@ -1653,11 +1664,17 @@ export async function sendProviderNotification(
   const enquiryContextLine = portalLink
     ? `<p>The lead is at status <strong>open</strong>. Click through to see contact details, mark outcomes as you call, and add notes.</p>`
     : `<p>The lead has been added with status <strong>open</strong>. Please update the status and notes in your sheet as you work through the follow-up.</p>`;
+  // Private-pay learners self-fund. PII-free flag so the provider knows to
+  // bill the learner directly rather than enrol them as a funded place.
+  const privatePayLine = submission.pay_route === "private"
+    ? `<p style="margin:0;padding:12px 16px;background:#fff3cd;border:1px solid #e0c200;border-radius:6px;color:#664d03;"><strong>This learner is self-funding.</strong> They didn't qualify for funding and chose to pay, so enrol them as a paying student and bill them the course fee directly.</p>`
+    : "";
   const html = `
     <p>Hello,</p>
     <p>You have a new enquiry (${leadId}) ${portalLink ? "ready in your SwitchLeads portal" : "in your SwitchLeads sheet"}.</p>
     ${actionBlock}
     ${enquiryContextLine}
+    ${privatePayLine}
     <p>Thanks,<br>SwitchLeads</p>
   `.trim();
 

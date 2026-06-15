@@ -85,6 +85,7 @@ type LeadRow = {
   primary_routed_to: string | null;
   is_dq: boolean;
   dq_reason: string | null;
+  pay_route: string | null;
   utm_campaign: string | null;
   re_submission_count: number;
   fastracked_at: string | null;
@@ -259,7 +260,7 @@ export default async function LeadsPage({
   }
 
   const SUBMISSION_COLS =
-    "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,utm_campaign,re_submission_count,fastracked_at";
+    "id,submitted_at,created_at,first_name,last_name,email,phone,course_id,funding_category,funding_route,primary_routed_to,is_dq,dq_reason,pay_route,utm_campaign,re_submission_count,fastracked_at";
 
   let data: LeadRow[] | null = null;
   let count: number | null = null;
@@ -565,7 +566,15 @@ export default async function LeadsPage({
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {r.is_dq ? (
+                      {r.pay_route === "private" && (
+                        // Private-pay learners self-fund: they failed funding
+                        // (is_dq=true) but chose to pay, so they route + nurture
+                        // like any warm lead. Show "Private", not "DQ".
+                        <Badge className="text-xs bg-amber-100 text-amber-800 hover:bg-amber-100">
+                          Private
+                        </Badge>
+                      )}
+                      {r.is_dq && r.pay_route !== "private" ? (
                         <Badge variant="destructive" className="text-xs">
                           DQ{r.dq_reason ? `: ${truncate(r.dq_reason, 18)}` : ""}
                         </Badge>
@@ -645,7 +654,7 @@ export default async function LeadsPage({
                           : "bg-[#b3412e] text-white hover:bg-[#b3412e]";
                         return <Badge className={`text-xs ${cls}`} title={`U1 status: ${u1}`}>{u1}</Badge>;
                       }
-                      if (r.is_dq) return <span className="text-[#5a6a72]">—</span>;
+                      if (r.is_dq && r.pay_route !== "private") return <span className="text-[#5a6a72]">—</span>;
                       if (!r.primary_routed_to) return <span className="text-[#5a6a72]">—</span>;
                       // Routed, non-DQ, no U1 row. Pre-2026-05-05 leads land here legitimately.
                       const isPrePhase2 = new Date(r.submitted_at).getTime() < new Date("2026-05-05T12:00:00Z").getTime();

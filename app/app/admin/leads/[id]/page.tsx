@@ -309,7 +309,10 @@ export default async function LeadDetailPage({
           Lead #{lead.id} — {fullName}
         </h1>
         <div className="flex gap-2 mt-2 items-center flex-wrap">
-          {lead.is_dq ? (
+          {lead.pay_route === "private" && (
+            <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Private pay</Badge>
+          )}
+          {lead.is_dq && lead.pay_route !== "private" ? (
             <Badge variant="destructive">DQ{lead.dq_reason ? `: ${lead.dq_reason}` : ""}</Badge>
           ) : lead.primary_routed_to ? (
             <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
@@ -592,7 +595,7 @@ export default async function LeadDetailPage({
           Form branches its STATUSES + LOST_REASONS by lead_type so an
           employer lead surfaces engaged / in_progress / signed /
           not_signed + B2B reasons. */}
-      {!lead.is_dq && (
+      {(!lead.is_dq || lead.pay_route === "private") && (
         <EnrolmentOutcomeForm
           submissionId={lead.id}
           currentStatus={enrolment?.status ?? null}
@@ -606,7 +609,7 @@ export default async function LeadDetailPage({
       )}
 
       {/* Admin notes panel — visible for all leads. Note compose disabled for unrouted leads. */}
-      {!lead.is_dq && (
+      {(!lead.is_dq || lead.pay_route === "private") && (
         <AdminNotesPanel
           submissionId={lead.id}
           notes={leadNotes}
@@ -618,7 +621,7 @@ export default async function LeadDetailPage({
       )}
 
       {/* Demo-only test-send buttons for provider-facing emails */}
-      {!lead.is_dq && lead.primary_routed_to && isDemoLead && (
+      {(!lead.is_dq || lead.pay_route === "private") && lead.primary_routed_to && isDemoLead && (
         <TestEmailButtons
           submissionId={lead.id}
           onTestRouting={testRoutingEmailAction}
@@ -626,7 +629,7 @@ export default async function LeadDetailPage({
       )}
 
       {/* Audit activity — every action recorded against this lead */}
-      {!lead.is_dq && (
+      {(!lead.is_dq || lead.pay_route === "private") && (
         <Card>
           <CardHeader>
             <CardTitle className="text-sm">Activity ({auditRows.length})</CardTitle>
