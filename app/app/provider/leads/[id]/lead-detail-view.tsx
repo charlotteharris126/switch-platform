@@ -49,6 +49,7 @@ export interface LeadDetailSubmission {
   funding_category: string | null;
   funding_route: string | null;
   pay_route: string | null;
+  private_price_quoted: string | null;
   prior_level_3_or_higher: boolean | null;
   can_start_on_intake_date: boolean | null;
   preferred_intake_id: string | null;
@@ -223,6 +224,11 @@ export function LeadDetailView({
           <p className="mt-1 text-sm text-amber-900">
             This learner did not qualify for funding and chose to pay for the course. Enrol them as a paying student and bill them the course fee directly. This is not a funded place.
           </p>
+          {submission.private_price_quoted && (
+            <p className="mt-2 text-sm font-semibold text-amber-900">
+              Price-qualified: they were shown and accepted {submission.private_price_quoted}.
+            </p>
+          )}
         </div>
       )}
 

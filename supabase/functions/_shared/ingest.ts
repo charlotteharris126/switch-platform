@@ -88,6 +88,12 @@ export interface CanonicalSubmission {
   // but keeps its provider_ids and routes to the provider as a paying enrolment.
   pay_route: string | null;
 
+  // Price the learner was shown and accepted when they took the pay offer
+  // (platform migration 0211). The course's private_option price_display, e.g.
+  // "under £1,690". Captured at submit so the provider portal can tell the
+  // provider the learner has been price-qualified. NULL on non-private leads.
+  private_price_quoted: string | null;
+
   // A/B experiment attribution (platform migration 0061). Set when the
   // submission came from a page running an experiment; both NULL otherwise.
   // Variant is "a" (canonical / control) or "b" (challenger). Populated from
@@ -361,7 +367,7 @@ export async function insertSubmission(
         postcode, region, reason, interest, situation, qualification,
         start_when, budget, courses_selected,
         terms_accepted, marketing_opt_in,
-        is_dq, dq_reason, session_id, pay_route,
+        is_dq, dq_reason, session_id, pay_route, private_price_quoted,
         experiment_id, experiment_variant,
         client_nonce,
         start_timing, interest_breadth, investment_willingness, current_qualification,
@@ -380,7 +386,7 @@ export async function insertSubmission(
         ${eff.postcode}, ${eff.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
         ${row.terms_accepted}, ${row.marketing_opt_in},
-        ${row.is_dq}, ${row.dq_reason}, ${row.session_id}, ${row.pay_route},
+        ${row.is_dq}, ${row.dq_reason}, ${row.session_id}, ${row.pay_route}, ${row.private_price_quoted},
         ${row.experiment_id}, ${row.experiment_variant},
         ${row.client_nonce},
         ${row.start_timing}, ${row.interest_breadth}, ${row.investment_willingness}, ${eff.current_qualification},
@@ -586,6 +592,12 @@ function normalise(
     // or NULL. Read generically at the base; the switchable-funded form is the
     // only producer today.
     pay_route: firstString(data["pay_route"]) === "private" ? "private" : null,
+    // The price shown to a learner who took the pay offer (course private_option
+    // price_display). Only meaningful when pay_route='private'; NULL otherwise.
+    private_price_quoted:
+      firstString(data["pay_route"]) === "private"
+        ? firstString(data["private_price_quoted"]) ?? null
+        : null,
 
     // Experiment attribution fields. Empty hidden inputs (the default for
     // pages with no live experiment) come through as empty strings;

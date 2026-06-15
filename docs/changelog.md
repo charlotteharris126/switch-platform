@@ -4,6 +4,16 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-15 — Capture + show the price a private-pay learner was qualified at (deployed)
+- Charlotte: the provider portal should show the price the learner accepted, so the provider knows they've been price-qualified.
+- **Migration `0211_submissions_private_price_quoted.sql` (applied):** adds `leads.submissions.private_price_quoted text` (nullable). `authenticated` + `readonly_analytics` both hold table-level SELECT (relacl `authenticated=r`), so the column is auto-readable by the portal with no new grant. Non-PII.
+- **Capture (site, `switchable/site/deploy`):** the funded-course form carries a hidden `private_price_quoted` (empty by default); `dqPrivatePay` copies the course's `private_option.price_display` (e.g. "under £1,690") into it from a build-injected `#h-private-price`, so only private-pay submissions carry it. Build token `{{PRIVATE_PRICE_QUOTED}}`. Point-in-time correct (records what they were shown, immune to later YAML price changes).
+- **Ingest (`_shared/ingest.ts`):** maps + inserts `private_price_quoted` (only when pay_route='private'). Redeployed its two importers `netlify-lead-router` + `netlify-leads-reconcile` (migration applied first, then EFs, per the 0207 deploy-order rule).
+- **Display (provider + preview lead detail):** the private-pay banner now adds "Price-qualified: they were shown and accepted {price}." `private_price_quoted` threaded through both detail selects + `LeadDetailSubmission`.
+- Saranya (639) predates the field, so hers is NULL (the banner just omits the price line); all future private-pay leads capture it. Shows the learner-facing `price_display`; switch to the ex-VAT fee in the YAML if preferred.
+- Site build clean (0 critical), app tsc clean. data-architecture.md: add the column to the leads.submissions section (follow-up).
+- **Signed off:** owner (session 2026-06-15).
+
 ## 2026-06-15 — Single source of truth for provider lead visibility (deployed)
 - Root cause behind the preview/portal drift: the "which leads can this provider see" predicate was hand-written in six files (3 real portal, 3 preview), so widening it for private-pay (0210) reached the RLS policy + some copies but not the preview ones. Charlotte's point: the admin preview must be an identical match to the real portal by construction.
 - New `app/lib/provider-lead-visibility.ts` — `applyProviderLeadVisibility(query, providerId)` applies the one predicate (routed to provider, not archived, top-level, and `is_dq IS NOT TRUE OR pay_route='private'`). Real portal (`provider/page.tsx`, `provider/leads/page.tsx`) and admin preview (`admin/preview/[provider_id]/leads`+`home`) all route through it. The real portal keeps RLS as a security backstop; the helper makes the displayed-row logic shared so preview and portal can't diverge again. Detail pages scope by id + primary_routed_to (no reimplemented predicate), so they were never a drift source.

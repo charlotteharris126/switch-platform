@@ -82,7 +82,7 @@ export default async function PreviewLeadDetailPage({ params }: Props) {
       .from("submissions")
       .select(
         "id,routed_at,first_name,last_name,email,phone,lead_type," +
-        "age_band,employment_status,course_id,funding_category,funding_route,pay_route,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,la,postcode,region," +
+        "age_band,employment_status,course_id,funding_category,funding_route,pay_route,private_price_quoted,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,la,postcode,region," +
         "company_name,role_title,company_size_band,sector,levy_status,urgency,interest,candidate_in_mind,existing_apprentices,headcount_estimate,standards_interested,additional_notes",
       )
       .eq("id", submissionId)
