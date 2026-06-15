@@ -1,6 +1,8 @@
 # Data Architecture - Switchable Ltd
 
 **Status:** Live in production. Pilot schemas implemented; Sessions 3 and 3.3 operational. Session 5 (2026-04-21 evening) extends `leads.submissions` for multi-provider self-funded routing and adds `crm.providers.cc_emails`.
+
+**Latest:** 2026-06-15 - server-side Meta CAPI (both brands). Migration 0213 adds `leads.submissions.event_id/fbp/fbc` (dedup key + browser cookies the routers previously discarded) and new table `leads.capi_log` (one row per CAPI Lead send + Meta's response). Both routers (`netlify-lead-router` B2C, `netlify-employer-lead-router` B2B) now fire a server-side Lead to Meta via `_shared/meta-capi.ts`, deduped against the browser pixel by the shared `event_id`, redundant with the browser pixel + Stape. Migration 0214 schedules `capi-reconcile-daily` (08:10 UTC) which emails the owner on any unsent/failed CAPI. Full plan: `platform/docs/capi-server-side-scoping-2026-06-15.md`.
 **Last updated:** 2026-05-03 - Iris stages 1a-1e + stage 2 shipped. Migrations 0056-0060 + 0063 + 0064 applied. 0056 adds table `ads_switchable.iris_flags` + `iris_writer` Postgres role + RLS policies. 0057 adds view `ads_switchable.v_ad_to_routed` (per-ad spend↔leads↔routed join, parent_submission_id IS NULL applied throughout for True CPL consistency). 0058 adds view `ads_switchable.v_ad_baselines` (per-ad rolling baselines for fatigue + CPL anomaly detection). 0059 backfills funding_segment + adds BEFORE INSERT/UPDATE trigger on meta_daily to derive funding_segment from campaign_name (66 funded + 35 self-funded). 0060 extends meta_daily with delivery_state / daily_budget / status / headline / primary_text columns (NULL until re-pull after meta-ads-ingest function patch lands). 0063 grants iris_writer to postgres WITH SET TRUE INHERIT TRUE (Postgres-16 role-membership flags fix). 0064 adds RLS read policy on iris_flags for readonly_analytics. All views grant SELECT to `authenticated` + `iris_writer`. Stage 2 (`iris-daily-flags` Edge Function) live, runs daily 09:30 BST. (Note: Mable's parallel 0061 leads_experiment_columns landed same day; my originally-numbered 0061+0062 were renamed to 0063+0064 to resolve the file collision.)
 
 **Previously:** 2026-05-03 - migration 0055 applied (referral hook fix): `crm.upsert_enrolment_outcome` 6-arg signature (the live one called from the admin UI) now fires `leads.flip_referral_eligible(p_submission_id)` when status is enrolled or presumed_enrolled. Migration 0054 had targeted the wrong signature; 0055 corrects. `crm.run_enrolment_auto_flip` (cron path) was correctly hooked by 0054 and is unchanged. See changelog 2026-05-03 entry.
@@ -244,6 +246,14 @@ CREATE TABLE leads.submissions (
   fbclid                     TEXT,
   gclid                      TEXT,
   referrer                   TEXT,
+  -- Meta dedup key + browser identifiers (migration 0213). Injected as hidden
+  -- form inputs by meta-dedup.js and captured by both routers. event_id is the
+  -- browser<->server dedup key for the server-side CAPI Lead send; fbc/fbp are
+  -- the _fbc/_fbp cookie values. Not exposed to readonly_analytics (tracking
+  -- identifiers, not analytical substance).
+  event_id                   TEXT,
+  fbp                        TEXT,
+  fbc                        TEXT,
 
   -- Learner details - funded shape (set for switchable-funded submissions; NULL for self-funded)
   first_name                 TEXT,

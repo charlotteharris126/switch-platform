@@ -29,6 +29,7 @@ import {
   normaliseAndOverride,
 } from "../_shared/ingest.ts";
 import { routeLead, upsertLearnerInBrevoNoMatch } from "../_shared/route-lead.ts";
+import { logCapiSend, sendCapiLead } from "../_shared/meta-capi.ts";
 import { extractRefCode, processReferral } from "../_shared/referral.ts";
 import { getOwnerEmail, adminLeadUrl } from "../_shared/owner-email.ts";
 
@@ -45,6 +46,11 @@ const sql = postgres(DATABASE_URL, {
   connect_timeout: 10,
   prepare: false, // Supabase transaction pooler does not support prepared statements.
 });
+
+// B2C Meta pixel for the owned server-side CAPI Lead send (redundant with the
+// browser pixel + Stape, deduped by event_id). Env-overridable; defaults to the
+// live B2C pixel id. See platform/docs/capi-server-side-scoping-2026-06-15.md.
+const META_PIXEL_ID_B2C = Deno.env.get("META_PIXEL_ID_B2C") ?? "1163964622558929";
 
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") {
@@ -193,6 +199,48 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const noMatchTask = upsertLearnerInBrevoNoMatch(sql, result.id, "no_match")
       .catch((err) => console.error("Brevo no_match upsert failed:", describeError(err)));
     if (runtime0?.waitUntil) runtime0.waitUntil(noMatchTask);
+  }
+
+  // Owned server-side Meta CAPI Lead (B2C) — redundant with the browser pixel +
+  // Stape, deduped by event_id. Fire for PRIMARY submissions only
+  // (parent_submission_id IS NULL) that carry an event_id, i.e. the same
+  // population the browser pixel fired for. Re-applications/children don't fire
+  // the pixel, so they don't fire here (keeps paid-lead counts honest). Always
+  // logged to leads.capi_log so the daily reconcile can alarm on drift.
+  if (result.parentSubmissionId === null && row.event_id) {
+    // funding_category in the DB is 'gov' (fully funded, our £150 fee), 'self'
+    // (self-funded, £100), or null (unknown → £100). NB: 'gov', not 'funded'.
+    const value = row.funding_category === "gov" ? 150 : 100;
+    const capiTask = (async () => {
+      const capi = await sendCapiLead({
+        brand: "b2c",
+        pixelId: META_PIXEL_ID_B2C,
+        eventId: row.event_id,
+        eventSourceUrl: row.page_url,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        phone: row.phone,
+        zip: row.postcode,
+        country: "gb", // UK-resident-only audience
+        externalId: String(result.id),
+        fbc: row.fbc,
+        fbp: row.fbp,
+        fbclid: row.fbclid,
+        value,
+        currency: "GBP",
+        contentCategory: row.funding_category,
+      });
+      await logCapiSend(sql, {
+        submissionId: result.id,
+        brand: "b2c",
+        pixelId: META_PIXEL_ID_B2C,
+        eventId: row.event_id,
+        result: capi,
+      });
+      if (!capi.ok) console.error(`B2C CAPI Lead not ok (submission ${result.id}):`, capi.errorBody);
+    })().catch((err) => console.error("B2C CAPI leg failed:", describeError(err)));
+    if (runtime0?.waitUntil) runtime0.waitUntil(capiTask);
   }
 
   if ((!row.is_dq || isPrivatePay) && row.provider_ids.length > 0) {

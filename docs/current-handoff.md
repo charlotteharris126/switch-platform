@@ -1,43 +1,40 @@
-# Platform Handoff, Session 74, 2026-06-15
+# Platform Handoff, Session 75, 2026-06-15
 
 ## Current state
-Private-pay (self-funded) leads are now fully first-class end to end: they auto-route like any warm lead, show as "Private pay" (not DQ) in admin and the provider portal, carry the price the learner accepted, and get their own welcome email. All migrations applied and functions deployed; platform + switchable-site repos pushed.
+Server-side Meta Conversions API for the Lead event is live for both brands (B2C + B2B), fired directly from the lead routers as an owned, monitored path alongside the browser pixel + Stape, deduped by the shared event_id. Built after B2B server events were found silently dropped (only browser events recording in Events Manager). B2C verified live (HTTP 200, events_received 1); B2B awaits verification on the next real employer lead. Session 74's private-pay work is shipped but still has its own open verification items (carried forward below).
 
 ## What was done this session
-- **Auto-route private-pay:** removed the owner-confirm gate in `netlify-lead-router` so `pay_route='private'` leads auto-route to an `auto_route_enabled` provider like funded single-candidate leads.
-- **Provider gets the "bill the learner" context:** `_shared/route-lead.ts` adds a PRIVATE PAY note to the sheet `notes`, a `pay_route` field on the sheet payload, and a PII-free callout in the provider notification email.
-- **Admin display:** private-pay leads show an amber "Private pay" badge (not red DQ) on the leads list + detail, and routed ones get full enrolment/U1 tracking. `is_dq` column left unchanged (billing/analytics rely on it = "not a funded place").
-- **Migration 0210:** widened the `provider_read_submissions` RLS to admit private-pay leads (`is_dq IS NOT TRUE OR pay_route='private'`) so the provider portal can see them. Was the reason EMS couldn't see Saranya.
-- **Single source of truth for portal visibility:** new `app/lib/provider-lead-visibility.ts` (`applyProviderLeadVisibility`); real portal (list + home) and admin preview (list + home) both route through it. Fixes the drift where the preview reimplemented the filter and missed the private-pay widening.
-- **Portal display:** "Private pay" badge + "Self-funding learner — bill them directly" banner + "Price-qualified: they were shown and accepted {price}" on the lead detail; "Private pay" sub-label in the list.
-- **Migration 0211 + site capture:** new `leads.submissions.private_price_quoted` column; the funded form captures the course `private_option.price_display` (e.g. "under £1,690") via a hidden field set by `dqPrivatePay`; `_shared/ingest.ts` maps + inserts it.
-- **Per-provider sign-off (switchable-site):** `accepts_private: true` on the page-YAML provider entry gates the private offer + routing per provider per course; set for EMS on Build an Online Shop + Intro to Management. `/new-course-page` skill updated to capture it.
-- **u1_private welcome email:** `sendU1Transactional` now a 3-way branch (funded/self/private). Migration 0212 allows `email_type='u1_private'`. Brevo template `76` built + wired (`BREVO_TEMPLATE_U1_PRIVATE=76`). Fixes private payers previously getting the funded ("confirm you qualify") welcome.
-- **Saranya (639)** routed to EMS via the owner-confirm email (predated the auto-route fix).
-- **Counselling page:** confirmed already waitlist-only (empty `intakes[]` since 22 May); the blank welcome date was an old test contact, not a live issue. No change made.
-- **Deploys:** migrations 0210/0211/0212 applied; `_shared/route-lead.ts` bundlers (14) redeployed across three rounds; `netlify-lead-router` + `netlify-leads-reconcile` for ingest; secret set; platform + switchable-site pushed.
+- **Root cause found:** B2B CAPI showed browser-only events. The conversion only travelled the unmonitored browser→GTM→Stape→Meta chain (free Stape tier, auto-disables on low traffic), so a failure was silent. The Stape B2B subdomain (`b2b.switchable.org.uk`) and the GTM forwarder URL + the Stape CAPI tag config all checked out, so the fix is an owned redundant server path, not a Stape patch.
+- **Migration 0213 (applied):** `leads.submissions.event_id/fbp/fbc` (the dedup key + cookies the routers already received via meta-dedup.js hidden inputs but discarded) + new table `leads.capi_log` (per-send audit). Additive; column grants to `functions_writer`; not exposed to `readonly_analytics`.
+- **`_shared/meta-capi.ts` (new):** `sendCapiLead` (SHA-256 hashes PII, rebuilds fbc from fbclid, POSTs Lead to graph.facebook.com v21, never throws) + `logCapiSend`.
+- **Routers wired:** `netlify-employer-lead-router` (B2B, pixel 1386293849929367, value 400, content_category employer_lead) on the routed path; `netlify-lead-router` + `_shared/ingest.ts` (B2C, pixel 1163964622558929) for PRIMARY leads only (`parent_submission_id IS NULL` AND event_id present), matching the browser-pixel population.
+- **Value-mapping bug caught by the live test:** funded leads are `funding_category='gov'` (not `'funded'`); first code tagged them £100. Fixed to `gov→150 / else→100` and redeployed.
+- **Migration 0214 (applied):** `capi-reconcile-daily` cron (08:10 UTC, active) — compares expected vs successfully-sent CAPI per brand over 25h and emails the owner on any gap/failure. New EF deployed, verify_jwt=false, x-audit-key auth.
+- **Deploys:** 0213+0214 pushed (history was in sync, no repair needed); `netlify-lead-router`, `netlify-employer-lead-router`, `netlify-leads-reconcile`, `capi-reconcile-daily` deployed. `META_CAPI_ACCESS_TOKEN` set by owner (System User, never-expire, both pixels).
+- **Governance:** data-architecture.md + changelog updated; full plan at `docs/capi-server-side-scoping-2026-06-15.md`.
 
 ## Next steps
-1. Send a Brevo test of template `76` against a contact whose course has a start date (e.g. a Build an Online Shop / Tees Valley lead) to confirm `SW_COURSE_INTAKE_DATE` renders (counselling has no date, so it shows blank there).
-2. Verify the Netlify builds landed (admin app + switchable-site): EMS preview should show Saranya with a "Private pay" badge + "bill them directly" banner; list sub-label reads "Private pay".
-3. Watch the first brand-new private-pay lead end to end: auto-routes, shows "Private pay", appears in the portal with the price, gets template 76.
-4. (Optional, flagged not built) graceful "which starts X" fallback in the welcome templates when a course has no intake date — twin wording or a fallback attribute, since Brevo conditionals are unreliable.
+1. **Verify B2B CAPI** on the next real employer lead: check its `leads.capi_log` row reads http_status 200 / events_received 1 (deliberately not tested to avoid a junk lead to Riverside).
+2. **Rotate the access token:** it was pasted into chat twice. Owner regenerates (System User → Generate New Token → Never), then swap the `META_CAPI_ACCESS_TOKEN` Supabase secret.
+3. (Carried from S74) Send a Brevo test of template `76` against a contact whose course has a start date to confirm `SW_COURSE_INTAKE_DATE` renders.
+4. (Carried from S74) Verify the Netlify builds landed (admin app + switchable-site): EMS preview shows Saranya with a "Private pay" badge + "bill them directly" banner.
+5. (Carried from S74) Watch the first brand-new private-pay lead end to end: auto-routes, shows "Private pay", appears in the portal with the price, gets template 76.
 
 ## Decisions and open questions
-- **Private-pay leads auto-route with no owner approval** (owner decision: a learner who chooses to pay is warmer, not colder).
-- **`is_dq` not flipped** — it stays `true` (= "didn't get a funded place") so billing/analytics still exclude funded counts; only routing + display changed.
-- **`accepts_private` gate is per-provider-per-course** in the page YAML; new providers default off until onboarding records sign-off + price.
-- **Price shown is the learner-facing `price_display`** ("under £1,690"), not the ex-VAT fee; switchable in the YAML if preferred.
-- **Counselling stays waitlist** rather than fully taken down (keeps collecting interest for the next cohort).
+- **Keep Stape, add an owned server path** for the Lead event. Stape isn't the fault; the lack of monitoring + single fragile chain was. The server send is the guarantee; the daily reconcile is the alarm.
+- **Fire CAPI for primary leads only** (`parent_submission_id IS NULL`), matching the browser pixel, so re-applications/children don't inflate paid-lead counts.
+- **Value:** B2B 400; B2C gov 150 / else 100. NB DB enum is `gov`/`self`/null, never `funded`.
+- (S74) Private-pay leads auto-route with no owner approval; `is_dq` stays true; `accepts_private` is per-provider-per-course.
 - Open: none blocking.
 
 ## Watch items
-- Netlify builds for the admin app (platform) + switchable-site were pushed late in the session — confirm they rendered before relying on the portal/site display.
-- Saranya (639) received the funded U1 once (pre-fix, can't unsend) and her `private_price_quoted` is NULL (predates the column). Future private payers are correct.
-- The pre-existing `trx.json` Deno type error in `route-lead.ts` persists (does not block deploy) — untouched.
-- Untracked `docs/capi-server-side-scoping-2026-06-15.md` is not from this session; left in place.
+- **B2B CAPI unverified** until the next real employer lead lands (B2C proven).
+- **Exposed token** still live until rotated (step 2).
+- The pre-existing `trx.json` Deno type error in `route-lead.ts` persists (does not block deploy).
+- (S74) Saranya (639) got the funded U1 pre-fix (can't unsend); her `private_price_quoted` is NULL (predates the column).
+- (S74) Confirm the late-session Netlify builds (admin app + switchable-site) rendered before relying on portal/site display.
 
 ## Next session
 - **Folder:** platform
-- **First task:** verify the first real private-pay lead end to end (auto-route, Private pay display, portal price, template 76), or send the template-76 Brevo test against a dated-course contact.
-- **Cross-project:** switchable/site (per-provider `accepts_private` + `private_price_quoted` capture in the funnel) and switchable/email (`u1_private` template 76 live, source at `html-exports/u1-private.html`) — both pushed to their handoffs this session.
+- **First task:** verify the B2B `capi_log` row on the next real employer lead, and rotate the exposed CAPI token + update the secret.
+- **Cross-project:** switchable/ads-business (Solis) — the B2B CAPI tracking gap from her S14 handoff is now fixed server-side; pushed to her handoff and the existing Hub task `e4c1b06a` (`switchable-ads`) updated (CAPI-value half done, sector-diversify remains). Iris (switchable/ads) benefits too but no action needed there.

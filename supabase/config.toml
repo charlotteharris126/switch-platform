@@ -428,6 +428,9 @@ verify_jwt = false
 [functions.netlify-leads-reconcile]
 verify_jwt = false
 
+[functions.capi-reconcile-daily]
+verify_jwt = false
+
 [functions.netlify-forms-audit]
 verify_jwt = false
 

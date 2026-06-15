@@ -31,6 +31,7 @@ import {
   upsertBrevoContact,
   type BrevoAttributes,
 } from "../_shared/brevo.ts";
+import { logCapiSend, sendCapiLead } from "../_shared/meta-capi.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -40,6 +41,10 @@ if (!DATABASE_URL) {
 }
 
 const RIVERSIDE_PROVIDER_ID = "riverside-training";
+// B2B Meta pixel for the owned server-side CAPI Lead send (redundant with the
+// browser pixel + Stape, deduped by event_id). Env-overridable; defaults to the
+// live B2B pixel id. See platform/docs/capi-server-side-scoping-2026-06-15.md.
+const META_PIXEL_ID_B2B = Deno.env.get("META_PIXEL_ID_B2B") ?? "1386293849929367";
 // Provider contact email + sheet webhook URL + cc_emails are read from
 // crm.providers at send time (same pattern as netlify-lead-router for
 // funded providers). Single source of truth, editable via
@@ -111,6 +116,11 @@ interface EmployerSubmissionRow {
   fbclid: string | null;
   gclid: string | null;
   referrer: string | null;
+  // Meta dedup key + browser identifiers (meta-dedup.js hidden inputs), used by
+  // the server-side CAPI Lead send. event_id MUST match the browser pixel fire.
+  event_id: string | null;
+  fbp: string | null;
+  fbc: string | null;
   // A/B experiment attribution (migration 0061). Hidden inputs baked into
   // /business/<page>/ + /_v/b/ at site build time. NULL when the page isn't
   // running an experiment OR when the hidden input came through as "".
@@ -235,6 +245,41 @@ Deno.serve(async (req: Request): Promise<Response> => {
     } catch (err) {
       console.error("audit log write failed:", describeError(err));
     }
+
+    // Owned server-side Meta CAPI Lead — redundant with the browser pixel +
+    // Stape, deduped by event_id. Always logged to leads.capi_log so the daily
+    // reconcile can alarm on drift. Never throws (must not break the request).
+    try {
+      const capi = await sendCapiLead({
+        brand: "b2b",
+        pixelId: META_PIXEL_ID_B2B,
+        eventId: row.event_id,
+        eventSourceUrl: row.page_url,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        phone: row.phone,
+        externalId: String(insertedId),
+        fbc: row.fbc,
+        fbp: row.fbp,
+        fbclid: row.fbclid,
+        value: 400, // Employer Signed pilot fee, matches the Stape tag
+        currency: "GBP",
+        contentCategory: "employer_lead",
+      });
+      await logCapiSend(sql, {
+        submissionId: insertedId,
+        brand: "b2b",
+        pixelId: META_PIXEL_ID_B2B,
+        eventId: row.event_id,
+        result: capi,
+      });
+      if (!capi.ok) {
+        console.error(`CAPI Lead send not ok (submission ${insertedId}):`, capi.errorBody);
+      }
+    } catch (err) {
+      console.error("CAPI leg failed:", describeError(err));
+    }
   })().catch((e) => console.error("post-route fan-out failed:", describeError(e)));
   if (runtime?.waitUntil) runtime.waitUntil(task);
 
@@ -299,6 +344,9 @@ function normalise(data: Record<string, JsonValue>, rawBody: JsonValue): Employe
     fbclid: strOrNull(data.fbclid),
     gclid: strOrNull(data.gclid),
     referrer: strOrNull(data.referrer_url) ?? strOrNull(data.referrer),
+    event_id: trimOrNull(strOrNull(data.event_id)),
+    fbp: trimOrNull(strOrNull(data.fbp)),
+    fbc: trimOrNull(strOrNull(data.fbc)),
     experiment_id: trimOrNull(strOrNull(data.experiment_id)),
     experiment_variant: trimOrNull(strOrNull(data.experiment_variant)),
     raw_payload: rawBody,
@@ -339,7 +387,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         headcount_estimate, standards_interested, additional_notes, ern,
         terms_accepted, terms_accepted_at, marketing_opt_in,
         page_url, utm_source, utm_medium, utm_campaign, utm_content,
-        fbclid, gclid, referrer, experiment_id, experiment_variant, raw_payload, is_dq
+        fbclid, gclid, referrer, event_id, fbp, fbc, experiment_id, experiment_variant, raw_payload, is_dq
       ) VALUES (
         ${row.schema_version}, ${nowIso}, ${row.lead_type}, ${row.source_form}, ${row.primary_routed_to}, ${row.routing_outcome},
         ${row.routing_outcome_hint}, ${row.routed_at}, ${providerIds},
@@ -349,7 +397,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         ${row.headcount_estimate}, ${row.standards_interested}, ${row.additional_notes}, ${row.ern},
         ${row.terms_accepted}, ${row.terms_accepted_at}, ${row.marketing_opt_in},
         ${row.page_url}, ${row.utm_source}, ${row.utm_medium}, ${row.utm_campaign}, ${row.utm_content},
-        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.experiment_id}, ${row.experiment_variant}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"}
+        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.event_id}, ${row.fbp}, ${row.fbc}, ${row.experiment_id}, ${row.experiment_variant}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"}
       )
       RETURNING id
     `;

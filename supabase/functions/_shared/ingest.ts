@@ -43,6 +43,11 @@ export interface CanonicalSubmission {
   fbclid: string | null;
   gclid: string | null;
   referrer: string | null;
+  // Meta dedup key + browser identifiers (meta-dedup.js hidden inputs), used by
+  // the server-side CAPI Lead send. event_id MUST match the browser pixel fire.
+  event_id: string | null;
+  fbp: string | null;
+  fbc: string | null;
 
   // Funded-shape learner fields
   first_name: string | null;
@@ -359,7 +364,7 @@ export async function insertSubmission(
         schema_version, submitted_at, page_url, course_id, provider_ids,
         region_scheme, funding_category, funding_route,
         utm_source, utm_medium, utm_campaign, utm_content,
-        fbclid, gclid, referrer,
+        fbclid, gclid, referrer, event_id, fbp, fbc,
         first_name, last_name, email, phone, la, age_band,
         employment_status, prior_level_3_or_higher, can_start_on_intake_date,
         outcome_interest, why_this_course, earnings_band,
@@ -378,7 +383,7 @@ export async function insertSubmission(
         ${row.schema_version}, ${row.submitted_at}, ${row.page_url}, ${row.course_id}, ${row.provider_ids},
         ${row.region_scheme}, ${row.funding_category}, ${row.funding_route},
         ${row.utm_source}, ${row.utm_medium}, ${row.utm_campaign}, ${row.utm_content},
-        ${row.fbclid}, ${row.gclid}, ${row.referrer},
+        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.event_id}, ${row.fbp}, ${row.fbc},
         ${eff.first_name}, ${eff.last_name}, ${row.email}, ${row.phone}, ${eff.la}, ${row.age_band},
         ${row.employment_status}, ${row.prior_level_3_or_higher}, ${row.can_start_on_intake_date},
         ${row.outcome_interest}, ${row.why_this_course}, ${row.earnings_band},
@@ -532,6 +537,9 @@ function normalise(
     fbclid: firstString(data["fbclid"]),
     gclid: firstString(data["gclid"]),
     referrer: firstString(data["referrer"]),
+    event_id: firstString(data["event_id"]),
+    fbp: firstString(data["fbp"]),
+    fbc: firstString(data["fbc"]),
     first_name: firstString(data["first_name"], body["first_name"]),
     last_name: firstString(data["last_name"], body["last_name"]),
     email: firstString(data["email"], body["email"]),
