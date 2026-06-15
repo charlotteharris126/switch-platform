@@ -4,6 +4,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-15 — Private-pay shown as "Private pay" in the provider portal (deployed)
+- After 0210 let providers see private-pay leads, the portal still rendered them as plain "Funded (FCFJ)" with no signal to bill the learner (Charlotte spotted on the EMS preview). The "bill the learner" context only lived on the sheet note + notification email, not the portal — which is the primary surface.
+- Provider lead **detail** (`lead-detail-view.tsx`): added an amber "Private pay" badge in the header, a prominent "Self-funding learner — bill them directly" banner, and the Funding row now reads "Self-funding (learner pays the course fee)" instead of "Funded (...)". Provider lead **list** (`leads-table.tsx`): funding sub-label shows "Private pay". `pay_route` threaded through both provider selects (`provider/leads/page.tsx`, `provider/leads/[id]/page.tsx`) and both admin-preview selects (`admin/preview/[provider_id]/leads/page.tsx` + `.../[lead_id]/page.tsx`) which reuse the same components.
+- Ships via Netlify on push. No DB change. tsc clean.
+- **Signed off:** owner (session 2026-06-15).
+
 ## 2026-06-15 — Private-pay follow-ups: provider portal visibility + correct welcome email (deployed)
 - Two gaps surfaced after the morning private-pay change went live with Saranya (sub 639, EMS).
 - **Portal visibility (`0210_provider_see_private_pay_leads.sql`, applied):** the `provider_read_submissions` RLS policy on `leads.submissions` gated on `is_dq IS NOT TRUE`, so a routed private-pay lead (is_dq=true) was invisible in the provider portal even though delivered. Widened to `(is_dq IS NOT TRUE OR pay_route = 'private')`. Read-only widening; only admits rows already routed to that provider. No other consumer reads through this policy (analytics has its own true-qual policy; admin uses `admin.is_admin()`). Verified: EMS now sees Saranya.

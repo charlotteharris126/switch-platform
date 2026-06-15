@@ -48,6 +48,7 @@ export interface LeadDetailSubmission {
   course_id: string | null;
   funding_category: string | null;
   funding_route: string | null;
+  pay_route: string | null;
   prior_level_3_or_higher: boolean | null;
   can_start_on_intake_date: boolean | null;
   preferred_intake_id: string | null;
@@ -152,6 +153,9 @@ export function LeadDetailView({
   onMarkAdminNotesRead,
 }: LeadDetailViewProps) {
   const callbackPending = enrol?.callback_requested_at != null;
+  // Private-pay learner: came through a funded page but did not qualify for
+  // funding and chose to pay. The provider bills them the course fee directly.
+  const isPrivatePay = submission.pay_route === "private";
 
   return (
     <div className="max-w-7xl mx-auto p-6">
@@ -203,10 +207,24 @@ export function LeadDetailView({
             Re-applied{reapplications.length > 1 ? ` ×${reapplications.length}` : ""}
           </span>
         )}
+        {isPrivatePay && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+            Private pay
+          </span>
+        )}
       </div>
       <p className="text-sm text-slate-500 mt-1">
         Current status: <strong className="text-slate-900">{STATUS_LABEL[status] ?? status}</strong>
       </p>
+
+      {isPrivatePay && (
+        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">Self-funding learner — bill them directly</p>
+          <p className="mt-1 text-sm text-amber-900">
+            This learner did not qualify for funding and chose to pay for the course. Enrol them as a paying student and bill them the course fee directly. This is not a funded place.
+          </p>
+        </div>
+      )}
 
       {reapplications.length > 0 && (
         <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
@@ -369,7 +387,7 @@ export function LeadDetailView({
 
               <Section title="Course">
                 <Row label="Course" value={labelCourse(submission.course_id)} />
-                <Row label="Funding" value={labelFunding(submission.funding_category, submission.funding_route)} />
+                <Row label="Funding" value={isPrivatePay ? "Self-funding (learner pays the course fee)" : labelFunding(submission.funding_category, submission.funding_route)} />
                 <IntakeRow
                   canStart={submission.can_start_on_intake_date}
                   preferredIntakeId={submission.preferred_intake_id}

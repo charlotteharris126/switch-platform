@@ -34,6 +34,7 @@ export interface LeadRow {
   email: string | null;
   course_id: string | null;
   funding_category: string | null;
+  pay_route: string | null;
   routed_at: string | null;
   status: LeadStatus;
   status_updated_at: string | null;
@@ -709,7 +710,9 @@ export function LeadsTable({
                     : (labelCourse(r.course_id) ?? r.course_id ?? "-");
                   const subLabel = isEmployer
                     ? (r.role_title ?? r.sector ?? null)
-                    : labelFunding(r.funding_category, null);
+                    : r.pay_route === "private"
+                      ? "Private pay"
+                      : labelFunding(r.funding_category, null);
                   return (
                   <tr
                     key={r.id}

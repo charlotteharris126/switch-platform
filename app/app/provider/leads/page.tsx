@@ -42,6 +42,7 @@ interface SubmissionRow {
   email: string | null;
   course_id: string | null;
   funding_category: string | null;
+  pay_route: string | null;
   routed_at: string | null;
   re_submission_count: number | null;
   preferred_intake_id: string | null;
@@ -94,7 +95,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
     supabase
       .schema("leads")
       .from("submissions")
-      .select("id,first_name,last_name,email,course_id,funding_category,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region,la")
+      .select("id,first_name,last_name,email,course_id,funding_category,pay_route,routed_at,re_submission_count,preferred_intake_id,acceptable_intake_ids,lead_type,company_name,role_title,sector,region,la")
       .not("routed_at", "is", null)
       .is("archived_at", null)
       .is("parent_submission_id", null)
@@ -179,6 +180,7 @@ export default async function ProviderLeadsPage({ searchParams }: Props) {
       email: s.email,
       course_id: s.course_id,
       funding_category: s.funding_category,
+      pay_route: s.pay_route,
       routed_at: s.routed_at,
       status: (enrol?.status ?? "open") as LeadStatus,
       status_updated_at: enrol?.status_updated_at ?? null,
