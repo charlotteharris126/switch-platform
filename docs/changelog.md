@@ -4,6 +4,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-18 — Data fix: promote Freya Kelly (Riverside) to provider_admin
+- Change: `UPDATE crm.provider_users SET role='provider_admin' WHERE id=6` (Freya Kelly, riverside-training). Was `provider_user`. Run by the owner in the Supabase SQL editor.
+- Why: Riverside needed Freya able to invite teammates. The portal "Your team" panel and its invite/remove Server Actions are gated server-side on `role='provider_admin'`; flipping the role is the whole fix.
+- Impact: Riverside now has three portal admins (Jane Preston, Switchleads Support, Freya Kelly). Data fix on one row, not DDL, no migration. No `audit.actions` row written (raw UPDATE has no audit hook). Verified: role now `provider_admin`, `updated_at` 2026-06-18 11:50 UTC.
+- Follow-up: no UI promotes an existing teammate (invite sets a role at creation, remove soft-deletes, but no change-role). Gap filed to the Work Hub (`platform`, backlog) to build an audited change-role control.
+- Signed off: owner (session 2026-06-18).
+
 ## 2026-06-15 — Server-side Meta CAPI for the Lead event, both brands (BUILT, not yet deployed)
 - B2B server CAPI events silently stopped (only browser events recording in Events Manager). Root issue: the conversion only travelled the unmonitored browser→GTM→Stape→Meta chain. Fix = an owned, monitored server-side CAPI path fired from the routers, deduped against the browser pixel by the shared `event_id` (Meta's recommended redundant setup), plus a daily reconcile alert.
 - **Migration `0213_capi_tracking_columns_and_log.sql` (NOT applied):** adds `leads.submissions.event_id/fbp/fbc` (nullable, additive; the routers already receive these from meta-dedup.js hidden inputs but discarded them) with column-level grants to `functions_writer`; adds table `leads.capi_log` (per-send audit: brand, pixel_id, event_id, http_status, events_received, fbtrace_id, error_body, raw_response) + `functions_writer` INSERT/SELECT. No schema_version bump (additive). Not exposed to `readonly_analytics`.
