@@ -1,10 +1,10 @@
-# Platform Handoff, Session 76, 2026-06-18
+# Platform Handoff, Session 77, 2026-06-19
 
 ## Current state
 Provider self-invite is now functional for real providers. Freya Kelly (Riverside) promoted to `provider_admin`, and the missing `x-allow-real` header that was blocking every real-provider self-invite has been added and pushed live. All Session 75 CAPI + Session 74 private-pay verification items remain open and are carried forward unchanged (no platform work touched them this session).
 
 ## What was done this session
-- **Freya Kelly → provider_admin** (Riverside): `crm.provider_users` id 6 flipped from `provider_user` to `provider_admin` via a one-row SQL UPDATE the owner ran in the Supabase SQL editor. Verified: role now `provider_admin`, `updated_at` 2026-06-18 11:50 UTC.
+- **Freya Kelly → provider_admin** (Riverside, prior session 2026-06-18): `crm.provider_users` id 6 flipped from `provider_user` to `provider_admin` via a one-row SQL UPDATE the owner ran in the Supabase SQL editor. Verified: role now `provider_admin`, `updated_at` 2026-06-18 11:50 UTC. Logged in changelog.
 - **Fixed provider self-invite 403** (commit `780cf5b`, pushed live): Freya's invite attempt hit `real_provider_locked`. Root cause: `provider-invite-link` EF has a demo-only fence rejecting real providers (`is_demo=false`) unless the caller sends `x-allow-real: true`. The admin send-portal-invite action already sends it (how Jane + Freya were enrolled); the provider-side `team-actions.ts` was missing it. Added the header, mirroring the admin path exactly. One-line change, deploys via Netlify on push to the portal app.
 - Riverside now has three portal admins: Jane Preston, Switchleads Support, Freya Kelly.
 
