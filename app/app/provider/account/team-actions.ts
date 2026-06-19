@@ -74,6 +74,11 @@ export async function inviteProviderUserAction(args: InviteArgs): Promise<Invite
       headers: {
         "content-type": "application/json",
         "x-audit-key": secret,
+        // Bypass the demo-only fence in provider-invite-link, same as the
+        // admin send-portal-invite path. Real providers (is_demo=false) are
+        // already enrolled + logging in via that path; provider self-invite
+        // is the same operation initiated by a provider_admin.
+        "x-allow-real": "true",
       },
       body: JSON.stringify({
         provider_id: caller.provider_id,
