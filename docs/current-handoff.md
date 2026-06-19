@@ -1,11 +1,11 @@
 # Platform Handoff, Session 76, 2026-06-18
 
 ## Current state
-Quiet ops session. Freya Kelly (Riverside) promoted from `provider_user` to `provider_admin` so she can invite teammates via the portal's "Your team" panel. Change verified live. All Session 75 CAPI + Session 74 private-pay verification items remain open and are carried forward unchanged (no platform work touched them this session).
+Provider self-invite is now functional for real providers. Freya Kelly (Riverside) promoted to `provider_admin`, and the missing `x-allow-real` header that was blocking every real-provider self-invite has been added and pushed live. All Session 75 CAPI + Session 74 private-pay verification items remain open and are carried forward unchanged (no platform work touched them this session).
 
 ## What was done this session
-- **Freya Kelly → provider_admin** (Riverside): `crm.provider_users` id 6 flipped from `provider_user` to `provider_admin` via a one-row SQL UPDATE the owner ran in the Supabase SQL editor. Verified: role now `provider_admin`, `updated_at` 2026-06-18 11:50 UTC. No code change, no deploy.
-- Confirmed the provider self-invite capability is real and gated server-side on `role='provider_admin'` (`app/app/provider/account/team-actions.ts`): admins see the "Your team" panel, can invite (email + name + role), re-issue links, and remove teammates. Last-admin removal is blocked.
+- **Freya Kelly → provider_admin** (Riverside): `crm.provider_users` id 6 flipped from `provider_user` to `provider_admin` via a one-row SQL UPDATE the owner ran in the Supabase SQL editor. Verified: role now `provider_admin`, `updated_at` 2026-06-18 11:50 UTC.
+- **Fixed provider self-invite 403** (commit `780cf5b`, pushed live): Freya's invite attempt hit `real_provider_locked`. Root cause: `provider-invite-link` EF has a demo-only fence rejecting real providers (`is_demo=false`) unless the caller sends `x-allow-real: true`. The admin send-portal-invite action already sends it (how Jane + Freya were enrolled); the provider-side `team-actions.ts` was missing it. Added the header, mirroring the admin path exactly. One-line change, deploys via Netlify on push to the portal app.
 - Riverside now has three portal admins: Jane Preston, Switchleads Support, Freya Kelly.
 
 ## Next steps
@@ -22,6 +22,8 @@ Quiet ops session. Freya Kelly (Riverside) promoted from `provider_user` to `pro
 - Open: none blocking.
 
 ## Watch items
+- **Provider self-invite live, unverified end to end:** confirm Freya's retry of the Louise Beizsley invite (Louise@riverside-training.co.uk) succeeds after the Netlify build lands, and that Louise receives the invite email and can enrol a passkey. First real provider-initiated invite.
+- **Demo fence now bypassed on the provider self-invite path too.** The fence's stated gates (RLS proof + pen-test) were already de facto bypassed by the admin path; flagged for awareness, not a new exposure.
 - **Exposed CAPI token** still live until rotated (Next steps 1).
 - The pre-existing `trx.json` Deno type error in `route-lead.ts` persists (does not block deploy).
 - (S74) Saranya (639) got the funded U1 pre-fix (can't unsend); her `private_price_quoted` is NULL (predates the column).

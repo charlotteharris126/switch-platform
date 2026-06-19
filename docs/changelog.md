@@ -4,6 +4,13 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-19 — Fix: provider self-invite reaches real providers (x-allow-real)
+- Change: added `x-allow-real: true` to the provider-side invite caller (`app/app/provider/account/team-actions.ts`), mirroring the admin send-portal-invite action. Commit `780cf5b`, pushed live (Netlify portal app build).
+- Why: Freya Kelly's portal invite for a teammate 403'd with `real_provider_locked`. The `provider-invite-link` EF rejects `is_demo=false` providers unless the caller sends `x-allow-real: true`. The admin path already sends it (how real providers were enrolled); the provider self-invite path didn't, so no real provider could ever invite a teammate.
+- Impact: provider-admins at real providers can now invite teammates from the portal. No new exposure beyond what the admin path already does. The EF demo fence (and its referenced RLS-proof + pen-test gates) is unchanged in code; both invite paths bypass it via the header.
+- Verify: Freya re-sends the Louise Beizsley invite after the build lands; confirm email + passkey enrolment.
+- Signed off: owner (session 2026-06-19).
+
 ## 2026-06-18 — Data fix: promote Freya Kelly (Riverside) to provider_admin
 - Change: `UPDATE crm.provider_users SET role='provider_admin' WHERE id=6` (Freya Kelly, riverside-training). Was `provider_user`. Run by the owner in the Supabase SQL editor.
 - Why: Riverside needed Freya able to invite teammates. The portal "Your team" panel and its invite/remove Server Actions are gated server-side on `role='provider_admin'`; flipping the role is the whole fix.
