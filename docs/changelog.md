@@ -4,6 +4,21 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-21 — Data-op 049: close sheet_drift_detected dead_letter rows (DB authoritative)
+- Change: `supabase/data-ops/049_clear_sheet_drift_flags_2026_06_21.sql` — marks all 30 open `sheet_drift_detected` rows (27 status drift + 3 missing_from_sheet) replayed, with an annotation. Data fix, not DDL, no migration. Owner applies (Sasha read-only).
+- Why: 048 left this source open as Charlotte's accept-or-fix call. Audit (`vw_audit_actions`) proves EMS staff mark outcomes in the portal (`mark_outcome`/`surface=provider`); the sheet's status cells are the stale side. Verified the 6 worst-looking rows (subs 438/527/535/538/552/557) were all marked lost by EMS themselves (438 = cohort_decline). The 3 missing_from_sheet leads (675/676/678) are already in submissions + the portal, open. Nothing billable hidden in the sheet ("Enrolled" syncs; none present).
+- Impact: clears the 30 from the daily drift digest. Source keeps regenerating until the sheet is retired (target 25 Jun) and `sheet-drift-reconcile-daily` is disabled/repointed — tracked as a follow-up.
+- Signed off: pending owner apply (session 2026-06-21).
+
+## 2026-06-21 — Fix: server-side CAPI was sending DQ leads to Meta as conversions (DEPLOYED)
+- Change 1 (`netlify-lead-router`, DEPLOYED): added the DQ guard to the B2C CAPI Lead block (~line 210). Gate is now `result.parentSubmissionId === null && row.event_id && (!row.is_dq || isPrivatePay)`, mirroring the routing/Brevo guard at line 246. Skips DQ + waitlist; keeps private-pay (a real paying conversion).
+- Change 2 (`capi-reconcile-daily`, DEPLOYED): hardened the daily reconcile so it polices this regression shape. (a) `expected` now counts only routable leads (`!is_dq || private-pay`), so post-fix DQ leads don't raise false "missing" alarms. (b) New `wrongly_sent` metric: successful CAPI Lead sends for leads that should never have been sent (DQ-and-not-private, or a re-application/child) now trip the alarm. Verified read-only: wrongly_sent catches the 3 DQ sends in the last 25h; expected dropped from 9 (all primary) to 6 (routable).
+- Root cause: the CAPI Lead block shipped 15 Jun (entry below) without the `is_dq` check that the routing block has. The browser pixel never sent DQ leads because they never reach the thank-you page; the server CAPI fires straight off the DB insert, bypassing that natural gate. The reconcile didn't catch it because it counted all primary sends as healthy.
+- Impact (verified via `leads.capi_log`): 13 DQ `Lead` events sent to Meta 14–20 Jun. Of those, 2 are private-pay (656, 661 — legitimate, the fix keeps them), 1 is an owner test (643), leaving ~10 genuine false conversions polluting funded-adset delivery optimisation.
+- Expected behaviour note: the reconcile will fire one alarm email on its next run for today's 3 pre-fix DQ sends (they're still inside the 25h window), then go silent.
+- Open follow-ups: (a) verify on the next organic DQ lead: confirm an `is_dq=true` row lands in submissions with NO new `Lead` row in capi_log (zero-write check; preferred over a deliberate test row that can't be deleted under the read-only role); (b) flag to Iris whether the funded adset needs a learning-phase reset after ~10 false conversions.
+- Signed off: owner (session 2026-06-21).
+
 ## 2026-06-19 — Fix: provider self-invite reaches real providers (x-allow-real)
 - Change: added `x-allow-real: true` to the provider-side invite caller (`app/app/provider/account/team-actions.ts`), mirroring the admin send-portal-invite action. Commit `780cf5b`, pushed live (Netlify portal app build).
 - Why: Freya Kelly's portal invite for a teammate 403'd with `real_provider_locked`. The `provider-invite-link` EF rejects `is_demo=false` providers unless the caller sends `x-allow-real: true`. The admin path already sends it (how real providers were enrolled); the provider self-invite path didn't, so no real provider could ever invite a teammate.

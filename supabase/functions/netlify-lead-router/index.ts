@@ -207,7 +207,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // population the browser pixel fired for. Re-applications/children don't fire
   // the pixel, so they don't fire here (keeps paid-lead counts honest). Always
   // logged to leads.capi_log so the daily reconcile can alarm on drift.
-  if (result.parentSubmissionId === null && row.event_id) {
+  // DQ guard added 2026-06-21: this block previously gated only on
+  // parentSubmissionId/event_id and sent DQ + waitlist leads to Meta as Leads
+  // from the 15 Jun CAPI launch. Mirror the routing guard below: skip DQ, but
+  // keep private-pay (a real paying conversion).
+  if (result.parentSubmissionId === null && row.event_id && (!row.is_dq || isPrivatePay)) {
     // funding_category in the DB is 'gov' (fully funded, our £150 fee), 'self'
     // (self-funded, £100), or null (unknown → £100). NB: 'gov', not 'funded'.
     const value = row.funding_category === "gov" ? 150 : 100;

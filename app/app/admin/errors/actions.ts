@@ -100,6 +100,49 @@ export async function bulkClearClaudeFlags(): Promise<ActionResult & { cleared?:
   return { ok: true, cleared };
 }
 
+// Clear every unresolved row across a set of "safe" sources in one go. Powers
+// the "Clear all safe rows" button in the page's summary banner — the caller
+// (page.tsx) passes the list of sources it has classified clean/info severity,
+// so this action stays dumb: it never decides what's safe, it just resolves the
+// sources it's handed. fix-severity sources are never passed in.
+export async function bulkResolveSafeSources(
+  sources: string[],
+): Promise<ActionResult & { resolved?: number }> {
+  if (!sources || sources.length === 0) return { ok: true, resolved: 0 };
+
+  const supabase = await createClient();
+  const stamp = new Date().toISOString();
+  const annotation = `\n[bulk resolved ${stamp}]: Cleared via "Clear all safe rows" — clean/info severity, no per-row action needed.`;
+
+  const { data: existing, error: readErr } = await supabase
+    .schema("leads")
+    .from("dead_letter")
+    .select("id, error_context")
+    .in("source", sources)
+    .is("replayed_at", null)
+    .limit(1000);
+
+  if (readErr) return { ok: false, error: readErr.message };
+  const rows = existing ?? [];
+  if (rows.length === 0) return { ok: true, resolved: 0 };
+
+  let resolved = 0;
+  for (const r of rows) {
+    const annotated = `${r.error_context ?? ""}${annotation}`.trim();
+    const { data: updated, error: updateErr } = await supabase
+      .schema("leads")
+      .from("dead_letter")
+      .update({ replayed_at: stamp, error_context: annotated })
+      .eq("id", r.id)
+      .is("replayed_at", null)
+      .select("id");
+    if (!updateErr && updated && updated.length > 0) resolved += 1;
+  }
+
+  revalidatePath("/errors");
+  return { ok: true, resolved };
+}
+
 // Bulk-mark all unresolved rows for a given source as resolved with a single
 // note. For sources where individual rows don't need per-row review (e.g.
 // "Brevo upsert failed" — Brevo is eventually consistent, the row exists

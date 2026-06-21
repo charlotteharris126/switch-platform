@@ -409,7 +409,7 @@ export default async function LeadsPage({
   // Maps derived from the email_log query. The query orders triggered_at DESC,
   // so the first row per (sub_id, email_type) is the latest send.
   // - u1StatusBySubId: latest U1 transactional status, surfaced in the
-  //   "U1" column. Folds u1_funded / u1_self (learner) and
+  //   "U1" column. Folds u1_funded / u1_self / u1_private (learner) and
   //   s4b_employer_u1 (employer) into one badge — the dashboard surface
   //   only cares that a welcome went out, not which audience-specific
   //   template fired.
@@ -423,7 +423,7 @@ export default async function LeadsPage({
   const u1StatusBySubId = new Map<number, string>();
   const lastEmailChaserBySubId = new Map<number, string>();
   for (const e of (emailLogRes.data ?? []) as Array<{ submission_id: number; email_type: string; status: string; triggered_at: string }>) {
-    if (e.email_type === "u1_funded" || e.email_type === "u1_self" || e.email_type === "s4b_employer_u1") {
+    if (e.email_type === "u1_funded" || e.email_type === "u1_self" || e.email_type === "u1_private" || e.email_type === "s4b_employer_u1") {
       if (!u1StatusBySubId.has(e.submission_id)) {
         u1StatusBySubId.set(e.submission_id, e.status);
       }

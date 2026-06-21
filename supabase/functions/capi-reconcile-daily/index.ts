@@ -2,13 +2,18 @@
 //
 // The monitor that ends "we found out weeks later". Once a day it compares,
 // per brand (B2C + B2B):
-//   - expected: primary leads (parent_submission_id IS NULL) that carry an
-//     event_id, i.e. the population the browser pixel fired for and that the
-//     routers should therefore have sent server-side CAPI for;
+//   - expected: primary, ROUTABLE leads (parent_submission_id IS NULL, event_id
+//     present, and !is_dq || private-pay) — the population the router actually
+//     sends server-side CAPI for. DQ/waitlist leads are excluded so they don't
+//     show as false "missing";
 //   - sent_ok: those with a successful leads.capi_log row (2xx + events_received≥1);
 //   - missing: expected leads with no successful send;
-//   - failed: capi_log rows in the window that came back non-2xx / 0 received.
-// If anything is missing or failed, it emails the owner. Healthy days are silent.
+//   - failed: capi_log rows in the window that came back non-2xx / 0 received;
+//   - wrongly_sent: successful CAPI Lead sends for leads that should NEVER have
+//     been sent (DQ-and-not-private, or a re-application/child). This is the
+//     check that would have caught the 15 Jun regression on day one.
+// If anything is missing, failed, or wrongly sent, it emails the owner. Healthy
+// days are silent.
 //
 // This makes a silent CAPI outage (expired token, Stape drop, bad deploy) visible
 // the next morning instead of by accident. Full plan:
@@ -44,6 +49,7 @@ interface BrandSummary {
   sent_ok: number;
   missing: number;
   failed: number;
+  wrongly_sent: number;
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -84,6 +90,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
         FROM leads.submissions s
         WHERE s.parent_submission_id IS NULL
           AND s.event_id IS NOT NULL
+          -- Routable only: mirrors the router's CAPI guard
+          -- (!is_dq || private-pay). DQ/waitlist leads are NOT sent server-side,
+          -- so counting them as "expected" would raise a false missing alarm.
+          AND (s.is_dq = false OR s.pay_route = 'private')
           AND s.created_at >= now() - interval '25 hours'
           AND s.created_at <  now() - interval '30 minutes'
       ),
@@ -108,7 +118,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
       GROUP BY brand
     `;
     const failedByBrand = new Map(failedRows.map((r) => [r.brand, r.failed]));
-    const brands = new Set<string>([...expectedRows.map((r) => r.brand), ...failedByBrand.keys(), "b2c", "b2b"]);
+    // wrongly_sent = the alarm that would have caught the 15 Jun regression:
+    // a successful CAPI Lead send for a lead that should NEVER have been sent
+    // (DQ-and-not-private, or a re-application/child). The router guard now
+    // prevents these, so a non-zero count means the guard regressed again.
+    const wrongRows = await sql<Array<{ brand: string; wrongly_sent: number }>>`
+      SELECT c.brand, count(*)::int AS wrongly_sent
+      FROM leads.capi_log c
+      JOIN leads.submissions s ON s.id = c.submission_id
+      WHERE c.sent_at >= now() - interval '25 hours'
+        AND c.event_name = 'Lead'
+        AND c.http_status BETWEEN 200 AND 299
+        AND coalesce(c.events_received, 0) >= 1
+        AND (
+          s.parent_submission_id IS NOT NULL
+          OR (s.is_dq = true AND s.pay_route IS DISTINCT FROM 'private')
+        )
+      GROUP BY c.brand
+    `;
+    const wronglyByBrand = new Map(wrongRows.map((r) => [r.brand, r.wrongly_sent]));
+    const brands = new Set<string>([...expectedRows.map((r) => r.brand), ...failedByBrand.keys(), ...wronglyByBrand.keys(), "b2c", "b2b"]);
     summaries = [...brands].map((brand) => {
       const e = expectedRows.find((r) => r.brand === brand);
       return {
@@ -117,6 +146,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         sent_ok: e?.sent_ok ?? 0,
         missing: e?.missing ?? 0,
         failed: failedByBrand.get(brand) ?? 0,
+        wrongly_sent: wronglyByBrand.get(brand) ?? 0,
       };
     });
   } catch (err) {
@@ -124,7 +154,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ error: "reconcile query failed", detail: describeError(err) }, 500);
   }
 
-  const problem = summaries.some((s) => s.missing > 0 || s.failed > 0);
+  const problem = summaries.some((s) => s.missing > 0 || s.failed > 0 || s.wrongly_sent > 0);
 
   if (problem && !dryRun) {
     try {
@@ -133,23 +163,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
         .map(
           (s) =>
             `<tr><td>${s.brand.toUpperCase()}</td><td>${s.expected}</td><td>${s.sent_ok}</td>` +
-            `<td><strong>${s.missing}</strong></td><td><strong>${s.failed}</strong></td></tr>`,
+            `<td><strong>${s.missing}</strong></td><td><strong>${s.failed}</strong></td>` +
+            `<td><strong>${s.wrongly_sent}</strong></td></tr>`,
         )
         .join("");
       const html = `
-        <p>The daily Meta CAPI reconcile found leads that did not register server-side in the last 25 hours.</p>
+        <p>The daily Meta CAPI reconcile found a discrepancy in the last 25 hours.</p>
         <table border="1" cellpadding="6" cellspacing="0">
-          <tr><th>Brand</th><th>Expected</th><th>Sent OK</th><th>Missing</th><th>Failed sends</th></tr>
+          <tr><th>Brand</th><th>Expected</th><th>Sent OK</th><th>Missing</th><th>Failed sends</th><th>Wrongly sent</th></tr>
           ${rowsHtml}
         </table>
-        <p><strong>Missing</strong> = a lead that should have fired CAPI but has no successful send logged.
-        <strong>Failed sends</strong> = CAPI attempts Meta rejected (check the token, pixel, or payload).</p>
+        <p><strong>Missing</strong> = a routable lead that should have fired CAPI but has no successful send logged.
+        <strong>Failed sends</strong> = CAPI attempts Meta rejected (check the token, pixel, or payload).
+        <strong>Wrongly sent</strong> = a CAPI Lead sent for a lead that should never have been sent (DQ/waitlist or a re-application). Non-zero means the router's DQ guard has regressed; check netlify-lead-router.</p>
         <p>First checks: is the Meta access token still valid (System User, never-expire)? Did a recent deploy
         change the routers? See platform/docs/capi-server-side-scoping-2026-06-15.md.</p>
       `;
       const res = await sendBrevoEmail({
         to: [{ email: ownerEmail, name: "Charlotte" }],
-        subject: `CAPI reconcile: ${summaries.reduce((n, s) => n + s.missing + s.failed, 0)} unsent/failed in 25h`,
+        subject: `CAPI reconcile: ${summaries.reduce((n, s) => n + s.missing + s.failed + s.wrongly_sent, 0)} unsent/failed/wrongly-sent in 25h`,
         htmlContent: html,
         tags: ["capi-reconcile-alert"],
       });

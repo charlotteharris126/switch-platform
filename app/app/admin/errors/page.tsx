@@ -19,6 +19,7 @@ import { ReconcileSheetPanel } from "./reconcile-sheet-panel";
 import { ReconcileNetlifyPanel } from "./reconcile-netlify-panel";
 import { ReconcileBrevoPanel } from "./reconcile-brevo-panel";
 import { ClearClaudeFlagsButton } from "./clear-claude-flags-button";
+import { ClearAllSafeButton } from "./clear-all-safe-button";
 import { GdprEraseLearnerPanel } from "./gdpr-erase-learner-panel";
 
 interface DeadLetterRow {
@@ -542,6 +543,36 @@ export default async function ErrorsPage({
     }
   }
 
+  // At-a-glance triage for the summary banner. Split every unresolved source
+  // into "safe to clear now" (clean/info severity) vs "needs you" (fix, or an
+  // unknown source we won't auto-clear). The banner gives one button for the
+  // safe pile and a plain list of what actually wants a human.
+  // Sources that read as clean/info but imply an off-system action (e.g. an
+  // account top-up), so they must NOT be swept by the one-click safe clear —
+  // clearing them silently would bury the action. They surface under "needs
+  // you" instead, and keep their own per-card bulk button for after the action.
+  const ACTION_NEEDED_SOURCES = new Set<string>(["brevo_transactional_sms"]);
+  const safeSources: string[] = [];
+  let safeCount = 0;
+  const needsYou: Array<{ headline: string; count: number }> = [];
+  for (const [source, srcRows] of bySource) {
+    const explanation = SOURCE_EXPLANATIONS[source] ?? DEFAULT_EXPLANATION;
+    const severity: Severity = explanation.severity;
+    const isSafe =
+      (severity === "clean" || severity === "info") && !ACTION_NEEDED_SOURCES.has(source);
+    if (isSafe) {
+      safeSources.push(source);
+      safeCount += srcRows.length;
+    } else {
+      needsYou.push({
+        headline: explanation.headline,
+        count: srcRows.length,
+      });
+    }
+  }
+  needsYou.sort((a, b) => b.count - a.count);
+  const needsYouCount = needsYou.reduce((n, x) => n + x.count, 0);
+
   return (
     <div className="max-w-6xl space-y-6">
       <PageHeader
@@ -555,6 +586,55 @@ export default async function ErrorsPage({
           )
         }
       />
+
+      {/* Summary banner — what to clear, at a glance. */}
+      <Card>
+        <CardContent className="py-4 space-y-4">
+          {unresolved.length === 0 ? (
+            <p className="text-sm font-medium text-emerald-800">All clear. Nothing in the error list.</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-[#11242e]">
+                    {safeCount > 0
+                      ? `${safeCount} ${safeCount === 1 ? "row is" : "rows are"} safe to clear`
+                      : "Nothing safe to bulk-clear right now"}
+                  </p>
+                  <p className="text-xs text-[#5a6a72]">
+                    Safe = self-healed or audit noise. No lead is affected. The detail is in the cards below if you want it.
+                  </p>
+                </div>
+                {safeCount > 0 && (
+                  <ClearAllSafeButton sources={safeSources} count={safeCount} />
+                )}
+              </div>
+
+              <div className="border-t border-[#eee7dd] pt-3">
+                {needsYouCount === 0 ? (
+                  <p className="text-sm text-emerald-800">Nothing needs you. Clear the safe rows and you&apos;re done.</p>
+                ) : (
+                  <>
+                    <p className="text-sm font-semibold text-[#b3412e]">
+                      {needsYouCount} {needsYouCount === 1 ? "row needs" : "rows need"} you:
+                    </p>
+                    <ul className="mt-1 text-xs text-[#11242e] space-y-0.5">
+                      {needsYou.map((x) => (
+                        <li key={x.headline}>
+                          <span className="font-medium">{x.count}×</span> {x.headline}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-1 text-xs text-[#5a6a72]">
+                      These are in the cards below. Most need a top-up or a code fix (Flag for Claude), not a data change.
+                    </p>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="space-y-3">
         <h2 className="text-sm font-semibold text-[#11242e] uppercase tracking-wide">
