@@ -4,6 +4,12 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-22 — Data-op 050: pause sheet-drift cron, clear its backlog
+- Change: `supabase/data-ops/050_pause_sheet_drift_cron_and_clear_2026_06_22.sql` — sets `cron.job.active=false` for `sheet-drift-reconcile-daily` (jobid 20), and closes the open `sheet_drift_detected` (32) + `fastrack_side_effect` (1) rows. Owner applies (Sasha read-only).
+- Why: 049 cleared the backlog but the 06:00 cron re-detected the same drift next morning. DB is authoritative, sheet retiring 25 Jun, so the reconcile only makes noise now. Pause (reversible), not unschedule.
+- Impact: sheet drift stops being re-logged daily. `drift-digest-daily` (jobid 24) left running. Full teardown (permanent unschedule + remove the fastrack sheet-append side effect) happens at the 25 Jun retirement.
+- Signed off: pending owner apply (session 2026-06-22).
+
 ## 2026-06-21 — Data-op 049: close sheet_drift_detected dead_letter rows (DB authoritative)
 - Change: `supabase/data-ops/049_clear_sheet_drift_flags_2026_06_21.sql` — marks all 30 open `sheet_drift_detected` rows (27 status drift + 3 missing_from_sheet) replayed, with an annotation. Data fix, not DDL, no migration. Owner applies (Sasha read-only).
 - Why: 048 left this source open as Charlotte's accept-or-fix call. Audit (`vw_audit_actions`) proves EMS staff mark outcomes in the portal (`mark_outcome`/`surface=provider`); the sheet's status cells are the stale side. Verified the 6 worst-looking rows (subs 438/527/535/538/552/557) were all marked lost by EMS themselves (438 = cohort_decline). The 3 missing_from_sheet leads (675/676/678) are already in submissions + the portal, open. Nothing billable hidden in the sheet ("Enrolled" syncs; none present).
