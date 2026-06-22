@@ -19,7 +19,10 @@
 --   also dies with the sheet). Both closed below.
 
 -- ── 1. Pause the cron so it stops re-detecting drift each morning ─────────────
-UPDATE cron.job SET active = false WHERE jobname = 'sheet-drift-reconcile-daily';
+-- NB: a direct `UPDATE cron.job` is denied (the table is owned by a superuser).
+-- Use pg_cron's SECURITY DEFINER function instead — it checks job ownership by
+-- username (the job is owned by 'postgres', which the SQL editor runs as).
+SELECT cron.alter_job(20, active := false);  -- jobid 20 = sheet-drift-reconcile-daily
 
 -- ── 2. Close the current open sheet-related rows ─────────────────────────────
 UPDATE leads.dead_letter
