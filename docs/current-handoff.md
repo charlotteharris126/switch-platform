@@ -1,35 +1,36 @@
-# Platform Handoff, Session 78, 2026-06-22
+# Platform Handoff, Session 79, 2026-06-24
 
 ## Current state
-Data-health error list is empty and the sheet-drift cron is paused, so it stays empty. A live CAPI bug that sent DQ leads to Meta as conversions (since 15 Jun) is fixed and deployed, and its daily reconcile is hardened to catch the same shape again. The EMS sheet-vs-DB drift is fully diagnosed: the DB is authoritative (EMS staff mark outcomes in the portal), the sheet is the stale side, and it retires 25 Jun.
+Gaply CAPI and Brevo wiring are both confirmed live. Two migrations shipped (0215 brand check, 0216 subscribe_click constraint). Sheet teardown due 25 Jun is the next immediate platform task.
 
 ## What was done this session
-- Diagnosed the EMS sheet drift end to end. Audit (`vw_audit_actions`) proves EMS staff (nick.rodgers, george.taylor, jake.balfour) mark outcomes in the portal; the Google Sheet lags. DB is the trusted side for all 27 drift rows.
-- Confirmed the 6 "lost"-vs-sheet-"active" leads (438, 527, 535, 538, 552, 557) are genuinely lost, marked by EMS themselves in the portal. No un-losing. #601 is a real EMS-set enrolment (do not pull sheet->DB, it would erase it).
-- Fixed the CAPI DQ bug: added the `(!is_dq || isPrivatePay)` guard to the B2C CAPI Lead block in `netlify-lead-router` (~line 210). Deployed. ~10 genuine false conversions sent 14-20 Jun (13 total minus 2 private-pay + 1 owner test).
-- Hardened `capi-reconcile-daily`: `expected` now counts routable leads only (no false "missing" after the fix), plus a new `wrongly_sent` alarm that catches DQ/child CAPI sends. Deployed, verified against live data.
-- Fixed the lead-tracker U1 badge: `u1_private` now counts as a welcome, so private leads (656, 661) stop showing a false "missing". Pushed (Netlify).
-- Simplified the Data health page: top-of-page summary banner with one-click "Clear all safe rows" (clean/info severity) + a plain "needs you" list. SMS-credit rows excluded from the sweep. Pushed (Netlify).
-- Data-op 049 (cleared 30 sheet_drift_detected rows) and 050 (paused `sheet-drift-reconcile-daily` cron via `cron.alter_job`, cleared the refilled 32 + 1 fastrack rows). Both applied by owner. Error list now 0.
-- Owner actions done in-session: SMS credits topped up, DB->Brevo re-synced (36 -> 0 drift), EMS sheet-retirement email sent.
+- **Decided EF over Stape for Gaply CAPI:** Stape free tier auto-disables on low traffic (silently dropped B2B events for 2 weeks). Direct EF is owned and observable.
+- **Migration 0215:** expanded `leads.capi_log.brand` CHECK to include `'labs'`.
+- **Migration 0216:** added `'subscribe_click'` to `labs.events.event` CHECK. Labs S4 had added it to the EF's ALLOWED_EVENTS but never updated the DB constraint -- every subscribe_click POST was failing at INSERT.
+- **`_shared/meta-capi.ts`:** added `'labs'` to CapiBrand; added optional `eventName` to CapiLeadInput and logCapiSend (defaults to "Lead", backward compatible).
+- **`labs-event/index.ts`:** wired CAPI (Lead on signup, Subscribe on subscribe_click) and Brevo contact upsert (signup only) as non-blocking waitUntil background tasks for Gaply events.
+- **Secrets:** `BREVO_LIST_ID_GAPLY_WAITLIST=13` set in Supabase project secrets.
+- **Verified end-to-end:** Lead → capi_log row 46 (200, events_received=1). Subscribe → capi_log row 47 (200, events_received=1). Brevo upsert → contact confirmed in list 13 with GAPLY_* attrs set.
+- **Platform changelog updated** with full entry for this session.
+- **Labs handoff pushed** confirming both blockers cleared, ad can launch.
 
 ## Next steps
-1. **25 Jun sheet teardown (next session):** once the sheet is actually retired, permanently `cron.unschedule('sheet-drift-reconcile-daily')` (jobid 20, currently paused) and remove/short-circuit the sheet-append side effect in `fastrack-receive` so `fastrack_side_effect` stops firing at source. Also retire the now-dead Sheet <-> DB reconcile panel in `/admin/errors`.
-2. Verify the CAPI fix on the next organic DQ lead: confirm an `is_dq=true` row lands in `leads.submissions` with NO new `Lead` row in `leads.capi_log` (zero-write check; preferred over a deliberate test row under the read-only role).
+1. **25 Jun sheet teardown (tomorrow):** permanently `cron.unschedule('sheet-drift-reconcile-daily')` (jobid 20, currently paused), strip sheet-append side effect from `fastrack-receive`, retire sheet reconcile panel in `/admin/errors`.
+2. **Verify B2C CAPI fix** on next organic DQ lead: `is_dq=true` row in leads.submissions with NO new Lead row in leads.capi_log.
+3. **Check lead #601:** enrolled (EMS-set 19 Jun) but billed_amount is null. Charlotte emailing EMS tomorrow.
+4. **Revoke leaked GitHub PAT** (quick-win, flagged by Sasha, unseen by Charlotte).
 
 ## Decisions and open questions
-- **Trust the DB/portal over the sheet for EMS, always.** Audit proves EMS works the portal; the sheet only ever lags. Decided this session.
-- **The 6 "lost" leads stay lost.** EMS marked them lost themselves with reasons (438 = cohort_decline). No EMS question needed.
-- **Pause the drift cron now, don't wait for the 25th.** Reconcile has no value once DB is authoritative and the sheet is dying; it only made daily noise. Pause is reversible (`active=false`), full unschedule at teardown.
-- **CAPI keeps private-pay as a conversion** (`isPrivatePay` bypasses the DQ guard) because it is a real paying conversion.
-- Open (Iris, not platform): does the funded adset need a learning-phase reset after ~10 false conversions? Flagged to Charlotte to put to Iris.
+- EF over Stape for Gaply CAPI: decided this session (see reasoning above).
+- Test data in labs.events (rows 12, 14, 15) and capi_log (rows 46, 47) from Sasha's test sends. Junk emails, no real attribution impact. Can be cleared via a data-ops script if needed but low priority.
+- Open (Iris, not platform): does the funded adset need a learning-phase reset after ~10 false conversions? Charlotte carries this question to Iris.
 
 ## Watch items
-- Lead #601: DB says `enrolled` (EMS-set 19 Jun) but `billed_amount` is null. Possible un-billed enrolment, worth a billing check (not drift).
-- `capi-reconcile-daily` will fire one alarm email covering the pre-fix DQ sends until the 25h window rolls past them, then go silent. Expected, not a new fault.
-- Two Netlify deploys from this session (tracker fix, Data health banner) should be confirmed live on next visit to `/admin/leads` and `/admin/errors`.
+- **25 Jun deadline:** sheet teardown must happen tomorrow -- EMS sheet is being retired.
+- `capi-reconcile-daily` will surface Gaply as a new `labs` brand row in its daily email (expected=0, sent=N). Expected, not an alarm.
+- Lead #601: billed_amount null, possible un-billed enrolment.
 
 ## Next session
-- **Folder:** platform
-- **First task:** On/after 25 Jun, run the sheet teardown: permanently unschedule cron jobid 20, strip the sheet-append side effect from `fastrack-receive`, retire the Sheet <-> DB reconcile panel. Otherwise, verify the CAPI fix on the next organic DQ lead.
-- **Cross-project:** None. All work this session was platform-internal. The Iris learning-phase-reset question is carried by Charlotte, not pushed to a folder (per the "Charlotte carries agent-to-agent messages" rule).
+- **Folder:** `platform/`
+- **First task:** Sheet teardown -- unschedule cron job 20, strip fastrack sheet-append, retire reconcile panel. Due 25 Jun.
+- **Cross-project:** Labs handoff (S5) updated this session confirming CAPI + Brevo done, ad can launch.

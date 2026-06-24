@@ -10,6 +10,8 @@
 // Related: migration 0181_labs_events.sql, labs/docs/current-handoff.md.
 
 import postgres from "npm:postgres@3";
+import { sendCapiLead, logCapiSend } from "../_shared/meta-capi.ts";
+import { upsertBrevoContact } from "../_shared/brevo.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -23,8 +25,12 @@ const sql = postgres(DATABASE_URL, {
   prepare: false,
 });
 
+// Gaply pixel (created by Clara, S17 — separate from the B2C learner pixel).
+// Migration 0215 adds 'labs' to the leads.capi_log brand check to support this.
+const GAPLY_PIXEL_ID = "1362101339162811";
+
 const ALLOWED_TOOLS = new Set(["amistuck", "gaply"]);
-const ALLOWED_EVENTS = new Set(["run", "unlock_intent", "signup"]);
+const ALLOWED_EVENTS = new Set(["run", "unlock_intent", "signup", "subscribe_click"]);
 
 // Bot detection (mirrors log-page-view): keeps obvious crawlers/scripts out of
 // the funnel denominators. is_bot is stored, not rejected, so it's auditable.
@@ -88,6 +94,67 @@ Deno.serve(async (req: Request): Promise<Response> => {
         RETURNING id
       `;
     });
+    // Fire CAPI and Brevo as post-insert background tasks for Gaply events.
+    // Non-blocking: failures log to console but never affect the 200 response.
+    // Mirrors the waitUntil pattern in netlify-lead-router for B2C.
+    if (tool === "gaply" && !isBot && (event === "signup" || event === "subscribe_click")) {
+      const runtime = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
+      const fbclid = typeof attribution["fbclid"] === "string" ? attribution["fbclid"] : null;
+
+      // CAPI: Lead on signup, Subscribe on subscribe_click.
+      const capiTask = (async () => {
+        const capi = await sendCapiLead({
+          brand: "labs",
+          pixelId: GAPLY_PIXEL_ID,
+          eventName: event === "signup" ? "Lead" : "Subscribe",
+          eventId: null, // labs events have no browser dedup key
+          eventSourceUrl: referrer,
+          email: event === "signup" ? email : null,
+          fbclid,
+          externalId: String(row.id),
+        });
+        await logCapiSend(sql, {
+          submissionId: null, // labs.events id, not a leads.submissions id
+          brand: "labs",
+          pixelId: GAPLY_PIXEL_ID,
+          eventName: event === "signup" ? "Lead" : "Subscribe",
+          eventId: null,
+          result: capi,
+        });
+        if (!capi.ok) {
+          console.error(`Gaply CAPI ${event} not ok (labs.events ${row.id}):`, capi.errorBody);
+        }
+      })().catch((err) => console.error("Gaply CAPI leg failed:", err instanceof Error ? err.message : String(err)));
+      if (runtime?.waitUntil) runtime.waitUntil(capiTask);
+
+      // Brevo: upsert on signup only (subscribe_click has no email).
+      // Requires BREVO_LIST_ID_GAPLY_WAITLIST env var + contact attributes
+      // GAPLY_TOWN / GAPLY_TEST / GAPLY_SIGNUP_DATE created in Brevo dashboard.
+      if (event === "signup" && email) {
+        const brevoTask = (async () => {
+          const listIdRaw = Deno.env.get("BREVO_LIST_ID_GAPLY_WAITLIST");
+          const listIds = listIdRaw ? [Number(listIdRaw)] : [];
+          const town = typeof payload["town"] === "string" ? payload["town"] : null;
+          const testVariant = typeof payload["test"] === "string" ? payload["test"] : "test_b";
+          const attrs: Record<string, string | number | boolean | null> = {
+            GAPLY_TEST: testVariant,
+            GAPLY_SIGNUP_DATE: new Date().toISOString().split("T")[0],
+          };
+          if (town) attrs.GAPLY_TOWN = town;
+          const result = await upsertBrevoContact({
+            email,
+            attributes: attrs,
+            listIds,
+            marketingOptIn: true, // consent given at the modal ("you'll hear from us when we open")
+          });
+          if (!result.ok) {
+            console.error(`Gaply Brevo upsert failed (labs.events ${row.id}):`, result.error);
+          }
+        })().catch((err) => console.error("Gaply Brevo leg failed:", err instanceof Error ? err.message : String(err)));
+        if (runtime?.waitUntil) runtime.waitUntil(brevoTask);
+      }
+    }
+
     return json({ status: "ok", id: row.id });
   } catch (err) {
     console.error("labs.events INSERT failed:", err);

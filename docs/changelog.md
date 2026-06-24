@@ -4,6 +4,16 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-24 — Gaply CAPI + Brevo wiring (DEPLOYED)
+- **Migration 0215** (`0215_capi_log_labs_brand.sql`): expanded `leads.capi_log.brand` CHECK to include `'labs'` alongside `'b2c'` / `'b2b'`. Required for Gaply CAPI sends to log without a constraint violation.
+- **Migration 0216** (`0216_labs_events_subscribe_click.sql`): added `'subscribe_click'` to the `labs.events.event` CHECK constraint. Labs S4 had added it to the EF's `ALLOWED_EVENTS` set but never updated the DB constraint — every subscribe_click POST was failing at the INSERT.
+- **`_shared/meta-capi.ts`**: added `'labs'` to `CapiBrand` type; added optional `eventName` field to `CapiLeadInput` and `logCapiSend` args (defaults to `"Lead"` — backward compatible with all existing B2C/B2B callers).
+- **`labs-event/index.ts`**: imports `sendCapiLead`, `logCapiSend`, `upsertBrevoContact`; fires CAPI (Lead on signup, Subscribe on subscribe_click) and Brevo contact upsert (signup only) as non-blocking `waitUntil` background tasks for Gaply events. Mirrors the `netlify-lead-router` B2C pattern throughout.
+- **Secrets**: `BREVO_LIST_ID_GAPLY_WAITLIST=13` set in Supabase project secrets (list "Gaply - Test B waitlist", folder GAPLY, created by Charlotte this session). Three Brevo contact attributes created by Charlotte: `GAPLY_TOWN` (text), `GAPLY_TEST` (text), `GAPLY_SIGNUP_DATE` (date).
+- **Verified end-to-end**: Lead event → `capi_log` row 46 (200, events_received=1). Subscribe event → `capi_log` row 47 (200, events_received=1). Brevo upsert → contact confirmed in list 13 with GAPLY_* attrs set.
+- **Why direct EF over Stape**: Stape (free tier) auto-disables on low traffic and silently dropped B2B server events for ~2 weeks. Gaply is smoke-test volume — exactly the wrong use case for Stape.
+- Signed off: Charlotte (session 2026-06-24).
+
 ## 2026-06-22 — Data-op 050: pause sheet-drift cron, clear its backlog
 - Change: `supabase/data-ops/050_pause_sheet_drift_cron_and_clear_2026_06_22.sql` — sets `cron.job.active=false` for `sheet-drift-reconcile-daily` (jobid 20), and closes the open `sheet_drift_detected` (32) + `fastrack_side_effect` (1) rows. Owner applies (Sasha read-only).
 - Why: 049 cleared the backlog but the 06:00 cron re-detected the same drift next morning. DB is authoritative, sheet retiring 25 Jun, so the reconcile only makes noise now. Pause (reversible), not unschedule.

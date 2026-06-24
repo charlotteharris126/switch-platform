@@ -27,11 +27,14 @@
 
 const GRAPH_API_VERSION = "v21.0"; // bump deliberately; matches the Stape tag era
 
-export type CapiBrand = "b2c" | "b2b";
+export type CapiBrand = "b2c" | "b2b" | "labs";
 
 export interface CapiLeadInput {
   brand: CapiBrand;
   pixelId: string;
+  /** Override the Meta event name. Defaults to "Lead". Use "Subscribe" for the
+   *  Gaply subscribe_click event. Must be a standard or custom Meta event name. */
+  eventName?: string;
   eventId: string | null; // shared dedup key from meta-dedup.js hidden input
   eventSourceUrl: string | null; // page_url of the thank-you page
   eventTimeMs?: number; // defaults to now()
@@ -158,7 +161,7 @@ export async function sendCapiLead(input: CapiLeadInput): Promise<CapiResult> {
   if (input.contentCategory) custom_data.content_category = input.contentCategory;
 
   const event: Record<string, unknown> = {
-    event_name: "Lead",
+    event_name: input.eventName ?? "Lead",
     event_time: Math.round(tsMs / 1000),
     action_source: "website",
     user_data,
@@ -219,6 +222,8 @@ export async function logCapiSend(
     submissionId: number | null;
     brand: CapiBrand;
     pixelId: string;
+    /** Defaults to "Lead". Must match what was passed to sendCapiLead. */
+    eventName?: string;
     eventId: string | null;
     result: CapiResult;
   },
@@ -231,7 +236,7 @@ export async function logCapiSend(
           submission_id, brand, pixel_id, event_name, event_id,
           http_status, events_received, fbtrace_id, error_body, raw_response
         ) VALUES (
-          ${args.submissionId}, ${args.brand}, ${args.pixelId}, ${"Lead"}, ${args.eventId},
+          ${args.submissionId}, ${args.brand}, ${args.pixelId}, ${args.eventName ?? "Lead"}, ${args.eventId},
           ${args.result.httpStatus}, ${args.result.eventsReceived}, ${args.result.fbtraceId},
           ${args.result.errorBody}, ${args.result.raw === null ? null : tx.json(args.result.raw)}
         )
