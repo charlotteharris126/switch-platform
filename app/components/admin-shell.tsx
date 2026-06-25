@@ -38,8 +38,6 @@ const NAV_SECTIONS: Array<{
       { href: "/automations", label: "Automations" },
       { href: "/social/drafts", label: "Social" },
       { href: "/profit", label: "Profit tracker" },
-      { href: "/models/gaply-calculator.html", label: "Labs calculator" },
-      { href: "/models/gaply-vs-pps.html", label: "Labs vs PPS" },
       { href: "/agents", label: "Agents" },
       { href: "/errors", label: "Data health" },
     ],

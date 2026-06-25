@@ -104,6 +104,32 @@ export default async function LabsPage() {
         </p>
       </section>
 
+      <section className="mb-10">
+        <h2 className="mb-3 text-sm font-semibold text-[#11242e]">Income models</h2>
+        <div className="grid grid-cols-2 gap-4 max-w-2xl">
+          <a
+            href="/models/gaply-calculator.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block rounded-lg border border-[#dde3e7] bg-white p-4 hover:border-[#b0bec5] transition-colors"
+          >
+            <div className="text-xs font-bold uppercase tracking-wide text-[#059669] mb-1">Labs calculator</div>
+            <div className="text-sm font-semibold text-[#11242e] mb-1">Income model</div>
+            <div className="text-xs text-[#5a6a72]">Gaply (Test B), Test A — existing operators, Am I Stuck? Presets per product, Conservative / Mid / Strong scenarios.</div>
+          </a>
+          <a
+            href="/models/gaply-vs-pps.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block rounded-lg border border-[#dde3e7] bg-white p-4 hover:border-[#b0bec5] transition-colors"
+          >
+            <div className="text-xs font-bold uppercase tracking-wide text-[#2563eb] mb-1">Comparison</div>
+            <div className="text-sm font-semibold text-[#11242e] mb-1">Gaply vs SwitchLeads PPS</div>
+            <div className="text-xs text-[#5a6a72]">Side-by-side at equal ad spend. Seeded with real DB unit economics — 6.4% conversion, £22 CPL.</div>
+          </a>
+        </div>
+      </section>
+
       <section>
         <h2 className="mb-3 text-sm font-semibold text-[#11242e]">
           Recent signups ({signupRows.length})
