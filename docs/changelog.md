@@ -4,6 +4,22 @@ Most recent at top. Every schema change, data migration, access policy change, a
 
 ---
 
+## 2026-06-25 — Labs funnel v2: view event + targeting data + test data clear
+
+- **Data-op 051** (`051_delete_labs_test_data_2026_06_25.sql`): TRUNCATE labs.events RESTART IDENTITY. All 47 rows were from Charlotte's and Sasha's pre-launch testing; no real ad traffic yet. Owner runs in Supabase SQL editor.
+- **Migration 0218** (`0218_labs_events_view_event.sql`): added `'view'` to `labs.events.event` CHECK constraint. Fires on Gaply page load, giving a top-of-funnel view count before the user runs the tool.
+- **Migration 0219** (`0219_labs_admin_funnel_v2.sql`): replaced `admin_labs_funnel()` RPC with v2 (views / unlock_intents / radar_subscribes / autopilot_subscribes + conversion rates). Added new `admin_labs_targeting(p_tool)` RPC that aggregates town, skill, interest, and budget from run-event payloads for targeting analysis.
+- **`labs-event/index.ts`**: added `'view'` and `'plans_skip'` to ALLOWED_EVENTS (plans_skip was wired in 0217 but never added to the EF allowlist).
+- **`labs/public/gaply/app.js`**: `trackEvent('view', {})` fires at script load (page load). Session-stable: localStorage session_id ensures one view per browser session in the RPC's DISTINCT count.
+- **`platform/app/app/admin/labs/page.tsx`**: updated to v2 funnel (8 columns), added targeting signals section (bar charts by town/skill/interest/budget), kept recent-signups table and income model links.
+- Signed off: Charlotte (session 2026-06-25).
+
+## 2026-06-25 — Gaply CAPI match quality fix (DEPLOYED)
+- **`_shared/meta-capi.ts`**: added `ip` and `userAgent` to `CapiLeadInput`; both sent as `client_ip_address` / `client_user_agent` in CAPI `user_data`. Closes the two high-priority match quality gaps flagged in Meta Events Manager.
+- **`labs-event/index.ts`**: extracts client IP from `x-forwarded-for` / `cf-connecting-ip`; passes `ip`, `userAgent`, `fbp`, `fbc` to `sendCapiLead`.
+- **Redeployed**: `labs-event`, `netlify-lead-router`, `netlify-employer-lead-router` (all import `_shared/meta-capi.ts`).
+- Signed off: Charlotte (session 2026-06-25).
+
 ## 2026-06-24 — Gaply CAPI + Brevo wiring (DEPLOYED)
 - **Migration 0215** (`0215_capi_log_labs_brand.sql`): expanded `leads.capi_log.brand` CHECK to include `'labs'` alongside `'b2c'` / `'b2b'`. Required for Gaply CAPI sends to log without a constraint violation.
 - **Migration 0216** (`0216_labs_events_subscribe_click.sql`): added `'subscribe_click'` to the `labs.events.event` CHECK constraint. Labs S4 had added it to the EF's `ALLOWED_EVENTS` set but never updated the DB constraint — every subscribe_click POST was failing at the INSERT.

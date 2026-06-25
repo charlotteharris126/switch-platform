@@ -30,7 +30,7 @@ const sql = postgres(DATABASE_URL, {
 const GAPLY_PIXEL_ID = "1362101339162811";
 
 const ALLOWED_TOOLS = new Set(["amistuck", "gaply"]);
-const ALLOWED_EVENTS = new Set(["run", "unlock_intent", "signup", "subscribe_click"]);
+const ALLOWED_EVENTS = new Set(["view", "run", "unlock_intent", "signup", "subscribe_click", "plans_skip"]);
 
 // Bot detection (mirrors log-page-view): keeps obvious crawlers/scripts out of
 // the funnel denominators. is_bot is stored, not rejected, so it's auditable.

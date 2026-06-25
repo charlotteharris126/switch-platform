@@ -1,30 +1,35 @@
-# Platform Handoff, Session 80, 2026-06-25
+# Platform Handoff, Session 81, 2026-06-25
 
 ## Current state
-Sheet teardown is overdue (was due 25 Jun). Gaply CAPI match quality fix shipped this session -- `_shared/meta-capi.ts` now sends IP, user agent, and fbp for all three EFs that use it. All three redeployed.
+Labs funnel v2 is live. Test data cleared, view event wired end-to-end, admin/labs page shows the correct funnel (views / £17 clicks / Radar / Autopilot) plus a targeting section. Sheet teardown and PAT revocation are still outstanding.
 
 ## What was done this session
-- **`_shared/meta-capi.ts`:** added `ip` and `userAgent` to `CapiLeadInput` interface; both included in CAPI `user_data` as `client_ip_address` and `client_user_agent`. Fixes Meta's "improve match quality" diagnostic on the Gaply B2B pixel.
-- **`labs-event/index.ts`:** extracts client IP from `x-forwarded-for` / `cf-connecting-ip` headers; passes `ip`, `userAgent`, `fbp` (from attribution), and `fbc` (from attribution) to `sendCapiLead`.
-- **Redeployed:** `labs-event`, `netlify-lead-router`, `netlify-employer-lead-router` (all import the shared module, all must redeploy on shared change).
+- **Data-op 051:** TRUNCATE labs.events RESTART IDENTITY -- all 47 test rows cleared before first real ad traffic.
+- **Migration 0218:** added `view` event to labs.events CHECK constraint.
+- **Migration 0219:** replaced admin_labs_funnel() RPC (v1 runs/signups → v2 views/unlock_intents/radar/autopilot) and added new admin_labs_targeting() RPC (aggregates town, skill, interest, budget from run events).
+- **labs-event/index.ts:** added `view` and `plans_skip` to ALLOWED_EVENTS (plans_skip was in the DB constraint since 0217 but was never added to the EF allowlist -- silent gap fixed).
+- **labs/public/gaply/app.js:** `trackEvent('view', {})` fires at script load for top-of-funnel page view count.
+- **platform/app/app/admin/labs/page.tsx:** updated to v2 funnel (8 columns), added targeting signals section, kept recent-signups and income model links.
+- All deployed: EF redeployed, Labs site deployed, admin app pushed to Netlify.
 
 ## Next steps
-1. **Sheet teardown (overdue):** permanently `cron.unschedule('sheet-drift-reconcile-daily')` (jobid 20), strip sheet-append side effect from `fastrack-receive`, retire sheet reconcile panel in `/admin/errors`.
-2. **Verify B2C CAPI fix** on next organic DQ lead: `is_dq=true` row in `leads.submissions` with NO new Lead row in `leads.capi_log`.
-3. **Check lead #601:** enrolled (EMS-set 19 Jun) but `billed_amount` is null. Charlotte emailing EMS.
-4. **Revoke leaked GitHub PAT** (flagged by Sasha, still not actioned).
+1. **Sheet teardown (overdue):** permanently `cron.unschedule('sheet-drift-reconcile-daily')` (jobid 20), strip sheet-append side effect from `fastrack-receive`, retire reconcile panel in `/admin/errors`.
+2. **Revoke leaked GitHub PAT** (flagged by Sasha, still not actioned).
+3. **Verify B2C CAPI fix** on next organic DQ lead: `is_dq=true` row in `leads.submissions` with NO new Lead row in `leads.capi_log`.
+4. **Check lead #601:** enrolled (EMS-set 19 Jun) but `billed_amount` is null. Charlotte emailing EMS.
 
 ## Decisions and open questions
-- `ip` and `userAgent` are sent raw (never hashed) per Meta CAPI spec -- same as `fbp`/`fbc`. This is correct.
-- Fix also benefits B2C and S4B EFs at no extra cost since they share the module.
+- `plans_skip` was in the DB constraint (migration 0217) but was never in the EF ALLOWED_EVENTS -- any plans_skip POST was returning 400. Fixed quietly alongside the view addition this session.
+- Migration 0219 required DROP + CREATE (not CREATE OR REPLACE) because the return type changed. Handled correctly.
 - Open: does the funded adset need a learning-phase reset after ~10 false conversions? (Carried from S79, Iris question.)
 
 ## Watch items
-- Sheet teardown is overdue -- do it first next platform session
-- Monitor `leads.capi_log` for Gaply Purchase rows post-fix: expect `client_ip_address` + `client_user_agent` in `raw_response`
-- Lead #601 billed_amount null -- possible un-billed enrolment
+- Verify `/admin/labs` shows the v2 funnel once Netlify deploy finishes (2-3 min after push).
+- Monitor labs.events for first real `view` rows when Gaply ad goes live.
+- Sheet teardown is overdue -- do it first next platform session.
+- Lead #601 billed_amount null -- possible un-billed enrolment.
 
 ## Next session
 - **Folder:** `platform/`
-- **First task:** Sheet teardown -- unschedule cron job 20, strip fastrack sheet-append, retire reconcile panel. Overdue.
-- **Cross-project:** Labs handoff (S7) updated this session with the CAPI match quality fix details.
+- **First task:** Sheet teardown -- unschedule cron job 20, strip fastrack sheet-append, retire reconcile panel.
+- **Cross-project:** Labs handoff updated this session to reflect funnel v2, view event, and app.js deploy.
