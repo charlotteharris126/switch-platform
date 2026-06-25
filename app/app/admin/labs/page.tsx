@@ -13,12 +13,13 @@ export const dynamic = "force-dynamic";
 
 interface FunnelRow {
   tool: string;
-  runs: number;
+  views: number;
   unlock_intents: number;
-  signups: number;
-  run_to_unlock_pct: number | null;
-  run_to_signup_pct: number | null;
-  unlock_to_signup_pct: number | null;
+  radar_subscribes: number;
+  autopilot_subscribes: number;
+  view_to_unlock_pct: number | null;
+  unlock_to_radar_pct: number | null;
+  unlock_to_autopilot_pct: number | null;
 }
 
 interface SignupRow {
@@ -29,48 +30,80 @@ interface SignupRow {
   attribution: Record<string, unknown> | null;
 }
 
+interface TargetingRow {
+  category: string;
+  value: string;
+  cnt: number;
+}
+
 const TOOL_LABEL: Record<string, string> = {
   amistuck: "Am I Stuck?",
   gaply: "Gaply",
 };
 
+const CATEGORY_LABEL: Record<string, string> = {
+  town: "Towns",
+  skill: "Skills",
+  interest: "Interests",
+  budget: "Budget",
+};
+
+const CATEGORY_ORDER = ["town", "skill", "interest", "budget"];
+
 export default async function LabsPage() {
   const supabase = createAdminClient();
 
-  const [{ data: funnel, error: funnelErr }, { data: signups, error: signupErr }] =
-    await Promise.all([
-      supabase.rpc("admin_labs_funnel"),
-      supabase.rpc("admin_labs_recent_signups", { p_limit: 50 }),
-    ]);
+  const [
+    { data: funnel, error: funnelErr },
+    { data: signups, error: signupErr },
+    { data: targeting, error: targetingErr },
+  ] = await Promise.all([
+    supabase.rpc("admin_labs_funnel"),
+    supabase.rpc("admin_labs_recent_signups", { p_limit: 50 }),
+    supabase.rpc("admin_labs_targeting", { p_tool: "gaply" }),
+  ]);
 
   const rows = (funnel as FunnelRow[] | null) ?? [];
   const signupRows = (signups as SignupRow[] | null) ?? [];
+  const targetingRows = (targeting as TargetingRow[] | null) ?? [];
+
+  // Group targeting rows by category
+  const byCategory: Record<string, TargetingRow[]> = {};
+  for (const r of targetingRows) {
+    if (!byCategory[r.category]) byCategory[r.category] = [];
+    byCategory[r.category].push(r);
+  }
+
+  const hasTargeting = targetingRows.length > 0;
 
   return (
     <div>
       <PageHeader
         eyebrow="Switchable Labs"
         title="Labs funnel"
-        subtitle="Smoke-test funnel for the AI tools. Bot traffic excluded, sessions deduped. £17 click = the unlock button (no money taken yet), signup = email captured."
+        subtitle="Gaply smoke-test funnel. Bot traffic excluded, sessions deduped. View = page load, £17 click = unlock button (no money taken yet)."
       />
 
-      {(funnelErr || signupErr) && (
+      {(funnelErr || signupErr || targetingErr) && (
         <p className="mb-6 text-sm text-red-600">
-          Couldn&apos;t load Labs data: {funnelErr?.message || signupErr?.message}
+          Couldn&apos;t load Labs data:{" "}
+          {funnelErr?.message || signupErr?.message || targetingErr?.message}
         </p>
       )}
 
+      {/* Funnel */}
       <section className="mb-10">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Tool</TableHead>
-              <TableHead className="text-right">Runs</TableHead>
+              <TableHead className="text-right">Views</TableHead>
               <TableHead className="text-right">£17 clicks</TableHead>
-              <TableHead className="text-right">Signups</TableHead>
-              <TableHead className="text-right">Run → £17</TableHead>
-              <TableHead className="text-right">Run → signup</TableHead>
-              <TableHead className="text-right">£17 → signup</TableHead>
+              <TableHead className="text-right">Radar</TableHead>
+              <TableHead className="text-right">Autopilot</TableHead>
+              <TableHead className="text-right">View → £17</TableHead>
+              <TableHead className="text-right">£17 → Radar</TableHead>
+              <TableHead className="text-right">£17 → Autopilot</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -79,31 +112,78 @@ export default async function LabsPage() {
                 <TableCell className="font-medium">
                   {TOOL_LABEL[r.tool] ?? r.tool}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{r.runs}</TableCell>
+                <TableCell className="text-right tabular-nums">{r.views}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   {r.unlock_intents}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{r.signups}</TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {pct(r.run_to_unlock_pct)}
+                  {r.radar_subscribes}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {pct(r.run_to_signup_pct)}
+                  {r.autopilot_subscribes}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {pct(r.unlock_to_signup_pct)}
+                  {pct(r.view_to_unlock_pct)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {pct(r.unlock_to_radar_pct)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {pct(r.unlock_to_autopilot_pct)}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
         <p className="mt-3 text-xs text-[#5a6a72]">
-          Success bar (locked model): run → signup ≥ ~5% promising, &lt; 2% kill.
-          Cost-per-email is recorded once ad spend joins by campaign, not a gate on
-          its own.
+          Gaply only. Am I Stuck? not in test yet. Radar and Autopilot subscribe clicks
+          are intent signals — no card taken.
         </p>
       </section>
 
+      {/* Targeting signals */}
+      <section className="mb-10">
+        <h2 className="mb-3 text-sm font-semibold text-[#11242e]">
+          Who is using Gaply (from run events)
+        </h2>
+        {!hasTargeting ? (
+          <p className="text-sm text-[#5a6a72]">No run data yet.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-6 max-w-3xl">
+            {CATEGORY_ORDER.filter((c) => byCategory[c]?.length).map((cat) => (
+              <div key={cat}>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#5a6a72]">
+                  {CATEGORY_LABEL[cat] ?? cat}
+                </h3>
+                <div className="space-y-1">
+                  {byCategory[cat].slice(0, 10).map((r) => (
+                    <div key={r.value} className="flex items-center gap-2">
+                      <div
+                        className="h-2 rounded-full bg-[#059669]"
+                        style={{
+                          width: `${Math.round(
+                            (r.cnt / byCategory[cat][0].cnt) * 120
+                          )}px`,
+                          minWidth: "4px",
+                        }}
+                      />
+                      <span className="text-xs text-[#11242e] capitalize">{r.value}</span>
+                      <span className="ml-auto text-xs tabular-nums text-[#5a6a72]">
+                        {r.cnt}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="mt-3 text-xs text-[#5a6a72]">
+          From tool runs only. Sessions where someone used the quiz at least once.
+        </p>
+      </section>
+
+      {/* Income models */}
       <section className="mb-10">
         <h2 className="mb-3 text-sm font-semibold text-[#11242e]">Income models</h2>
         <div className="grid grid-cols-2 gap-4 max-w-2xl">
@@ -130,6 +210,7 @@ export default async function LabsPage() {
         </div>
       </section>
 
+      {/* Recent signups */}
       <section>
         <h2 className="mb-3 text-sm font-semibold text-[#11242e]">
           Recent signups ({signupRows.length})
