@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gaply vs SwitchLeads — Which lane wins?</title>
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f5f5fa; --s1: #ffffff; --s2: #ededf5; --bd: #dddde8; --bd2: #c8c8d8;
+      --ink: #18181f; --mut: #5a5a6e; --dim: #9898b0;
+      --blue: #2563eb; --bluebg: rgba(37,99,235,0.08);
+      --green: #059669; --greenbg: rgba(5,150,105,0.08);
+      --teal: #0d9488;
+      --red: #dc2626; --redbg: rgba(220,38,38,0.08);
+      --amber: #d97706; --r: 10px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+    body { background: var(--bg); color: var(--ink); font-family: "Satoshi", ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+
+    header { border-bottom: 1px solid var(--bd); padding: 14px 24px; background: var(--s1); }
+    .h1 { font-size: 1rem; font-weight: 900; letter-spacing: -0.02em; }
+    .h2 { font-size: 0.72rem; color: var(--mut); margin-top: 3px; }
+
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 20px 24px 60px; }
+
+    /* shared spend */
+    .shared { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 14px 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+    .shared-label { font-size: 0.78rem; font-weight: 700; color: var(--ink); white-space: nowrap; }
+    .shared-note { font-size: 0.65rem; color: var(--mut); margin-top: 2px; }
+
+    /* two-column inputs */
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+    @media (max-width: 700px) { .cols { grid-template-columns: 1fr; } }
+
+    .panel { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 16px 18px; }
+    .panel.gaply { border-top: 3px solid var(--green); }
+    .panel.pps   { border-top: 3px solid var(--blue); }
+    .panel-title { font-size: 0.72rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px; }
+    .panel.gaply .panel-title { color: var(--green); }
+    .panel.pps   .panel-title { color: var(--blue); }
+
+    .ctrl { margin-bottom: 11px; }
+    .ctrl-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+    .lbl { font-size: 0.73rem; color: var(--ink); }
+    .vwrap { display: flex; align-items: center; gap: 1px; }
+    .sym { font-size: 0.68rem; color: var(--mut); font-weight: 700; }
+    .num { background: none; border: none; outline: none; font-family: inherit; font-size: 0.78rem; font-weight: 800; color: var(--ink); width: 50px; text-align: right; padding: 0; }
+    .num::-webkit-outer-spin-button, .num::-webkit-inner-spin-button { -webkit-appearance: none; }
+    .num[type=number] { -moz-appearance: textfield; }
+    input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 3px; background: var(--bd); border-radius: 2px; outline: none; cursor: pointer; }
+    input[type=range].g::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: var(--green); border-radius: 50%; box-shadow: 0 0 0 3px var(--greenbg); }
+    input[type=range].b::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: var(--blue); border-radius: 50%; box-shadow: 0 0 0 3px var(--bluebg); }
+    input[type=range].s::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: var(--mut); border-radius: 50%; }
+    .hint { font-size: 0.62rem; color: var(--dim); margin-top: 3px; line-height: 1.45; }
+
+    /* insight banner */
+    .insight { border-radius: var(--r); padding: 12px 16px; font-size: 0.8rem; font-weight: 600; line-height: 1.6; margin-bottom: 16px; border: 1px solid; }
+    .insight.green { background: var(--greenbg); border-color: rgba(5,150,105,0.2); color: #065f46; }
+    .insight.blue  { background: var(--bluebg);  border-color: rgba(37,99,235,0.2);  color: #1e3a8a; }
+    .insight.split { background: #fefce8; border-color: rgba(217,119,6,0.2); color: #78350f; }
+
+    /* comparison cards */
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+    @media (max-width: 700px) { .cards { grid-template-columns: 1fr 1fr; } }
+    .card { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 13px 14px; }
+    .card-label { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.09em; color: var(--dim); margin-bottom: 6px; line-height: 1.4; }
+    .card-g { font-size: 1.05rem; font-weight: 900; letter-spacing: -0.03em; color: var(--green); }
+    .card-b { font-size: 1.05rem; font-weight: 900; letter-spacing: -0.03em; color: var(--blue); }
+    .card-sub { font-size: 0.6rem; color: var(--mut); margin-top: 3px; }
+
+    /* chart */
+    .chartbox { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 14px 16px 10px; margin-bottom: 16px; }
+    .chart-title { font-size: 0.65rem; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
+    .chart-sub { font-size: 0.62rem; color: var(--mut); margin-bottom: 8px; line-height: 1.4; }
+    .cleg { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+    .cleg-i { display: flex; align-items: center; gap: 5px; font-size: 0.62rem; color: var(--mut); }
+    .cleg-sw { width: 28px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+    svg.chart { width: 100%; display: block; overflow: visible; }
+
+    /* table */
+    .tblbox { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); overflow: auto; margin-bottom: 14px; }
+    .tbl-hd { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.09em; color: var(--mut); padding: 10px 14px 8px; border-bottom: 1px solid var(--bd); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.74rem; min-width: 580px; }
+    th { font-size: 0.56rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); text-align: right; padding: 7px 12px; border-bottom: 1px solid var(--bd); white-space: nowrap; }
+    th:first-child { text-align: left; }
+    td { text-align: right; padding: 7px 12px; border-bottom: 1px solid rgba(221,221,232,0.5); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    td:first-child { text-align: left; color: var(--mut); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--s2); }
+    .g { color: var(--green); font-weight: 700; }
+    .bl { color: var(--blue); font-weight: 700; }
+    .r { color: var(--red); }
+    .dim { color: var(--dim); }
+
+    /* residual box */
+    .residual { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 16px 18px; margin-bottom: 14px; }
+    .res-title { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.09em; color: var(--dim); margin-bottom: 10px; }
+    .res-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .res-item { }
+    .res-label { font-size: 0.65rem; color: var(--mut); margin-bottom: 3px; }
+    .res-val { font-size: 1.1rem; font-weight: 900; letter-spacing: -0.03em; }
+    .res-sub { font-size: 0.6rem; color: var(--dim); margin-top: 2px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="h1">Gaply vs SwitchLeads — which lane wins?</div>
+  <div class="h2">Same ad spend into both models. Gaply compounds. SwitchLeads pays per start — no recurring base.</div>
+</header>
+
+<div class="wrap">
+
+  <!-- Reality check panel -->
+  <div style="background:#fef2f2;border:1px solid rgba(220,38,38,0.2);border-radius:var(--r);padding:14px 18px;margin-bottom:16px;">
+    <div style="font-size:0.6rem;font-weight:900;text-transform:uppercase;letter-spacing:0.1em;color:var(--red);margin-bottom:10px;">Actual position — SwitchLeads to date (from live DB, June 2026)</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+      <div><div style="font-size:0.58rem;color:var(--mut)">Qualified leads sent</div><div style="font-size:1rem;font-weight:900;color:var(--ink)">373</div><div style="font-size:0.58rem;color:var(--dim)">since Apr 18</div></div>
+      <div><div style="font-size:0.58rem;color:var(--mut)">Confirmed enrolled</div><div style="font-size:1rem;font-weight:900;color:var(--ink)">24</div><div style="font-size:0.58rem;color:var(--dim)">EMS 17 + WYK 4 + Demo 3</div></div>
+      <div><div style="font-size:0.58rem;color:var(--mut)">Actual conversion</div><div style="font-size:1rem;font-weight:900;color:var(--red)">6.4%</div><div style="font-size:0.58rem;color:var(--dim)">EMS alone: 6.3%</div></div>
+      <div><div style="font-size:0.58rem;color:var(--mut)">Real CPL</div><div style="font-size:1rem;font-weight:900;color:var(--red)">~£22</div><div style="font-size:0.58rem;color:var(--dim)">est. ~£8k spend / 373 leads</div></div>
+      <div><div style="font-size:0.58rem;color:var(--mut)">Net position</div><div style="font-size:1rem;font-weight:900;color:var(--red)">-£7,000</div><div style="font-size:0.58rem;color:var(--dim)">~£1,200 rev, ~£8,200 spend</div></div>
+    </div>
+    <div style="font-size:0.65rem;color:#7f1d1d;line-height:1.6;border-top:1px solid rgba(220,38,38,0.15);padding-top:8px;">
+      <strong>EMS bottleneck:</strong> 103 of 271 leads marked "cannot_reach" — EMS not contacting them. 98 marked lost. Only 17 confirmed enrolled. To break even at £22 CPL + £150 fee, conversion needs to hit 14.7%. Currently at 6.3%.
+      <span style="margin-left:12px;color:#92400e;background:#fef3c7;padding:2px 7px;border-radius:4px;font-size:0.62rem;">Riverside pipeline: ~4 employer leads in progress at £400/signed — not yet revenue but worth ~£1,600 when they land.</span>
+    </div>
+  </div>
+
+  <!-- Shared spend -->
+  <div class="shared">
+    <div>
+      <div class="shared-label">Shared: monthly ad spend</div>
+      <div class="shared-note">Phase 1 (testing) then phase 2 (scaled). Same for both models.</div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+      <div class="ctrl" style="margin:0;min-width:160px">
+        <div class="ctrl-top"><span class="lbl">Phase 1 spend</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-sp1" value="150" min="0" max="2000" step="50"><span class="sym">/mo</span></div></div>
+        <input type="range" id="s-sp1" class="s" min="0" max="2000" step="50" value="150">
+      </div>
+      <div class="ctrl" style="margin:0;min-width:160px">
+        <div class="ctrl-top"><span class="lbl">Phase 2 spend</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-sp2" value="4500" min="0" max="10000" step="100"><span class="sym">/mo</span></div></div>
+        <input type="range" id="s-sp2" class="s" min="0" max="10000" step="100" value="4500">
+      </div>
+      <div class="ctrl" style="margin:0;min-width:120px">
+        <div class="ctrl-top"><span class="lbl">Scale from month</span><div class="vwrap"><input class="num" type="number" id="v-scale" value="4" min="1" max="12" step="1"></div></div>
+        <input type="range" id="s-scale" class="s" min="1" max="12" step="1" value="4">
+      </div>
+    </div>
+  </div>
+
+  <!-- Two input panels -->
+  <div class="cols">
+
+    <div class="panel gaply">
+      <div class="panel-title">Gaply — subscription model</div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">Cost per click (CPC)</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-cpc" value="0.80" min="0.05" max="5" step="0.05"></div></div>
+        <input type="range" id="s-cpc" class="g" min="0.05" max="5" step="0.05" value="0.80">
+      </div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">% of clicks who buy the report</span><div class="vwrap"><input class="num" type="number" id="v-conv" value="4" min="0.1" max="30" step="0.1"><span class="sym">%</span></div></div>
+        <input type="range" id="s-conv" class="g" min="0.1" max="30" step="0.1" value="4">
+      </div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">% of buyers who subscribe</span><div class="vwrap"><input class="num" type="number" id="v-upsell" value="35" min="1" max="80" step="1"><span class="sym">%</span></div></div>
+        <input type="range" id="s-upsell" class="g" min="1" max="80" step="1" value="35">
+      </div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">Blended subscription ARPU</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-arpu" value="22" min="1" max="100" step="1"><span class="sym">/mo</span></div></div>
+        <input type="range" id="s-arpu" class="g" min="1" max="100" step="1" value="22">
+        <div class="hint">Weighted average of Radar (£19) and Autopilot (£49) mix. Default = mostly Radar.</div>
+      </div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">Monthly churn</span><div class="vwrap"><input class="num" type="number" id="v-churn" value="6" min="1" max="30" step="0.5"><span class="sym">%</span></div></div>
+        <input type="range" id="s-churn" class="g" min="1" max="30" step="0.5" value="6">
+      </div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">Report one-time price</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-rpt" value="15" min="1" max="100" step="1"></div></div>
+        <input type="range" id="s-rpt" class="g" min="1" max="100" step="1" value="15">
+      </div>
+    </div>
+
+    <div class="panel pps">
+      <div class="panel-title">SwitchLeads — pay per start</div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">Cost per learner lead (CPL)</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-cpl" value="22" min="1" max="100" step="1"></div></div>
+        <input type="range" id="s-cpl" class="b" min="1" max="100" step="1" value="22">
+        <div class="hint">Live data: ~£22 (~£8k spend / 373 qualified leads). Industry quote of £10 has not matched reality.</div>
+      </div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">Lead to enrolment rate</span><div class="vwrap"><input class="num" type="number" id="v-lte" value="7" min="1" max="60" step="1"><span class="sym">%</span></div></div>
+        <input type="range" id="s-lte" class="b" min="1" max="60" step="1" value="7">
+        <div class="hint">Live data: 6.4% overall (EMS 6.3%). Breakeven at this CPL requires 14.7% — slide this to see what it takes.</div>
+      </div>
+
+      <div class="ctrl">
+        <div class="ctrl-top"><span class="lbl">Fee per enrolment</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-fee" value="150" min="50" max="500" step="10"></div></div>
+        <input type="range" id="s-fee" class="b" min="50" max="500" step="10" value="150">
+        <div class="hint">£150 for funded enrolments. 15% of course fee (min £75, max £150) for self-funded.</div>
+      </div>
+
+      <div style="background:var(--bluebg);border:1px solid rgba(37,99,235,0.15);border-radius:7px;padding:10px 12px;margin-top:6px">
+        <div style="font-size:0.62rem;color:#1e3a8a;font-weight:700;margin-bottom:4px;">How PPS works</div>
+        <div style="font-size:0.62rem;color:#1e40af;line-height:1.6;">Revenue each month = leads generated × enrolment rate × fee. No compounding — the same spend produces the same revenue every month. Stop spending, revenue stops.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Insight banner -->
+  <div class="insight" id="insight"></div>
+
+  <!-- 4 comparison cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Gaply profit — month 12</div>
+      <div class="card-g" id="c-g-profit">—</div>
+      <div class="card-sub" id="c-g-profit-sub">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">PPS profit — month 12</div>
+      <div class="card-b" id="c-p-profit">—</div>
+      <div class="card-sub" id="c-p-profit-sub">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Gaply net — full year 1</div>
+      <div class="card-g" id="c-g-net">—</div>
+      <div class="card-sub">total in minus total out</div>
+    </div>
+    <div class="card">
+      <div class="card-label">PPS net — full year 1</div>
+      <div class="card-b" id="c-p-net">—</div>
+      <div class="card-sub">total in minus total out</div>
+    </div>
+  </div>
+
+  <!-- Chart: monthly profit both models -->
+  <div class="chartbox">
+    <div class="chart-title">Monthly profit — Gaply vs SwitchLeads</div>
+    <div class="chart-sub">Green = Gaply monthly profit (grows as subscribers compound). Blue = SwitchLeads monthly profit (flat — same spend, same return every month). The gap between them shows where compounding kicks in.</div>
+    <div class="cleg">
+      <div class="cleg-i"><div class="cleg-sw" style="background:var(--green)"></div>Gaply profit</div>
+      <div class="cleg-i"><div class="cleg-sw" style="background:var(--blue)"></div>SwitchLeads profit</div>
+    </div>
+    <svg class="chart" id="chart" viewBox="0 0 800 220" height="220" preserveAspectRatio="none"></svg>
+  </div>
+
+  <!-- Month by month table -->
+  <div class="tblbox">
+    <div class="tbl-hd">Month by month comparison</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Month</th>
+          <th>Gaply revenue</th><th>Gaply costs</th><th>Gaply profit</th><th>Gaply subs</th>
+          <th style="border-left:2px solid var(--bd)">PPS revenue</th><th>PPS costs</th><th>PPS profit</th>
+          <th style="border-left:2px solid var(--bd)">Difference</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Residual value section -->
+  <div class="residual">
+    <div class="res-title">If you stop all ad spend after month 12</div>
+    <div class="res-grid">
+      <div class="res-item">
+        <div class="res-label">Gaply — what your subscriber base still earns</div>
+        <div class="res-val g" id="res-g-m1">—</div>
+        <div class="res-sub" id="res-g-sub">Even with no new ads, active subscribers keep paying. The base decays at churn rate but doesn't stop.</div>
+        <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div><div style="font-size:0.58rem;color:var(--dim)">Month 13</div><div style="font-weight:800;color:var(--green);font-size:0.85rem" id="res-g-13">—</div></div>
+          <div><div style="font-size:0.58rem;color:var(--dim)">Month 18</div><div style="font-weight:800;color:var(--green);font-size:0.85rem" id="res-g-18">—</div></div>
+          <div><div style="font-size:0.58rem;color:var(--dim)">Month 24</div><div style="font-weight:800;color:var(--green);font-size:0.85rem" id="res-g-24">—</div></div>
+        </div>
+      </div>
+      <div class="res-item">
+        <div class="res-label">SwitchLeads — what happens when ads stop</div>
+        <div class="res-val" style="color:var(--red)">£0</div>
+        <div class="res-sub">No subscribers. No base. Revenue stops the same month ad spend does. Every month requires the same acquisition spend to maintain income.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  var IDS_SHARED = ['sp1','sp2','scale'];
+  var IDS_G = ['cpc','conv','upsell','arpu','churn','rpt'];
+  var IDS_P = ['cpl','lte','fee'];
+  var ALL_IDS = IDS_SHARED.concat(IDS_G).concat(IDS_P);
+
+  ALL_IDS.forEach(function(id) {
+    var sl = document.getElementById('s-' + id);
+    var nu = document.getElementById('v-' + id);
+    if (!sl || !nu) return;
+    sl.addEventListener('input', function() { nu.value = sl.value; go(); });
+    nu.addEventListener('input', function() { sl.value = nu.value; go(); });
+  });
+
+  function gv(id) { return parseFloat(document.getElementById('v-' + id).value) || 0; }
+
+  function money(n, dec) {
+    if (n == null || isNaN(n)) return '—';
+    dec = (dec === undefined) ? 0 : dec;
+    var neg = n < 0;
+    var abs = Math.abs(n).toFixed(dec).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (neg ? '-£' : '£') + abs;
+  }
+
+  var HAIKU = 0.015;
+  var STRIPE = 0.025;
+
+  function calcGaply() {
+    var sp1 = gv('sp1'), sp2 = gv('sp2'), scaleAt = Math.round(gv('scale'));
+    var cpc = gv('cpc'), conv = gv('conv') / 100, upsell = gv('upsell') / 100;
+    var arpu = gv('arpu'), churn = gv('churn') / 100, rpt = gv('rpt');
+
+    var subs = 0, months = [];
+    for (var m = 1; m <= 12; m++) {
+      var spend = m < scaleAt ? sp1 : sp2;
+      var clicks = cpc > 0 ? spend / cpc : 0;
+      var buyers = clicks * conv;
+      var newSubs = buyers * upsell;
+      subs = subs * (1 - churn) + newSubs;
+      var mrr = subs * arpu;
+      var oneRev = buyers * rpt;
+      var totalIn = oneRev + mrr;
+      var stripe = (oneRev + mrr) * STRIPE;
+      var ai = clicks * HAIKU;
+      var totalOut = spend + stripe + ai;
+      months.push({ m: m, spend: spend, subs: subs, mrr: mrr, oneRev: oneRev, totalIn: totalIn, totalOut: totalOut, profit: totalIn - totalOut });
+    }
+    return { months: months, churn: churn, arpu: arpu };
+  }
+
+  function calcPPS() {
+    var sp1 = gv('sp1'), sp2 = gv('sp2'), scaleAt = Math.round(gv('scale'));
+    var cpl = gv('cpl'), lte = gv('lte') / 100, fee = gv('fee');
+    var months = [];
+    for (var m = 1; m <= 12; m++) {
+      var spend = m < scaleAt ? sp1 : sp2;
+      var leads = cpl > 0 ? spend / cpl : 0;
+      var enrolments = leads * lte;
+      var totalIn = enrolments * fee;
+      var totalOut = spend;
+      months.push({ m: m, spend: spend, leads: leads, enrolments: enrolments, totalIn: totalIn, totalOut: totalOut, profit: totalIn - totalOut });
+    }
+    return { months: months };
+  }
+
+  function go() {
+    var g = calcGaply();
+    var p = calcPPS();
+    var gm = g.months, pm = p.months;
+    var m12g = gm[11], m12p = pm[11];
+    var gNet = gm.reduce(function(a, r) { return a + r.profit; }, 0);
+    var pNet = pm.reduce(function(a, r) { return a + r.profit; }, 0);
+
+    // Residual: subs at month 12 decaying with no new acquisition
+    var subs12 = m12g.subs;
+    var arpu = gv('arpu'), churn = g.churn;
+    function resMRR(monthsOut) {
+      return subs12 * Math.pow(1 - churn, monthsOut) * arpu * 0.975;
+    }
+
+    // Insight
+    var ins = document.getElementById('insight');
+    var gWins = m12g.profit > m12p.profit;
+    var crossover = null;
+    for (var i = 0; i < 12; i++) {
+      if (gm[i].profit > pm[i].profit) { crossover = i + 1; break; }
+    }
+    if (gNet > pNet && gWins) {
+      ins.className = 'insight green';
+      ins.textContent = 'Gaply wins on both month 12 profit (' + money(m12g.profit) + ' vs ' + money(m12p.profit) + ') and total year 1 net. The compounding subscriber base is the advantage.';
+    } else if (pNet > gNet && !gWins) {
+      ins.className = 'insight blue';
+      ins.textContent = 'SwitchLeads wins this year on both metrics — higher month 12 profit (' + money(m12p.profit) + ' vs ' + money(m12g.profit) + ') and better total net. But it builds no subscriber base. Gaply\'s residual value after stopping ads is ' + money(resMRR(1), 0) + '/mo immediately — SwitchLeads is £0.';
+    } else {
+      ins.className = 'insight split';
+      var leader = gNet >= pNet ? 'Gaply' : 'SwitchLeads';
+      ins.textContent = 'Split result. ' + leader + ' wins on year 1 total net. ' + (gWins ? 'Gaply' : 'SwitchLeads') + ' has higher month 12 profit. The key asymmetry: Gaply builds a base worth ' + money(resMRR(1), 0) + '/mo after ads stop. SwitchLeads builds nothing.';
+    }
+
+    // Cards
+    document.getElementById('c-g-profit').textContent = money(m12g.profit);
+    document.getElementById('c-g-profit-sub').textContent = money(m12g.totalIn) + ' in, ' + money(m12g.totalOut) + ' out';
+    document.getElementById('c-p-profit').textContent = money(m12p.profit);
+    document.getElementById('c-p-profit-sub').textContent = money(m12p.totalIn) + ' in, ' + money(m12p.totalOut) + ' out';
+
+    var gnEl = document.getElementById('c-g-net');
+    gnEl.textContent = money(gNet);
+    gnEl.className = gNet >= 0 ? 'card-g' : 'card-g' + ' ' + 'r';
+
+    var pnEl = document.getElementById('c-p-net');
+    pnEl.textContent = money(pNet);
+    pnEl.className = pNet >= 0 ? 'card-b' : 'card-b';
+
+    // Residual
+    document.getElementById('res-g-m1').textContent = money(resMRR(1), 0) + '/mo';
+    document.getElementById('res-g-sub').textContent = Math.round(subs12) + ' subscribers still paying, decaying at ' + gv('churn') + '% monthly churn.';
+    document.getElementById('res-g-13').textContent = money(resMRR(1), 0);
+    document.getElementById('res-g-18').textContent = money(resMRR(6), 0);
+    document.getElementById('res-g-24').textContent = money(resMRR(12), 0);
+
+    renderChart(gm, pm);
+    renderTable(gm, pm);
+  }
+
+  function renderChart(gm, pm) {
+    var svg = document.getElementById('chart');
+    var W = 800, H = 220, PAD = { t:12, r:18, b:28, l:62 };
+    var pw = W - PAD.l - PAD.r, ph_h = H - PAD.t - PAD.b, n = gm.length;
+    var slotW = pw / n;
+
+    var allV = [];
+    gm.forEach(function(r) { allV.push(r.profit); });
+    pm.forEach(function(r) { allV.push(r.profit); });
+    allV.push(0);
+    var hi = Math.max.apply(null, allV);
+    var lo = Math.min.apply(null, allV);
+    var rng = hi - lo || 1;
+
+    function xc(i) { return PAD.l + i * slotW + slotW / 2; }
+    function yv(v)  { return PAD.t + ph_h - ((v - lo) / rng) * ph_h; }
+
+    var html = '';
+    var z0 = yv(0);
+    if (z0 >= PAD.t && z0 <= PAD.t + ph_h) {
+      html += '<line x1="'+PAD.l+'" y1="'+z0+'" x2="'+(PAD.l+pw)+'" y2="'+z0+'" stroke="#c8c8d8" stroke-width="1" stroke-dasharray="3,3"/>';
+    }
+    [0,0.25,0.5,0.75,1].forEach(function(t) {
+      var v = lo + rng * t, yy = yv(v);
+      var lbl = Math.abs(v) >= 1000 ? (v<0?'-£':'£')+(Math.abs(v)/1000).toFixed(1)+'k' : (v<0?'-£':'£')+Math.abs(v).toFixed(0);
+      html += '<text x="'+(PAD.l-5)+'" y="'+(yy+4)+'" text-anchor="end" font-size="9" fill="#9898b0" font-family="Satoshi,sans-serif">'+lbl+'</text>';
+    });
+
+    // PPS line (blue, dashed)
+    var pPath = 'M';
+    pm.forEach(function(r, i) {
+      pPath += (i===0?'':' L') + xc(i) + ',' + yv(r.profit);
+      html += '<text x="'+xc(i)+'" y="'+(PAD.t+ph_h+17)+'" text-anchor="middle" font-size="9" fill="#9898b0" font-family="Satoshi,sans-serif">M'+(i+1)+'</text>';
+    });
+    html += '<path d="'+pPath+'" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-dasharray="5,3" opacity="0.8"/>';
+
+    // Gaply line (green, solid)
+    var gPath = 'M';
+    gm.forEach(function(r, i) { gPath += (i===0?'':' L') + xc(i) + ',' + yv(r.profit); });
+    html += '<path d="'+gPath+'" fill="none" stroke="#059669" stroke-width="2.5" opacity="0.9"/>';
+
+    // dots
+    gm.forEach(function(r, i) { html += '<circle cx="'+xc(i)+'" cy="'+yv(r.profit)+'" r="3" fill="#059669"/>'; });
+    pm.forEach(function(r, i) { html += '<circle cx="'+xc(i)+'" cy="'+yv(r.profit)+'" r="3" fill="#2563eb" opacity="0.7"/>'; });
+
+    svg.innerHTML = html;
+  }
+
+  function renderTable(gm, pm) {
+    var html = '';
+    for (var i = 0; i < 12; i++) {
+      var g = gm[i], p = pm[i];
+      var diff = g.profit - p.profit;
+      html += '<tr>';
+      html += '<td>Month ' + (i+1) + '</td>';
+      html += '<td class="g">' + money(g.totalIn) + '</td>';
+      html += '<td class="r">' + money(g.totalOut) + '</td>';
+      html += '<td class="' + (g.profit >= 0 ? 'g' : 'r') + '">' + money(g.profit) + '</td>';
+      html += '<td class="dim">' + Math.round(g.subs) + ' subs</td>';
+      html += '<td class="bl" style="border-left:2px solid var(--bd)">' + money(p.totalIn) + '</td>';
+      html += '<td class="r">' + money(p.totalOut) + '</td>';
+      html += '<td class="' + (p.profit >= 0 ? 'bl' : 'r') + '">' + money(p.profit) + '</td>';
+      html += '<td class="' + (diff >= 0 ? 'g' : 'bl') + '" style="border-left:2px solid var(--bd)">' + (diff >= 0 ? 'Gaply +' : 'PPS +') + money(Math.abs(diff)) + '</td>';
+      html += '</tr>';
+    }
+    document.getElementById('tbody').innerHTML = html;
+  }
+
+  go();
+</script>
+</body>
+</html>

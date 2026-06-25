@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gaply — Income Model</title>
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f5f5fa; --s1: #ffffff; --s2: #ededf5; --bd: #dddde8; --bd2: #c8c8d8;
+      --ink: #18181f; --mut: #5a5a6e; --dim: #9898b0;
+      --blue: #2563eb; --bluebg: rgba(37,99,235,0.08);
+      --green: #059669; --greenbg: rgba(5,150,105,0.08);
+      --teal: #0d9488; --tealbg: rgba(13,148,136,0.08);
+      --red: #dc2626; --redbg: rgba(220,38,38,0.08);
+      --amber: #d97706; --r: 10px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+    body { background: var(--bg); color: var(--ink); font-family: "Satoshi", ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+
+    header { border-bottom: 1px solid var(--bd); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .h1 { font-size: 0.9rem; font-weight: 800; letter-spacing: -0.02em; }
+    .h2 { font-size: 0.67rem; color: var(--mut); margin-top: 2px; line-height: 1.5; }
+    .presets { display: flex; gap: 5px; flex-shrink: 0; }
+    .pre { font-family: inherit; font-size: 0.68rem; font-weight: 700; padding: 4px 11px; border-radius: 100px; border: 1px solid var(--bd); background: var(--s2); color: var(--mut); cursor: pointer; transition: all 0.1s; }
+    .pre.on { background: var(--bluebg); border-color: var(--blue); color: var(--blue); }
+    .pre:hover:not(.on) { color: var(--ink); border-color: var(--bd2); }
+    .prod { font-family: inherit; font-size: 0.68rem; font-weight: 700; padding: 4px 11px; border-radius: 6px; border: none; background: transparent; color: var(--mut); cursor: pointer; transition: all 0.1s; }
+    .prod.on { background: var(--s1); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .prod:hover:not(.on) { color: var(--ink); }
+
+    .wrap { display: grid; grid-template-columns: 270px 1fr; min-height: 0; }
+    @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; } }
+
+    aside { border-right: 1px solid var(--bd); padding: 14px 13px 40px; overflow-y: auto; }
+    .sec { font-size: 0.57rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dim); padding: 18px 0 7px; }
+    .sec:first-child { padding-top: 0; }
+    .sec-note { font-size: 0.6rem; color: var(--mut); font-weight: 500; text-transform: none; letter-spacing: 0; margin-top: 1px; line-height: 1.4; }
+    .ctrl { margin-bottom: 12px; }
+    .ctrl-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+    .lbl { font-size: 0.74rem; color: var(--ink); }
+    .vwrap { display: flex; align-items: center; gap: 1px; }
+    .sym { font-size: 0.68rem; color: var(--blue); font-weight: 800; }
+    .num { background: none; border: none; outline: none; font-family: inherit; font-size: 0.78rem; font-weight: 800; color: var(--blue); width: 46px; text-align: right; padding: 0; }
+    .num::-webkit-outer-spin-button, .num::-webkit-inner-spin-button { -webkit-appearance: none; }
+    .num[type=number] { -moz-appearance: textfield; }
+    input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 3px; background: var(--bd); border-radius: 2px; outline: none; cursor: pointer; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; background: var(--blue); border-radius: 50%; box-shadow: 0 0 0 3px var(--bluebg); }
+    input[type=range]::-moz-range-thumb { width: 12px; height: 12px; background: var(--blue); border: none; border-radius: 50%; }
+    .hint { font-size: 0.62rem; color: var(--dim); margin-top: 3px; line-height: 1.45; }
+
+    .outputs { background: var(--s2); border: 1px solid var(--bd); border-radius: 8px; padding: 10px 12px; margin-top: 6px; }
+    .out-title { font-size: 0.56rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); margin-bottom: 8px; }
+    .orow { display: flex; justify-content: space-between; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--bd); font-size: 0.72rem; }
+    .orow:last-child { border-bottom: none; }
+    .ol { color: var(--mut); }
+    .ov { font-weight: 800; color: var(--blue); }
+    .ov.ok { color: var(--green); } .ov.warn { color: var(--amber); } .ov.bad { color: var(--red); }
+
+    main { padding: 16px 18px 40px; overflow-x: auto; }
+
+    .story { border-radius: var(--r); padding: 11px 15px; font-size: 0.8rem; font-weight: 600; line-height: 1.6; margin-bottom: 14px; }
+    .story.good { background: var(--greenbg); border: 1px solid rgba(52,211,153,0.2); color: var(--green); }
+    .story.ok   { background: var(--bluebg);  border: 1px solid rgba(59,158,255,0.2); color: var(--blue); }
+    .story.bad  { background: var(--redbg);   border: 1px solid rgba(248,113,113,0.2); color: var(--red); }
+
+    /* 4-card flow */
+    .flow { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+    .fc { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 12px 14px 10px; }
+    .fc.one   { border-top: 2px solid var(--teal); }
+    .fc.sub   { border-top: 2px solid var(--green); }
+    .fc.out   { border-top: 2px solid var(--red); }
+    .fc.prof  { border-top: 2px solid var(--blue); }
+    .fc-label { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mut); margin-bottom: 5px; }
+    .fc-val   { font-size: 1.35rem; font-weight: 900; letter-spacing: -0.04em; line-height: 1; }
+    .fc-sub   { font-size: 0.61rem; color: var(--mut); margin-top: 5px; line-height: 1.4; }
+    .c-teal  { color: var(--teal); }
+    .c-green { color: var(--green); }
+    .c-red   { color: var(--red); }
+    .c-blue  { color: var(--blue); }
+    .c-amber { color: var(--amber); }
+
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 7px; margin-bottom: 14px; }
+    .stat { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 10px 12px 9px; }
+    .stat-l { font-size: 0.55rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.09em; color: var(--dim); margin-bottom: 4px; }
+    .stat-v { font-size: 1.05rem; font-weight: 900; letter-spacing: -0.03em; color: var(--blue); }
+    .stat-s { font-size: 0.59rem; color: var(--mut); margin-top: 2px; }
+
+    .chartbox { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 12px 14px 10px; margin-bottom: 14px; }
+    .chart-hd { font-size: 0.65rem; color: var(--mut); margin-bottom: 6px; line-height: 1.4; }
+    .cleg { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+    .cleg-i { display: flex; align-items: center; gap: 5px; font-size: 0.62rem; color: var(--mut); }
+    .cleg-sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+    svg.chart { width: 100%; display: block; overflow: visible; }
+
+    .tblbox { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); overflow: auto; margin-bottom: 12px; }
+    .tbl-hd { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.09em; color: var(--mut); padding: 9px 13px 7px; border-bottom: 1px solid var(--bd); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.74rem; min-width: 700px; }
+    th { font-size: 0.56rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); text-align: right; padding: 6px 11px; border-bottom: 1px solid var(--bd); white-space: nowrap; }
+    th:first-child { text-align: left; }
+    td { text-align: right; padding: 7px 11px; border-bottom: 1px solid rgba(39,39,47,0.5); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    td:first-child { text-align: left; color: var(--mut); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--s2); }
+    .pos { color: var(--green); font-weight: 700; }
+    .teal { color: var(--teal); font-weight: 700; }
+    .neg { color: var(--red); }
+    .scrow td { background: rgba(59,158,255,0.03); }
+    .bdg { display: inline-block; font-size: 0.53rem; font-weight: 800; text-transform: uppercase; background: var(--bluebg); color: var(--blue); padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; }
+
+    .plat { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 7px; padding: 10px; }
+    .pcrd { background: var(--s2); border: 1px solid var(--bd); border-radius: 7px; padding: 10px 12px; }
+    .pc-sp  { font-size: 0.58rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); margin-bottom: 5px; }
+    .pc-one { font-size: 0.78rem; font-weight: 700; color: var(--teal); }
+    .pc-mrr { font-size: 1rem; font-weight: 900; letter-spacing: -0.03em; color: var(--green); margin-top: 1px; }
+    .pc-lbl { font-size: 0.58rem; color: var(--mut); }
+    .pc-net { font-size: 0.7rem; margin-top: 4px; }
+    .pc-m   { font-size: 0.58rem; color: var(--dim); margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="h1" id="product-title">Gaply — Income Model</div>
+    <div class="h2" id="product-sub">Local business gap finder. One-time report + subscription upsell.</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <div style="display:flex;gap:4px;background:var(--s2);padding:3px;border-radius:8px;border:1px solid var(--bd)">
+      <button class="prod on" data-prod="gaply">Gaply — Test B (new starters)</button>
+      <button class="prod" data-prod="amistuck">Am I Stuck?</button>
+      <button class="prod" data-prod="testa">Test A — existing operators (hair &amp; beauty)</button>
+    </div>
+    <div class="presets" style="margin:0">
+      <button class="pre" data-p="conservative">Conservative</button>
+      <button class="pre on" data-p="mid">Mid</button>
+      <button class="pre" data-p="strong">Strong</button>
+    </div>
+  </div>
+</header>
+<div id="product-note" style="display:none;background:#fef3c7;border-bottom:1px solid rgba(217,119,6,0.2);padding:7px 20px;font-size:0.65rem;color:#92400e;font-weight:600;"></div>
+
+<div class="wrap">
+  <aside>
+
+    <div class="sec">Pricing</div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Full report — one-time price</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-rpt" value="15" min="1" max="100" step="1"></div></div>
+      <input type="range" id="s-rpt" min="1" max="100" step="1" value="15">
+      <div class="hint">Paid once to unlock the full Gaply report.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Radar — monthly</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-radar" value="19" min="1" max="100" step="1"><span class="sym">/mo</span></div></div>
+      <input type="range" id="s-radar" min="1" max="100" step="1" value="19">
+      <div class="hint">Ongoing monitoring. Upsold after report purchase.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Autopilot — monthly</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-auto" value="49" min="1" max="200" step="1"><span class="sym">/mo</span></div></div>
+      <input type="range" id="s-auto" min="1" max="200" step="1" value="49">
+      <div class="hint">Acts on the gaps — social, etc. Higher tier.</div>
+    </div>
+
+    <div class="sec">Ad performance — pull these to find what works</div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Monthly ad spend (phase 1)</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-sp1" value="150" min="0" max="5000" step="50"><span class="sym">/mo</span></div></div>
+      <input type="range" id="s-sp1" min="0" max="5000" step="50" value="150">
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Cost per click (CPC)</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-cpc" value="1.00" min="0.05" max="5" step="0.05"></div></div>
+      <input type="range" id="s-cpc" min="0.05" max="5" step="0.05" value="1.00">
+      <div class="hint">Business owners on Meta cost more than consumers. Expect £1.20-£1.60 cold, improving to £0.80-£1.10 with tighter creative. £0.70 is earnable but takes months of testing.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">% of clicks who buy the report</span><div class="vwrap"><input class="num" type="number" id="v-conv" value="3" min="0.1" max="30" step="0.1"><span class="sym">%</span></div></div>
+      <input type="range" id="s-conv" min="0.1" max="30" step="0.1" value="3">
+      <div class="hint">The free tool warms people up before the £15 ask, which helps a lot. Expect 1-2% cold, 3-4% once the funnel is tight. 5%+ is strong but real if the tool hook lands well.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">% of buyers who then subscribe</span><div class="vwrap"><input class="num" type="number" id="v-upsell" value="30" min="1" max="80" step="1"><span class="sym">%</span></div></div>
+      <input type="range" id="s-upsell" min="1" max="80" step="1" value="30">
+      <div class="hint">Of people who paid £15 for the report, how many take a subscription. Having already paid once pushes this well above cold traffic. 25-40% is realistic once the upsell page is good.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Of those subscribers — % choosing Autopilot</span><div class="vwrap"><input class="num" type="number" id="v-mix" value="20" min="0" max="80" step="5"><span class="sym">%</span></div></div>
+      <input type="range" id="s-mix" min="0" max="80" step="5" value="20">
+      <div class="hint">The rest go on Radar (£19/mo). Most start on Radar and upgrade later. Keep this low to start.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Scale to £1,500/mo from month</span><div class="vwrap"><input class="num" type="number" id="v-scale" value="4" min="1" max="12" step="1"></div></div>
+      <input type="range" id="s-scale" min="1" max="12" step="1" value="4">
+      <div class="hint">How many months of £150/mo testing before committing to £50/day. Depends how fast you nail the creative.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Phase 2 ad spend</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-sp2" value="1500" min="0" max="10000" step="50"><span class="sym">/mo</span></div></div>
+      <input type="range" id="s-sp2" min="0" max="10000" step="50" value="1500">
+    </div>
+
+    <div class="sec">Retention</div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Monthly subscription churn</span><div class="vwrap"><input class="num" type="number" id="v-churn" value="7" min="1" max="30" step="0.5"><span class="sym">%</span></div></div>
+      <input type="range" id="s-churn" min="1" max="30" step="0.5" value="7">
+      <div class="hint" id="churn-hint">Average subscriber stays 14 months</div>
+    </div>
+
+    <div class="sec">Fixed costs</div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">Fixed costs (tools, hosting etc)</span><div class="vwrap"><span class="sym">£</span><input class="num" type="number" id="v-host" value="0" min="0" max="500" step="5"><span class="sym">/mo</span></div></div>
+      <input type="range" id="s-host" min="0" max="500" step="5" value="0">
+      <div class="hint">Anthropic max plan, Brevo, Netlify, any other monthly tool costs. Add them all up here.</div>
+    </div>
+
+    <div class="outputs" style="margin-top:14px">
+      <div class="out-title">What that chain produces — phase 1</div>
+      <div class="orow"><span class="ol">1. Clicks / month</span><span class="ov" id="o-clicks">—</span></div>
+      <div class="orow"><span class="ol">2. Buy the report (× conv%)</span><span class="ov" id="o-buyers">—</span></div>
+      <div class="orow"><span class="ol">3. Then subscribe (× upsell%)</span><span class="ov" id="o-subsraw">—</span></div>
+      <div class="orow"><span class="ol">&nbsp;&nbsp;→ on Radar</span><span class="ov" id="o-radar">—</span></div>
+      <div class="orow"><span class="ol">&nbsp;&nbsp;→ on Autopilot</span><span class="ov" id="o-autopilot">—</span></div>
+      <div class="orow"><span class="ol">Cost per report sale (CAC)</span><span class="ov" id="o-cac">—</span></div>
+      <div class="orow"><span class="ol">Anthropic / month</span><span class="ov" id="o-ai">—</span></div>
+      <div class="orow"><span class="ol">Blended sub ARPU</span><span class="ov" id="o-arpu">—</span></div>
+      <div class="orow"><span class="ol">Subscriber LTV</span><span class="ov" id="o-ltv">—</span></div>
+      <div class="orow"><span class="ol">LTV : cost to acquire a subscriber</span><span class="ov" id="o-ratio">—</span></div>
+    </div>
+
+  </aside>
+
+  <main>
+
+    <div class="story" id="story"></div>
+
+    <!-- 4 cards at month 12 -->
+    <div class="flow">
+      <div class="fc one">
+        <div class="fc-label">Report sales — month 12</div>
+        <div class="fc-val c-teal" id="f-one">—</div>
+        <div class="fc-sub" id="f-one-sub">new buyers × £15 one-time</div>
+      </div>
+      <div class="fc sub">
+        <div class="fc-label">MRR — month 12</div>
+        <div class="fc-val c-green" id="f-mrr">—</div>
+        <div class="fc-sub" id="f-mrr-sub">your recurring subscription income</div>
+      </div>
+      <div class="fc out">
+        <div class="fc-label">All costs — month 12</div>
+        <div class="fc-val c-red" id="f-out">—</div>
+        <div class="fc-sub" id="f-out-sub" style="line-height:1.6">ads + AI + Stripe + fixed costs</div>
+      </div>
+      <div class="fc prof">
+        <div class="fc-label">Profit — month 12</div>
+        <div class="fc-val" id="f-profit">—</div>
+        <div class="fc-sub" id="f-profit-sub">report sales + MRR minus costs</div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="stat-l">Report buyers yr 1</div><div class="stat-v c-teal" id="st-buyers">—</div><div class="stat-s">total one-time purchases</div></div>
+      <div class="stat"><div class="stat-l">Subscribers month 12</div><div class="stat-v c-green" id="st-subs">—</div><div class="stat-s">active paying</div></div>
+      <div class="stat"><div class="stat-l">First profitable month</div><div class="stat-v" id="st-be">—</div><div class="stat-s">when monthly profit turns positive</div></div>
+      <div class="stat"><div class="stat-l">Total ad spend yr 1</div><div class="stat-v" id="st-ads">—</div><div class="stat-s">into ads</div></div>
+      <div class="stat"><div class="stat-l">Total revenue yr 1</div><div class="stat-v" id="st-rev">—</div><div class="stat-s">report sales + subscriptions</div></div>
+      <div class="stat"><div class="stat-l">Net yr 1</div><div class="stat-v" id="st-net">—</div><div class="stat-s">revenue minus all costs</div></div>
+    </div>
+
+    <div class="chartbox">
+      <div class="chart-hd">Teal = report sales (steady, driven by ad clicks). Green = subscription MRR (grows as the subscriber base compounds). Red = all costs. Blue line = your running bank position.</div>
+      <div class="cleg">
+        <div class="cleg-i"><div class="cleg-sw" style="background:var(--teal);opacity:0.75"></div>Report sales</div>
+        <div class="cleg-i"><div class="cleg-sw" style="background:var(--green);opacity:0.7"></div>Subscription MRR</div>
+        <div class="cleg-i"><div class="cleg-sw" style="background:var(--red);opacity:0.6"></div>All costs</div>
+        <div class="cleg-i"><div class="cleg-sw" style="background:var(--blue);opacity:0.8;border-radius:50%"></div>Running bank position</div>
+      </div>
+      <svg class="chart" id="chart" viewBox="0 0 800 220" height="220" preserveAspectRatio="none"></svg>
+    </div>
+
+    <div class="tblbox">
+      <div class="tbl-hd">Month by month — Profit = report sales + MRR minus all costs</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Month</th><th>Buyers</th><th>Subs</th><th>Report sales</th><th>MRR</th><th>Total in</th><th>Ad spend</th><th>AI cost</th><th>Stripe</th><th>Fixed costs</th><th>Profit</th><th>Running</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="tblbox">
+      <div class="tbl-hd">MRR ceiling at different ad budgets — your current CPC and conversion rates held constant</div>
+      <div class="plat" id="plat"></div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  // All three scenarios: £150/mo test phase → £1,500/mo (£50/day) once the ad is working.
+  // All three are viable businesses. The numbers below conservative = fix the funnel before scaling.
+  //
+  // Conservative: the minimum you need to make this worth running at £50/day.
+  //   CPC £1.00 (achievable for business owners on Meta with decent creative),
+  //   3% click→buy (the free tool warms people before the £15 ask — this is realistic),
+  //   30% upsell, 7% churn. Scale at month 4.
+  //   Month 12: solidly profitable, MRR compounding, real business lane.
+  //
+  // Mid: ads dialled in after a few months of creative testing.
+  //   CPC £0.80, 4% click→buy, 35% upsell, 6% churn. Scale at month 4.
+  //   Month 12: strong monthly profit, approaching £5k net/mo.
+  //
+  // Strong: creative well-optimised, tight audience, high retention.
+  //   CPC £0.65, 6% click→buy, 40% upsell, 5% churn. Scale at month 3.
+  //   Needs real iteration to get here, but none of these numbers are fantasy.
+  var PRODUCT_META = {
+    gaply:    {
+      title: 'Gaply — Test B (new starters)',
+      sub: 'Audience: people looking to set up a business and find their gap before launching. Broader pool, exploratory intent.',
+      note: null
+    },
+    amistuck: {
+      title: 'Am I Stuck? — Income Model',
+      sub: 'Career tool for mid-career professionals feeling stuck. One-time report + subscription upsell.',
+      note: 'Am I Stuck? is live at smoke-test stage. No real CPL data yet — these are estimates. Update when you have live ad data.'
+    },
+    testa: {
+      title: 'Gaply — Test A (existing operators, hair & beauty)',
+      sub: 'Audience: salon owners and beauty therapists already running a business, looking for competitive intel and expansion gaps.',
+      note: 'Test A has not launched yet — no CPL or conversion data. Key differences from Test B: higher purchase conversion expected (concrete active business need), lower churn (ongoing competitive monitoring use case), higher Autopilot mix. Treat as speculative until live.'
+    },
+  };
+
+  var ALL_PRESETS = {
+    gaply: {
+      // New starters: broader audience, exploratory intent, lower conversion, higher churn (solve-and-go).
+      conservative: { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:1.00, conv:3,   upsell:30, scale:4, sp2:1500, churn:7,  host:0 },
+      mid:          { rpt:15, radar:19, auto:49, mix:25, sp1:150, cpc:0.80, conv:4,   upsell:35, scale:4, sp2:1500, churn:6,  host:0 },
+      strong:       { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.65, conv:6,   upsell:40, scale:3, sp2:1500, churn:5,  host:0 },
+    },
+    amistuck: {
+      // Employed mid-career audience — competitive Meta demo, higher CPC.
+      // Higher churn: career anxiety resolves, people cancel.
+      conservative: { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:1.20, conv:2,   upsell:25, scale:4, sp2:1500, churn:10, host:0 },
+      mid:          { rpt:15, radar:19, auto:49, mix:25, sp1:150, cpc:0.90, conv:3.5, upsell:30, scale:4, sp2:1500, churn:8,  host:0 },
+      strong:       { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.70, conv:5,   upsell:35, scale:3, sp2:1500, churn:6,  host:0 },
+    },
+    testa: {
+      // Existing operators (hair & beauty): tight, well-defined Meta audience.
+      // Higher conversion than Test B (active business decision, immediate ROI).
+      // Lower churn (ongoing competitive monitoring need, not a one-off question).
+      // Higher Autopilot mix (monitoring is recurring).
+      // No live data — speculative until Test A launches.
+      conservative: { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.80, conv:4,   upsell:30, scale:4, sp2:1500, churn:6,  host:0 },
+      mid:          { rpt:15, radar:19, auto:49, mix:35, sp1:150, cpc:0.60, conv:5.5, upsell:35, scale:4, sp2:1500, churn:5,  host:0 },
+      strong:       { rpt:15, radar:19, auto:49, mix:40, sp1:150, cpc:0.45, conv:7,   upsell:40, scale:3, sp2:1500, churn:4,  host:0 },
+    },
+  };
+
+  var currentProduct = 'gaply';
+  var PRESETS = ALL_PRESETS[currentProduct];
+
+  document.querySelectorAll('.prod').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.prod').forEach(function(b) { b.classList.remove('on'); });
+      btn.classList.add('on');
+      currentProduct = btn.dataset.prod;
+      PRESETS = ALL_PRESETS[currentProduct];
+      var meta = PRODUCT_META[currentProduct];
+      document.getElementById('product-title').textContent = meta.title;
+      document.getElementById('product-sub').textContent = meta.sub;
+      var noteEl = document.getElementById('product-note');
+      if (meta.note) { noteEl.textContent = meta.note; noteEl.style.display = 'block'; }
+      else { noteEl.style.display = 'none'; }
+      // Load mid preset for the new product
+      var p = PRESETS['mid'];
+      document.querySelectorAll('.pre').forEach(function(b) { b.classList.remove('on'); });
+      document.querySelector('.pre[data-p="mid"]').classList.add('on');
+      Object.keys(p).forEach(function(id) {
+        var v = document.getElementById('v-' + id);
+        var s = document.getElementById('s-' + id);
+        if (v) v.value = p[id];
+        if (s) s.value = p[id];
+      });
+      go();
+    });
+  });
+
+  var IDS = ['rpt','radar','auto','mix','sp1','cpc','conv','upsell','scale','sp2','churn','host'];
+
+  IDS.forEach(function(id) {
+    var sl = document.getElementById('s-' + id);
+    var nu = document.getElementById('v-' + id);
+    if (!sl || !nu) return;
+    sl.addEventListener('input', function() { nu.value = sl.value; go(); });
+    nu.addEventListener('input', function() { sl.value = nu.value; go(); });
+  });
+
+  document.querySelectorAll('.pre').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.pre').forEach(function(b) { b.classList.remove('on'); });
+      btn.classList.add('on');
+      var p = PRESETS[btn.dataset.p];
+      Object.keys(p).forEach(function(id) {
+        var v = document.getElementById('v-' + id);
+        var s = document.getElementById('s-' + id);
+        if (v) v.value = p[id];
+        if (s) s.value = p[id];
+      });
+      go();
+    });
+  });
+
+  function gv(id) { return parseFloat(document.getElementById('v-' + id).value) || 0; }
+
+  function money(n, dec) {
+    if (n == null || isNaN(n)) return '—';
+    dec = (dec === undefined) ? 0 : dec;
+    var neg = n < 0;
+    var abs = Math.abs(n).toFixed(dec).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (neg ? '-£' : '£') + abs;
+  }
+  function nn(n, dec) {
+    if (n == null || isNaN(n)) return '—';
+    dec = (dec === undefined) ? 1 : dec;
+    return (+n).toFixed(dec).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  var HAIKU = 0.015; // £ per AI run
+
+  function phCalc(spend, cpc, conv, upsell) {
+    var clicks  = cpc > 0 ? spend / cpc : 0;
+    var buyers  = clicks * conv;
+    var newSubs = buyers * upsell;
+    var ai      = clicks * HAIKU;
+    return { clicks: clicks, buyers: buyers, newSubs: newSubs, ai: ai };
+  }
+
+  function calc() {
+    var rpt     = gv('rpt');
+    var radar   = gv('radar');
+    var aut     = gv('auto');
+    var mix     = gv('mix') / 100;
+    var sp1     = gv('sp1');
+    var cpc     = gv('cpc');
+    var conv    = gv('conv') / 100;    // click → report buyer
+    var upsell  = gv('upsell') / 100; // buyer → subscriber
+    var scaleAt = Math.round(gv('scale'));
+    var sp2     = gv('sp2');
+    var churn   = gv('churn') / 100;
+    var host    = gv('host');
+
+    var arpu    = radar * (1 - mix) + aut * mix;
+    var ltv     = churn > 0 ? arpu / churn : 0;
+    var avgRet  = churn > 0 ? 1 / churn : 0;
+
+    // Cost to acquire a report buyer; cost to acquire a subscriber = cac / upsell_rate
+    var cac     = conv > 0 ? cpc / conv : 0;
+    var cacSub  = (conv > 0 && upsell > 0) ? cpc / (conv * upsell) : 0;
+    var ltvRatio = cacSub > 0 ? ltv / cacSub : 0;
+
+    var ph1 = phCalc(sp1, cpc, conv, upsell);
+    var ph2 = phCalc(sp2, cpc, conv, upsell);
+
+    var plat2   = churn > 0 ? ph2.newSubs / churn : 0;
+    var platMRR = plat2 * arpu;
+
+    var subs = 0, cumNet = 0, cumRev = 0, cumAds = 0, cumBuyers = 0;
+    var months = [];
+
+    for (var m = 1; m <= 12; m++) {
+      var ph      = m < scaleAt ? ph1 : ph2;
+      var spend   = m < scaleAt ? sp1 : sp2;
+
+      // one-time revenue this month
+      var oneRev  = ph.buyers * rpt * 0.975;   // minus Stripe 2.5%
+
+      // subscription base compounds
+      subs        = subs * (1 - churn) + ph.newSubs;
+      var mrr     = subs * arpu;
+      var subRev  = mrr * 0.975;               // minus Stripe 2.5%
+
+      var stripe  = (ph.buyers * rpt + mrr) * 0.025;
+      var ai      = ph.ai;
+      var totalIn  = ph.buyers * rpt + mrr;
+      var totalOut = spend + stripe + ai + host;
+      var profit   = totalIn - totalOut;
+
+      cumNet     += profit;
+      cumRev     += totalIn;
+      cumAds     += spend;
+      cumBuyers  += ph.buyers;
+
+      months.push({
+        m: m, buyers: ph.buyers, subs: subs,
+        oneRev: ph.buyers * rpt, mrr: mrr,
+        totalIn: totalIn, spend: spend, ai: ai, stripe: stripe, host: host,
+        totalOut: totalOut, profit: profit, cumNet: cumNet,
+        isScale: (m === scaleAt)
+      });
+    }
+
+    var beMonth = null;
+    for (var i = 0; i < months.length; i++) {
+      if (months[i].profit > 0) { beMonth = months[i].m; break; }
+    }
+
+    return {
+      arpu: arpu, ltv: ltv, avgRet: avgRet, cac: cac, cacSub: cacSub, ltvRatio: ltvRatio,
+      ph1: ph1, ph2: ph2, plat2: plat2, platMRR: platMRR,
+      months: months, beMonth: beMonth,
+      cumRev: cumRev, cumNet: cumNet, cumAds: cumAds, cumBuyers: cumBuyers,
+      churn: churn, host: host
+    };
+  }
+
+  function go() {
+    try {
+      var d = calc();
+      var m12 = d.months[11];
+
+      document.getElementById('churn-hint').textContent = 'Average subscriber stays ' + nn(d.avgRet, 0) + ' months';
+
+      var mix = gv('mix') / 100;
+      document.getElementById('o-clicks').textContent    = nn(d.ph1.clicks, 0) + '/mo';
+      document.getElementById('o-buyers').textContent    = nn(d.ph1.buyers, 1) + '/mo';
+      document.getElementById('o-subsraw').textContent   = nn(d.ph1.newSubs, 2) + '/mo';
+      document.getElementById('o-radar').textContent     = nn(d.ph1.newSubs * (1 - mix), 2) + '/mo';
+      document.getElementById('o-autopilot').textContent = nn(d.ph1.newSubs * mix, 2) + '/mo';
+      document.getElementById('o-cac').textContent       = money(d.cac, 0);
+      document.getElementById('o-ai').textContent      = money(d.ph1.ai, 2) + '/mo';
+      document.getElementById('o-arpu').textContent    = money(d.arpu, 2) + '/mo';
+      document.getElementById('o-ltv').textContent     = money(d.ltv, 0);
+      var ratEl = document.getElementById('o-ratio');
+      ratEl.textContent = nn(d.ltvRatio, 1) + ':1';
+      ratEl.className   = 'ov ' + (d.ltvRatio >= 3 ? 'ok' : d.ltvRatio >= 1.5 ? 'warn' : 'bad');
+
+      // Story
+      var sEl = document.getElementById('story');
+      var m12totalIn = m12.oneRev + m12.mrr;
+      if (d.beMonth) {
+        sEl.className = 'story good';
+        sEl.textContent = 'Monthly profit turns positive in month ' + d.beMonth + '. By month 12 you have ' + nn(m12.subs, 0) + ' subscribers paying ' + money(m12.mrr, 0) + '/mo in MRR, plus ' + money(m12.oneRev, 0) + ' in new report sales every month. Total in: ' + money(m12totalIn, 0) + '. You keep ' + money(m12.profit, 0) + ' after all costs.';
+      } else if (m12.profit > -100) {
+        sEl.className = 'story ok';
+        sEl.textContent = 'Almost profitable by month 12 — just ' + money(Math.abs(m12.profit), 0) + ' short. Better CPC, higher conversion, or a slightly higher report price tips it positive.';
+      } else {
+        sEl.className = 'story bad';
+        sEl.textContent = 'Costs exceed revenue every month at these settings. Each report sale costs ' + money(d.cac, 0) + ' in ad spend but only brings in ' + money(gv('rpt'), 0) + ' one-time plus deferred subscription value. Improve conversion rate or lower CPC.';
+      }
+
+      // 4 cards
+      document.getElementById('f-one').textContent     = money(m12.oneRev, 0);
+      document.getElementById('f-mrr').textContent     = money(m12.mrr, 0);
+      document.getElementById('f-mrr-sub').textContent = nn(m12.subs, 0) + ' subs × ' + money(d.arpu, 2) + '/mo';
+      document.getElementById('f-out').textContent     = money(m12.totalOut, 0);
+      var hostLine = m12.host > 0 ? ' + ' + money(m12.host, 0) + ' fixed costs' : '';
+      document.getElementById('f-out-sub').textContent = money(m12.spend, 0) + ' ads + ' + money(m12.ai, 2) + ' AI + ' + money(m12.stripe, 0) + ' Stripe' + hostLine;
+      var pe = document.getElementById('f-profit');
+      pe.textContent = money(m12.profit, 0);
+      pe.className   = 'fc-val ' + (m12.profit >= 0 ? 'c-green' : 'c-red');
+
+      // Stats
+      document.getElementById('st-buyers').textContent = nn(d.cumBuyers, 0);
+      document.getElementById('st-subs').textContent   = nn(m12.subs, 0);
+      document.getElementById('st-be').textContent     = d.beMonth ? 'Month ' + d.beMonth : 'Not in year 1';
+      document.getElementById('st-ads').textContent    = money(d.cumAds, 0);
+      document.getElementById('st-rev').textContent    = money(d.cumRev, 0);
+      var netEl = document.getElementById('st-net');
+      netEl.textContent = money(d.cumNet, 0);
+      netEl.className   = 'stat-v ' + (d.cumNet >= 0 ? 'c-green' : 'c-red');
+
+      renderChart(d.months);
+      renderTable(d.months);
+      renderPlateau(d);
+    } catch(e) { console.error(e); }
+  }
+
+  function renderChart(months) {
+    var svg = document.getElementById('chart');
+    var W = 800, H = 220, PAD = { t:12, r:18, b:28, l:62 };
+    var pw = W - PAD.l - PAD.r, ph = H - PAD.t - PAD.b, n = months.length;
+    var slotW = pw / n, barW = slotW * 0.28;
+
+    var allV = [];
+    months.forEach(function(r) { allV.push(r.oneRev + r.mrr, r.totalOut, r.cumNet); });
+    var hi = Math.max.apply(null, allV.concat([10]));
+    var lo = Math.min.apply(null, allV.concat([0]));
+    var rng = hi - lo || 1;
+
+    function xc(i) { return PAD.l + i * slotW + slotW / 2; }
+    function yv(v)  { return PAD.t + ph - ((v - lo) / rng) * ph; }
+    function yh(v)  { return Math.abs(v / rng * ph); }
+
+    var html = '';
+    var z0 = yv(0);
+    if (z0 >= PAD.t && z0 <= PAD.t + ph) {
+      html += '<line x1="'+PAD.l+'" y1="'+z0+'" x2="'+(PAD.l+pw)+'" y2="'+z0+'" stroke="#c8c8d8" stroke-width="1"/>';
+    }
+    [0,0.25,0.5,0.75,1].forEach(function(t) {
+      var v = lo + rng * t, yy = yv(v);
+      var lbl = Math.abs(v) >= 1000 ? (v<0?'-£':'£')+(Math.abs(v)/1000).toFixed(1)+'k' : (v<0?'-£':'£')+Math.abs(v).toFixed(0);
+      html += '<text x="'+(PAD.l-5)+'" y="'+(yy+4)+'" text-anchor="end" font-size="9" fill="#9898b0" font-family="Satoshi,sans-serif">'+lbl+'</text>';
+      html += '<line x1="'+(PAD.l-2)+'" y1="'+yy+'" x2="'+PAD.l+'" y2="'+yy+'" stroke="#dddde8"/>';
+    });
+
+    var cumPath = 'M';
+    months.forEach(function(r, i) {
+      var cx = xc(i);
+      // report sales bar (teal)
+      var oh = yh(r.oneRev), oy = yv(Math.max(r.oneRev, 0));
+      html += '<rect x="'+(cx-barW*1.5-1)+'" y="'+oy+'" width="'+barW+'" height="'+oh+'" fill="#0d9488" opacity="0.65" rx="2"/>';
+      // MRR bar (green)
+      var mh = yh(r.mrr), my = yv(Math.max(r.mrr, 0));
+      html += '<rect x="'+(cx-barW*0.5)+'" y="'+my+'" width="'+barW+'" height="'+mh+'" fill="#059669" opacity="0.7" rx="2"/>';
+      // costs bar (red)
+      var ch = yh(r.totalOut), cy = yv(Math.max(r.totalOut, 0));
+      html += '<rect x="'+(cx+barW*0.5+1)+'" y="'+cy+'" width="'+barW+'" height="'+ch+'" fill="#dc2626" opacity="0.5" rx="2"/>';
+      // x label
+      html += '<text x="'+cx+'" y="'+(PAD.t+ph+17)+'" text-anchor="middle" font-size="9" fill="#9898b0" font-family="Satoshi,sans-serif">M'+r.m+'</text>';
+      cumPath += (i===0?'':' L')+cx+','+yv(r.cumNet);
+    });
+
+    html += '<path d="'+cumPath+'" fill="none" stroke="#3b9eff" stroke-width="2" stroke-linejoin="round" opacity="0.85"/>';
+    months.forEach(function(r, i) {
+      html += '<circle cx="'+xc(i)+'" cy="'+yv(r.cumNet)+'" r="3" fill="'+(r.cumNet>=0?'#059669':'#dc2626')+'"/>';
+    });
+
+    svg.innerHTML = html;
+  }
+
+  function renderTable(months) {
+    var html = '';
+    months.forEach(function(r) {
+      html += '<tr class="'+(r.isScale?'scrow':'')+'">';
+      html += '<td>Month '+r.m+(r.isScale?'<span class="bdg">scale</span>':'')+' </td>';
+      html += '<td>'+nn(r.buyers,1)+'</td>';
+      html += '<td>'+nn(r.subs,0)+'</td>';
+      html += '<td class="teal">'+money(r.oneRev,0)+'</td>';
+      html += '<td class="pos">'+money(r.mrr,0)+'</td>';
+      html += '<td class="pos">'+money(r.totalIn,0)+'</td>';
+      html += '<td class="neg">'+money(r.spend,0)+'</td>';
+      html += '<td class="neg">'+money(r.ai,2)+'</td>';
+      html += '<td class="neg">'+money(r.stripe,0)+'</td>';
+      html += '<td class="neg">'+(r.host > 0 ? money(r.host,0) : '<span style="color:var(--dim)">—</span>')+'</td>';
+      html += '<td class="'+(r.profit>=0?'pos':'neg')+'">'+money(r.profit,0)+'</td>';
+      html += '<td class="'+(r.cumNet>=0?'pos':'neg')+'">'+money(r.cumNet,0)+'</td>';
+      html += '</tr>';
+    });
+    document.getElementById('tbody').innerHTML = html;
+  }
+
+  function renderPlateau(d) {
+    var spends = [150,300,500,1000,1500,3000];
+    var cpc = gv('cpc'), conv = gv('conv')/100, upsell = gv('upsell')/100, host = gv('host'), rpt = gv('rpt');
+    var html = '';
+    spends.forEach(function(sp) {
+      var clicks  = cpc > 0 ? sp / cpc : 0;
+      var buyers  = clicks * conv;
+      var ns      = buyers * upsell;
+      var ai      = clicks * HAIKU;
+      var pl      = d.churn > 0 ? ns / d.churn : 0;
+      var mrr     = pl * d.arpu;
+      var oneRev  = buyers * rpt;
+      var totalIn = oneRev + mrr;
+      var net     = totalIn * 0.975 - sp - ai - host;
+      var mo      = d.churn > 0 ? Math.ceil(Math.log(0.2) / Math.log(1 - d.churn)) : 0;
+      html += '<div class="pcrd">';
+      html += '<div class="pc-sp">'+money(sp,0)+'/mo</div>';
+      html += '<div class="pc-one">'+money(oneRev,0)+'/mo report sales</div>';
+      html += '<div class="pc-mrr">'+money(mrr,0)+'/mo MRR</div>';
+      html += '<div class="pc-lbl">at plateau ('+nn(pl,0)+' subs)</div>';
+      html += '<div class="pc-net '+(net>0?'c-green':'c-red')+'">'+(net>0?money(net,0)+'/mo net profit':'not profitable at plateau')+'</div>';
+      html += '<div class="pc-m">~'+mo+' months to sub ceiling</div>';
+      html += '</div>';
+    });
+    document.getElementById('plat').innerHTML = html;
+  }
+
+  go();
+</script>
+</body>
+</html>
