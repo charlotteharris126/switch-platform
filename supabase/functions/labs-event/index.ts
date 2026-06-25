@@ -101,23 +101,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const runtime = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
       const fbclid = typeof attribution["fbclid"] === "string" ? attribution["fbclid"] : null;
 
-      // CAPI: Lead on signup, Subscribe on subscribe_click.
+      // CAPI: Purchase on signup (proxy for £17 payment), Subscribe on subscribe_click.
+      const capiEventName = event === "signup" ? "Purchase" : "Subscribe";
+      const clientIp =
+        req.headers.get("x-forwarded-for")?.split(",")[0].trim() ??
+        req.headers.get("cf-connecting-ip") ??
+        null;
       const capiTask = (async () => {
         const capi = await sendCapiLead({
           brand: "labs",
           pixelId: GAPLY_PIXEL_ID,
-          eventName: event === "signup" ? "Lead" : "Subscribe",
+          eventName: capiEventName,
           eventId: null, // labs events have no browser dedup key
           eventSourceUrl: referrer,
           email: event === "signup" ? email : null,
           fbclid,
+          fbc: typeof attribution["_fbc"] === "string" ? attribution["_fbc"] : null,
+          fbp: typeof attribution["_fbp"] === "string" ? attribution["_fbp"] : null,
+          ip: clientIp,
+          userAgent,
           externalId: String(row.id),
         });
         await logCapiSend(sql, {
           submissionId: null, // labs.events id, not a leads.submissions id
           brand: "labs",
           pixelId: GAPLY_PIXEL_ID,
-          eventName: event === "signup" ? "Lead" : "Subscribe",
+          eventName: capiEventName,
           eventId: null,
           result: capi,
         });

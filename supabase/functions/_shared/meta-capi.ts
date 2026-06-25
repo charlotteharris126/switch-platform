@@ -50,6 +50,9 @@ export interface CapiLeadInput {
   fbc?: string | null; // _fbc cookie value (already "fb.1.<ts>.<fbclid>")
   fbp?: string | null; // _fbp cookie value
   fbclid?: string | null; // used to rebuild fbc when the cookie is absent
+  // Network identifiers — sent RAW (never hashed), per Meta CAPI spec.
+  ip?: string | null; // client IP from x-forwarded-for / cf-connecting-ip
+  userAgent?: string | null; // client user-agent string
   // custom_data
   value?: number | null;
   currency?: string; // default GBP
@@ -154,6 +157,8 @@ export async function sendCapiLead(input: CapiLeadInput): Promise<CapiResult> {
   const fbc = deriveFbc(input.fbc, input.fbclid, tsMs);
   if (fbc) user_data.fbc = fbc;
   if (input.fbp) user_data.fbp = input.fbp;
+  if (input.ip) user_data.client_ip_address = input.ip;
+  if (input.userAgent) user_data.client_user_agent = input.userAgent;
 
   const custom_data: Record<string, unknown> = {};
   if (input.value != null) custom_data.value = input.value;
