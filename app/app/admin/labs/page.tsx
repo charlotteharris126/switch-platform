@@ -85,13 +85,13 @@ export default async function LabsPage() {
     supabase.rpc("admin_labs_recent_signups", { p_limit: 50 }),
     supabase.rpc("admin_labs_targeting", { p_tool: "gaply" }),
     supabase
+      .schema("labs")
       .from("events")
       .select("id, created_at, payload, attribution")
       .eq("tool", "gaply")
       .eq("event", "run")
       .order("created_at", { ascending: false })
-      .limit(20)
-      .schema("labs"),
+      .limit(20),
   ]);
 
   const rows = (funnel as FunnelRow[] | null) ?? [];
