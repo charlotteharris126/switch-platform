@@ -14,10 +14,12 @@ export const dynamic = "force-dynamic";
 interface FunnelRow {
   tool: string;
   views: number;
+  runs: number;
   unlock_intents: number;
   radar_subscribes: number;
   autopilot_subscribes: number;
   view_to_unlock_pct: number | null;
+  run_to_unlock_pct: number | null;
   unlock_to_radar_pct: number | null;
   unlock_to_autopilot_pct: number | null;
 }
@@ -87,7 +89,6 @@ export default async function LabsPage() {
       .select("id, created_at, payload, attribution")
       .eq("tool", "gaply")
       .eq("event", "run")
-      .not("payload->opportunities", "is", null)
       .order("created_at", { ascending: false })
       .limit(20)
       .schema("labs"),
@@ -138,10 +139,12 @@ export default async function LabsPage() {
             <TableRow>
               <TableHead>Tool</TableHead>
               <TableHead className="text-right">Views</TableHead>
+              <TableHead className="text-right">Runs</TableHead>
               <TableHead className="text-right">£17 clicks</TableHead>
               <TableHead className="text-right">Radar</TableHead>
               <TableHead className="text-right">Autopilot</TableHead>
               <TableHead className="text-right">View → £17</TableHead>
+              <TableHead className="text-right">Run → £17</TableHead>
               <TableHead className="text-right">£17 → Radar</TableHead>
               <TableHead className="text-right">£17 → Autopilot</TableHead>
             </TableRow>
@@ -153,6 +156,7 @@ export default async function LabsPage() {
                   {TOOL_LABEL[r.tool] ?? r.tool}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{r.views}</TableCell>
+                <TableCell className="text-right tabular-nums">{r.runs}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   {r.unlock_intents}
                 </TableCell>
@@ -164,6 +168,9 @@ export default async function LabsPage() {
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {pct(r.view_to_unlock_pct)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {pct(r.run_to_unlock_pct)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {pct(r.unlock_to_radar_pct)}
@@ -257,7 +264,7 @@ export default async function LabsPage() {
         </h2>
         {runsErr && <p className="text-sm text-red-600 mb-3">{runsErr.message}</p>}
         {runRows.length === 0 ? (
-          <p className="text-sm text-[#5a6a72]">No runs with stored output yet. Runs from after 25 June 2026 will appear here.</p>
+          <p className="text-sm text-[#5a6a72]">No runs found.</p>
         ) : (
           <div className="space-y-6">
             {runRows.map((run) => (
