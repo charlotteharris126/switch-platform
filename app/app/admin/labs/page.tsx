@@ -67,12 +67,14 @@ const TOOL_LABEL: Record<string, string> = {
 
 const CATEGORY_LABEL: Record<string, string> = {
   town: "Towns",
-  skill: "Skills",
   interest: "Interests",
+  skill: "Skills",
   budget: "Budget",
+  type: "Business type",
+  commitment: "Commitment",
 };
 
-const CATEGORY_ORDER = ["town", "skill", "interest", "budget"];
+const CATEGORY_ORDER = ["town", "interest", "skill", "budget", "type", "commitment"];
 
 export default async function LabsPage() {
   const supabase = createAdminClient();
