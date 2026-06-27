@@ -255,58 +255,79 @@ export default async function LabsPage() {
         <h2 className="mb-3 text-sm font-semibold text-[#11242e]">
           What the AI is returning (recent runs with stored output)
         </h2>
+        <p className="mb-3 text-xs text-[#5a6a72]">
+          Rows 7–9 highlighted in green — those are the free results shown to the user.
+          Top 6 are locked. Click a row to expand.
+        </p>
         {runsErr && <p className="text-sm text-red-600 mb-3">{runsErr.message}</p>}
         {runRows.length === 0 ? (
           <p className="text-sm text-[#5a6a72]">No runs found.</p>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-2">
             {runRows.map((run) => (
-              <div key={run.id} className="border border-[#dde3e7] rounded-lg p-4 bg-white">
-                <div className="flex items-start justify-between gap-4 mb-2">
-                  <div>
-                    <span className="font-semibold text-[#11242e] capitalize">{run.town ?? "Unknown town"}</span>
-                    <span className="text-xs text-[#5a6a72] ml-2">{fmtDate(run.created_at)}</span>
-                    {source(run.attribution) && (
-                      <span className="text-xs text-[#5a6a72] ml-2">· {source(run.attribution)}</span>
-                    )}
-                  </div>
-                </div>
-                {(run.interests?.length || run.skills?.length) && (
-                  <p className="text-xs text-[#5a6a72] mb-3">
-                    {run.interests?.join(", ")}
-                    {run.interests?.length && run.skills?.length ? " · " : ""}
-                    {run.skills?.join(", ")}
-                  </p>
-                )}
-                {run.summary && <p className="text-xs italic text-[#5a6a72] mb-3">{run.summary}</p>}
-                {run.opportunities && (
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-[#dde3e7]">
-                        <th className="text-left py-1 pr-3 font-semibold text-[#11242e] w-6">#</th>
-                        <th className="text-left py-1 pr-3 font-semibold text-[#11242e]">Business</th>
-                        <th className="text-right py-1 pr-3 font-semibold text-[#11242e] w-12">Score</th>
-                        <th className="text-left py-1 pr-3 font-semibold text-[#11242e] w-20">Competition</th>
-                        <th className="text-left py-1 font-semibold text-[#11242e] w-24">Potential</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {run.opportunities.map((opp, i) => (
-                        <tr key={i} className="border-b border-[#f0f0f0] last:border-0">
-                          <td className="py-1 pr-3 text-[#5a6a72]">{i + 1}</td>
-                          <td className="py-1 pr-3 text-[#11242e]">
-                            <div className="font-medium">{opp.title}</div>
-                            <div className="text-[#5a6a72] mt-0.5">{opp.why}</div>
-                          </td>
-                          <td className="py-1 pr-3 text-right tabular-nums font-medium">{opp.score}%</td>
-                          <td className="py-1 pr-3 text-[#5a6a72]">{opp.competition}</td>
-                          <td className="py-1 text-[#5a6a72]">{opp.potential}</td>
+              <details key={run.id} className="border border-[#dde3e7] rounded-lg bg-white group">
+                <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer list-none select-none">
+                  <span className="text-[#5a6a72] text-xs transition-transform group-open:rotate-90">▶</span>
+                  <span className="font-semibold text-[#11242e] capitalize">{run.town ?? "Unknown town"}</span>
+                  <span className="text-xs text-[#5a6a72]">{fmtDate(run.created_at)}</span>
+                  {source(run.attribution) && (
+                    <span className="text-xs text-[#5a6a72]">· {source(run.attribution)}</span>
+                  )}
+                  {(run.interests?.length || run.skills?.length) && (
+                    <span className="text-xs text-[#9aacb4] ml-auto truncate max-w-xs">
+                      {[...(run.interests ?? []), ...(run.skills ?? [])].slice(0, 4).join(", ")}
+                    </span>
+                  )}
+                </summary>
+                <div className="border-t border-[#dde3e7] px-4 pb-4 pt-3">
+                  {(run.interests?.length || run.skills?.length) && (
+                    <p className="text-xs text-[#5a6a72] mb-2">
+                      {run.interests?.join(", ")}
+                      {run.interests?.length && run.skills?.length ? " · " : ""}
+                      {run.skills?.join(", ")}
+                    </p>
+                  )}
+                  {run.summary && <p className="text-xs italic text-[#5a6a72] mb-3">{run.summary}</p>}
+                  {run.opportunities && (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-[#dde3e7]">
+                          <th className="text-left py-1 pr-3 font-semibold text-[#11242e] w-6">#</th>
+                          <th className="text-left py-1 pr-3 font-semibold text-[#11242e]">Business</th>
+                          <th className="text-right py-1 pr-3 font-semibold text-[#11242e] w-12">Score</th>
+                          <th className="text-left py-1 pr-3 font-semibold text-[#11242e] w-20">Competition</th>
+                          <th className="text-left py-1 pr-3 font-semibold text-[#11242e] w-24">Potential</th>
+                          <th className="w-10"></th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
+                      </thead>
+                      <tbody>
+                        {run.opportunities.map((opp, i) => {
+                          const isFree = i >= 6 && i < 9;
+                          return (
+                            <tr key={i} className={`border-b border-[#f0f0f0] last:border-0 ${isFree ? "bg-[#f0fdf4]" : ""}`}>
+                              <td className="py-1 pr-3 text-[#5a6a72]">{i + 1}</td>
+                              <td className="py-1 pr-3 text-[#11242e]">
+                                <div className="font-medium">{opp.title}</div>
+                                <div className="text-[#5a6a72] mt-0.5">{opp.why}</div>
+                              </td>
+                              <td className="py-1 pr-3 text-right tabular-nums font-medium">{opp.score}%</td>
+                              <td className="py-1 pr-3 text-[#5a6a72]">{opp.competition}</td>
+                              <td className="py-1 pr-3 text-[#5a6a72]">{opp.potential}</td>
+                              <td className="py-1 text-right">
+                                {isFree && (
+                                  <span className="text-[0.6rem] font-bold text-[#059669] bg-[#dcfce7] px-1.5 py-0.5 rounded">
+                                    free
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </details>
             ))}
           </div>
         )}
