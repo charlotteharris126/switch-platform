@@ -16,10 +16,12 @@ interface FunnelRow {
   views: number;
   runs: number;
   unlock_intents: number;
+  signups: number;
   radar_subscribes: number;
   autopilot_subscribes: number;
   view_to_unlock_pct: number | null;
   run_to_unlock_pct: number | null;
+  unlock_to_signup_pct: number | null;
   unlock_to_radar_pct: number | null;
   unlock_to_autopilot_pct: number | null;
 }
@@ -134,10 +136,12 @@ export default async function LabsPage() {
               <TableHead className="text-right">Views</TableHead>
               <TableHead className="text-right">Runs</TableHead>
               <TableHead className="text-right">£17 clicks</TableHead>
+              <TableHead className="text-right">Signups</TableHead>
               <TableHead className="text-right">Radar</TableHead>
               <TableHead className="text-right">Autopilot</TableHead>
               <TableHead className="text-right">View → £17</TableHead>
               <TableHead className="text-right">Run → £17</TableHead>
+              <TableHead className="text-right">£17 → Email</TableHead>
               <TableHead className="text-right">£17 → Radar</TableHead>
               <TableHead className="text-right">£17 → Autopilot</TableHead>
             </TableRow>
@@ -153,6 +157,9 @@ export default async function LabsPage() {
                 <TableCell className="text-right tabular-nums">
                   {r.unlock_intents}
                 </TableCell>
+                <TableCell className="text-right tabular-nums font-semibold text-[#059669]">
+                  {r.signups}
+                </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {r.radar_subscribes}
                 </TableCell>
@@ -164,6 +171,9 @@ export default async function LabsPage() {
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {pct(r.run_to_unlock_pct)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {pct(r.unlock_to_signup_pct)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {pct(r.unlock_to_radar_pct)}
