@@ -119,7 +119,7 @@ export default async function LabsPage() {
       <PageHeader
         eyebrow="Switchable Labs"
         title="Labs funnel"
-        subtitle="Gaply smoke-test funnel. Bot traffic excluded, sessions deduped. View = page load, £17 click = unlock button (no money taken yet)."
+        subtitle="Gaply smoke-test funnel, top to bottom: Views (landed) → Runs (saw results) → Price clicks (clicked the price button, a click not a sale) → Emails (left their email, the stand-in for a sale) → Radar/Autopilot (clicked a subscription). Bot traffic excluded, sessions deduped. No money taken yet."
       />
 
       {(funnelErr || signupErr || targetingErr) && (
@@ -137,15 +137,15 @@ export default async function LabsPage() {
               <TableHead>Tool</TableHead>
               <TableHead className="text-right">Views</TableHead>
               <TableHead className="text-right">Runs</TableHead>
-              <TableHead className="text-right">£17 clicks</TableHead>
-              <TableHead className="text-right">Signups</TableHead>
+              <TableHead className="text-right">Price clicks</TableHead>
+              <TableHead className="text-right">Emails</TableHead>
               <TableHead className="text-right">Radar</TableHead>
               <TableHead className="text-right">Autopilot</TableHead>
-              <TableHead className="text-right">View → £17</TableHead>
-              <TableHead className="text-right">Run → £17</TableHead>
-              <TableHead className="text-right">£17 → Email</TableHead>
-              <TableHead className="text-right">£17 → Radar</TableHead>
-              <TableHead className="text-right">£17 → Autopilot</TableHead>
+              <TableHead className="text-right">View → Run</TableHead>
+              <TableHead className="text-right">Run → price</TableHead>
+              <TableHead className="text-right">Price → email</TableHead>
+              <TableHead className="text-right">Price → Radar</TableHead>
+              <TableHead className="text-right">Price → Autopilot</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -169,7 +169,7 @@ export default async function LabsPage() {
                   {r.autopilot_subscribes}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {pct(r.view_to_unlock_pct)}
+                  {pct(r.views ? Math.round((r.runs / r.views) * 1000) / 10 : null)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {pct(r.run_to_unlock_pct)}
