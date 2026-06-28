@@ -26,6 +26,8 @@
     .pre { font-family: inherit; font-size: 0.68rem; font-weight: 700; padding: 4px 11px; border-radius: 100px; border: 1px solid var(--bd); background: var(--s2); color: var(--mut); cursor: pointer; transition: all 0.1s; }
     .pre.on { background: var(--bluebg); border-color: var(--blue); color: var(--blue); }
     .pre:hover:not(.on) { color: var(--ink); border-color: var(--bd2); }
+    .pre-live { border-color: var(--amber); color: var(--amber); }
+    .pre-live.on { background: rgba(217,119,6,0.1); border-color: var(--amber); color: var(--amber); }
     .prod { font-family: inherit; font-size: 0.68rem; font-weight: 700; padding: 4px 11px; border-radius: 6px; border: none; background: transparent; color: var(--mut); cursor: pointer; transition: all 0.1s; }
     .prod.on { background: var(--s1); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     .prod:hover:not(.on) { color: var(--ink); }
@@ -136,6 +138,7 @@
       <button class="pre" data-p="conservative">Conservative</button>
       <button class="pre on" data-p="mid">Mid</button>
       <button class="pre" data-p="strong">Strong</button>
+      <button class="pre pre-live" data-p="live" id="btn-live">Live Test B</button>
     </div>
   </div>
 </header>
@@ -355,6 +358,10 @@
       conservative: { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:1.00, runrate:30, conv:10, upsell:30, scale:4, sp2:1500, churn:7,  host:0 },
       mid:          { rpt:15, radar:19, auto:49, mix:25, sp1:150, cpc:0.80, runrate:40, conv:10, upsell:35, scale:4, sp2:1500, churn:6,  host:0 },
       strong:       { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.65, runrate:50, conv:12, upsell:40, scale:3, sp2:1500, churn:5,  host:0 },
+      // LIVE: observed Test B over 116 visits / 26 runs / 8 price-clicks / 1 email (24-27 Jun, Charlotte's tests removed).
+      // cpc ~£0.86 (≈£100/116), runrate 22% (26/116), conv 4% = the email-completion proxy (1/26); real buy unknown.
+      // upsell/churn have NO live data — left at conservative assumptions and flagged in the note.
+      live:         { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:0.86, runrate:22, conv:4,  upsell:30, scale:4, sp2:1500, churn:7,  host:0 },
     },
     amistuck: {
       // Employed mid-career audience — competitive Meta demo, higher CPC. Higher churn.
@@ -383,6 +390,7 @@
       btn.classList.add('on');
       currentProduct = btn.dataset.prod;
       PRESETS = ALL_PRESETS[currentProduct];
+      document.getElementById('btn-live').style.display = PRESETS['live'] ? '' : 'none';
       var meta = PRODUCT_META[currentProduct];
       document.getElementById('product-title').textContent = meta.title;
       document.getElementById('product-sub').textContent = meta.sub;
@@ -415,15 +423,25 @@
 
   document.querySelectorAll('.pre').forEach(function(btn) {
     btn.addEventListener('click', function() {
+      var p = PRESETS[btn.dataset.p];
+      if (!p) return; // no data for this preset on this product (e.g. Live on Am I Stuck / Test A)
       document.querySelectorAll('.pre').forEach(function(b) { b.classList.remove('on'); });
       btn.classList.add('on');
-      var p = PRESETS[btn.dataset.p];
       Object.keys(p).forEach(function(id) {
         var v = document.getElementById('v-' + id);
         var s = document.getElementById('s-' + id);
         if (v) v.value = p[id];
         if (s) s.value = p[id];
       });
+      var noteEl = document.getElementById('product-note');
+      if (btn.dataset.p === 'live') {
+        noteEl.textContent = 'Live Test B — observed over 116 visits (24-27 Jun, Charlotte’s own tests removed). Real: CPC ~£0.86, run-rate 22%, buy-rate 4% (email-completion proxy; actual paid is untested). Upsell and churn have NO live data and sit at assumptions. Land→buy lands ~0.9%, well under the 3% conservative line.';
+        noteEl.style.display = 'block';
+      } else if (PRODUCT_META[currentProduct].note) {
+        noteEl.textContent = PRODUCT_META[currentProduct].note; noteEl.style.display = 'block';
+      } else {
+        noteEl.style.display = 'none';
+      }
       go();
     });
   });
