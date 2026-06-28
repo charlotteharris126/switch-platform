@@ -178,9 +178,15 @@
     </div>
 
     <div class="ctrl">
-      <div class="ctrl-top"><span class="lbl">% of clicks who buy the report</span><div class="vwrap"><input class="num" type="number" id="v-conv" value="3" min="0.1" max="30" step="0.1"><span class="sym">%</span></div></div>
-      <input type="range" id="s-conv" min="0.1" max="30" step="0.1" value="3">
-      <div class="hint">The free tool warms people up before the £15 ask, which helps a lot. Expect 1-2% cold, 3-4% once the funnel is tight. 5%+ is strong but real if the tool hook lands well.</div>
+      <div class="ctrl-top"><span class="lbl">% of visitors who run the tool</span><div class="vwrap"><input class="num" type="number" id="v-runrate" value="40" min="1" max="100" step="1"><span class="sym">%</span></div></div>
+      <input type="range" id="s-runrate" min="1" max="100" step="1" value="40">
+      <div class="hint">Of people who land on the site, how many actually start the tool. This is the landing page's job. Live Test B is running ~22% — a weak hook. A tight landing gets 40-55%.</div>
+    </div>
+
+    <div class="ctrl">
+      <div class="ctrl-top"><span class="lbl">% of tool-runs that buy</span><div class="vwrap"><input class="num" type="number" id="v-conv" value="10" min="0.1" max="60" step="0.1"><span class="sym">%</span></div></div>
+      <input type="range" id="s-conv" min="0.1" max="60" step="0.1" value="10">
+      <div class="hint">Of people who run the tool and see their gaps, how many pay for the report. Live Test B: ~31% click the price button, far fewer would complete a real checkout. Expect 8-12% once the offer is tight.</div>
     </div>
 
     <div class="ctrl">
@@ -224,9 +230,10 @@
 
     <div class="outputs" style="margin-top:14px">
       <div class="out-title">What that chain produces — phase 1</div>
-      <div class="orow"><span class="ol">1. Clicks / month</span><span class="ov" id="o-clicks">—</span></div>
-      <div class="orow"><span class="ol">2. Buy the report (× conv%)</span><span class="ov" id="o-buyers">—</span></div>
-      <div class="orow"><span class="ol">3. Then subscribe (× upsell%)</span><span class="ov" id="o-subsraw">—</span></div>
+      <div class="orow"><span class="ol">1. Visitors (ad clicks) / month</span><span class="ov" id="o-clicks">—</span></div>
+      <div class="orow"><span class="ol">2. Run the tool (× run%)</span><span class="ov" id="o-runs">—</span></div>
+      <div class="orow"><span class="ol">3. Buy the report (× buy%)</span><span class="ov" id="o-buyers">—</span></div>
+      <div class="orow"><span class="ol">4. Then subscribe (× upsell%)</span><span class="ov" id="o-subsraw">—</span></div>
       <div class="orow"><span class="ol">&nbsp;&nbsp;→ on Radar</span><span class="ov" id="o-radar">—</span></div>
       <div class="orow"><span class="ol">&nbsp;&nbsp;→ on Autopilot</span><span class="ov" id="o-autopilot">—</span></div>
       <div class="orow"><span class="ol">Cost per report sale (CAC)</span><span class="ov" id="o-cac">—</span></div>
@@ -343,27 +350,27 @@
 
   var ALL_PRESETS = {
     gaply: {
-      // New starters: broader audience, exploratory intent, lower conversion, higher churn (solve-and-go).
-      conservative: { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:1.00, conv:3,   upsell:30, scale:4, sp2:1500, churn:7,  host:0 },
-      mid:          { rpt:15, radar:19, auto:49, mix:25, sp1:150, cpc:0.80, conv:4,   upsell:35, scale:4, sp2:1500, churn:6,  host:0 },
-      strong:       { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.65, conv:6,   upsell:40, scale:3, sp2:1500, churn:5,  host:0 },
+      // New starters: broader audience, exploratory intent. runrate = land→run, conv = run→buy.
+      // (land→buy: cons 30%×10%=3.0%, mid 40%×10%=4.0%, strong 50%×12%=6.0%)
+      conservative: { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:1.00, runrate:30, conv:10, upsell:30, scale:4, sp2:1500, churn:7,  host:0 },
+      mid:          { rpt:15, radar:19, auto:49, mix:25, sp1:150, cpc:0.80, runrate:40, conv:10, upsell:35, scale:4, sp2:1500, churn:6,  host:0 },
+      strong:       { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.65, runrate:50, conv:12, upsell:40, scale:3, sp2:1500, churn:5,  host:0 },
     },
     amistuck: {
-      // Employed mid-career audience — competitive Meta demo, higher CPC.
-      // Higher churn: career anxiety resolves, people cancel.
-      conservative: { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:1.20, conv:2,   upsell:25, scale:4, sp2:1500, churn:10, host:0 },
-      mid:          { rpt:15, radar:19, auto:49, mix:25, sp1:150, cpc:0.90, conv:3.5, upsell:30, scale:4, sp2:1500, churn:8,  host:0 },
-      strong:       { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.70, conv:5,   upsell:35, scale:3, sp2:1500, churn:6,  host:0 },
+      // Employed mid-career audience — competitive Meta demo, higher CPC. Higher churn.
+      // (land→buy: cons 30%×7%=2.1%, mid 40%×9%=3.6%, strong 50%×10%=5.0%)
+      conservative: { rpt:15, radar:19, auto:49, mix:20, sp1:150, cpc:1.20, runrate:30, conv:7,  upsell:25, scale:4, sp2:1500, churn:10, host:0 },
+      mid:          { rpt:15, radar:19, auto:49, mix:25, sp1:150, cpc:0.90, runrate:40, conv:9,  upsell:30, scale:4, sp2:1500, churn:8,  host:0 },
+      strong:       { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.70, runrate:50, conv:10, upsell:35, scale:3, sp2:1500, churn:6,  host:0 },
     },
     testa: {
-      // Existing operators (hair & beauty): tight, well-defined Meta audience.
-      // Higher conversion than Test B (active business decision, immediate ROI).
-      // Lower churn (ongoing competitive monitoring need, not a one-off question).
-      // Higher Autopilot mix (monitoring is recurring).
+      // Existing operators (hair & beauty): tight audience, active business need.
+      // Higher run-rate AND higher buy-rate than Test B; lower churn; higher Autopilot mix.
       // No live data — speculative until Test A launches.
-      conservative: { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.80, conv:4,   upsell:30, scale:4, sp2:1500, churn:6,  host:0 },
-      mid:          { rpt:15, radar:19, auto:49, mix:35, sp1:150, cpc:0.60, conv:5.5, upsell:35, scale:4, sp2:1500, churn:5,  host:0 },
-      strong:       { rpt:15, radar:19, auto:49, mix:40, sp1:150, cpc:0.45, conv:7,   upsell:40, scale:3, sp2:1500, churn:4,  host:0 },
+      // (land→buy: cons 35%×11%=3.85%, mid 45%×12%=5.4%, strong 55%×13%=7.15%)
+      conservative: { rpt:15, radar:19, auto:49, mix:30, sp1:150, cpc:0.80, runrate:35, conv:11, upsell:30, scale:4, sp2:1500, churn:6,  host:0 },
+      mid:          { rpt:15, radar:19, auto:49, mix:35, sp1:150, cpc:0.60, runrate:45, conv:12, upsell:35, scale:4, sp2:1500, churn:5,  host:0 },
+      strong:       { rpt:15, radar:19, auto:49, mix:40, sp1:150, cpc:0.45, runrate:55, conv:13, upsell:40, scale:3, sp2:1500, churn:4,  host:0 },
     },
   };
 
@@ -396,7 +403,7 @@
     });
   });
 
-  var IDS = ['rpt','radar','auto','mix','sp1','cpc','conv','upsell','scale','sp2','churn','host'];
+  var IDS = ['rpt','radar','auto','mix','sp1','cpc','runrate','conv','upsell','scale','sp2','churn','host'];
 
   IDS.forEach(function(id) {
     var sl = document.getElementById('s-' + id);
@@ -436,14 +443,15 @@
     return (+n).toFixed(dec).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
 
-  var HAIKU = 0.015; // £ per AI run
+  var AIRUN = 0.04; // £ per tool run (AI only fires when someone actually runs the tool)
 
-  function phCalc(spend, cpc, conv, upsell) {
+  function phCalc(spend, cpc, runrate, conv, upsell) {
     var clicks  = cpc > 0 ? spend / cpc : 0;
-    var buyers  = clicks * conv;
+    var runs    = clicks * runrate;
+    var buyers  = runs * conv;
     var newSubs = buyers * upsell;
-    var ai      = clicks * HAIKU;
-    return { clicks: clicks, buyers: buyers, newSubs: newSubs, ai: ai };
+    var ai      = runs * AIRUN;
+    return { clicks: clicks, runs: runs, buyers: buyers, newSubs: newSubs, ai: ai };
   }
 
   function calc() {
@@ -453,7 +461,8 @@
     var mix     = gv('mix') / 100;
     var sp1     = gv('sp1');
     var cpc     = gv('cpc');
-    var conv    = gv('conv') / 100;    // click → report buyer
+    var runrate = gv('runrate') / 100; // visitor → runs the tool
+    var conv    = gv('conv') / 100;    // tool-run → report buyer
     var upsell  = gv('upsell') / 100; // buyer → subscriber
     var scaleAt = Math.round(gv('scale'));
     var sp2     = gv('sp2');
@@ -465,12 +474,12 @@
     var avgRet  = churn > 0 ? 1 / churn : 0;
 
     // Cost to acquire a report buyer; cost to acquire a subscriber = cac / upsell_rate
-    var cac     = conv > 0 ? cpc / conv : 0;
-    var cacSub  = (conv > 0 && upsell > 0) ? cpc / (conv * upsell) : 0;
+    var cac     = (runrate > 0 && conv > 0) ? cpc / (runrate * conv) : 0;
+    var cacSub  = (runrate > 0 && conv > 0 && upsell > 0) ? cpc / (runrate * conv * upsell) : 0;
     var ltvRatio = cacSub > 0 ? ltv / cacSub : 0;
 
-    var ph1 = phCalc(sp1, cpc, conv, upsell);
-    var ph2 = phCalc(sp2, cpc, conv, upsell);
+    var ph1 = phCalc(sp1, cpc, runrate, conv, upsell);
+    var ph2 = phCalc(sp2, cpc, runrate, conv, upsell);
 
     var plat2   = churn > 0 ? ph2.newSubs / churn : 0;
     var platMRR = plat2 * arpu;
@@ -533,6 +542,7 @@
 
       var mix = gv('mix') / 100;
       document.getElementById('o-clicks').textContent    = nn(d.ph1.clicks, 0) + '/mo';
+      document.getElementById('o-runs').textContent      = nn(d.ph1.runs, 0) + '/mo';
       document.getElementById('o-buyers').textContent    = nn(d.ph1.buyers, 1) + '/mo';
       document.getElementById('o-subsraw').textContent   = nn(d.ph1.newSubs, 2) + '/mo';
       document.getElementById('o-radar').textContent     = nn(d.ph1.newSubs * (1 - mix), 2) + '/mo';
@@ -662,13 +672,14 @@
 
   function renderPlateau(d) {
     var spends = [150,300,500,1000,1500,3000];
-    var cpc = gv('cpc'), conv = gv('conv')/100, upsell = gv('upsell')/100, host = gv('host'), rpt = gv('rpt');
+    var cpc = gv('cpc'), runrate = gv('runrate')/100, conv = gv('conv')/100, upsell = gv('upsell')/100, host = gv('host'), rpt = gv('rpt');
     var html = '';
     spends.forEach(function(sp) {
       var clicks  = cpc > 0 ? sp / cpc : 0;
-      var buyers  = clicks * conv;
+      var runs    = clicks * runrate;
+      var buyers  = runs * conv;
       var ns      = buyers * upsell;
-      var ai      = clicks * HAIKU;
+      var ai      = runs * AIRUN;
       var pl      = d.churn > 0 ? ns / d.churn : 0;
       var mrr     = pl * d.arpu;
       var oneRev  = buyers * rpt;
