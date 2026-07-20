@@ -45,6 +45,7 @@ export interface LeadDetailSubmission {
   age_band: string | null;
   employment_status: string | null;
   earnings_band: string | null;
+  support_role_sector: string | null;
   course_id: string | null;
   funding_category: string | null;
   funding_route: string | null;
@@ -387,6 +388,11 @@ export function LeadDetailView({
                 <Row label="Age band" value={labelAgeBand(submission.age_band)} />
                 <Row label="Employment" value={labelEmployment(submission.employment_status)} />
                 <Row label="Earnings band" value={submission.earnings_band === "under_30k" ? "Under £30,000" : submission.earnings_band === "over_30k" ? "Over £30,000" : submission.earnings_band} />
+                {/* Support/guidance sector. Only funded courses declaring the
+                    support_role qualifier step carry this; null everywhere else,
+                    and <Row> hides null values. On those courses it is the entry
+                    requirement, so it's the first thing the adviser needs. */}
+                <Row label="Support role sector" value={SUPPORT_ROLE_SECTOR_LABELS[submission.support_role_sector ?? ""] ?? submission.support_role_sector} />
                 <Row label="Has Level 3 or higher" value={booleanLabel(submission.prior_level_3_or_higher)} />
                 <Row label="What they're after" value={labelOutcomeInterest(submission.outcome_interest)} />
               </Section>
@@ -607,6 +613,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     </div>
   );
 }
+
+const SUPPORT_ROLE_SECTOR_LABELS: Record<string, string> = {
+  social_care: "Social care or support work",
+  justice: "Justice, probation or prison services",
+  substance_misuse: "Drug or alcohol services",
+  other_support: "Another supporting or guiding role",
+  none: "None of these",
+};
 
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (

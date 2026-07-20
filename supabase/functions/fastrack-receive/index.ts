@@ -64,7 +64,7 @@ const VOICE_OF_LEARNER_MAX_LEN = 1000;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type LostReason = "l3_mismatch_self_reported" | "cohort_decline";
+type LostReason = "l3_mismatch_self_reported" | "cohort_decline" | "support_role_mismatch";
 
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") {
@@ -150,6 +150,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // instead of auto-losing them. Hidden field set by the fastrack form.
   const fastrackPay = toBool(data.fastrack_pay) === true;
   const earningsOverFlag = earningsReconfirmed === false;
+  // Support-role fastrack only (counselling support-roles): learner reconfirms
+  // which support/guidance sector they work in. NULL where the question isn't
+  // asked. "none" is a hard DQ: it's a course ENTRY requirement, so unlike the
+  // funding gates there is no pay fork that rescues it.
+  const supportRoleReconfirmed = firstString(data.support_role_reconfirmed);
+  const supportRoleMismatchFlag = supportRoleReconfirmed === "none";
   const voiceRaw = firstString(data.voice_of_learner_intro);
   const voice = voiceRaw
     ? voiceRaw.trim().slice(0, VOICE_OF_LEARNER_MAX_LEN)
@@ -177,6 +183,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           l3_reconfirmed,
           l3_mismatch_flag,
           earnings_reconfirmed,
+          support_role_reconfirmed,
           voice_of_learner_intro,
           terms_accepted,
           marketing_opt_in,
@@ -192,6 +199,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ${l3Reconfirmed},
           ${l3MismatchFlag},
           ${earningsReconfirmed},
+          ${supportRoleReconfirmed},
           ${voice},
           ${termsAccepted},
           ${marketingOptIn},
@@ -280,6 +288,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // for a payer (dates are the one thing paying can't fix).
   let lostReason: LostReason | null = null;
   if (l3MismatchFlag && !fastrackPay) lostReason = "l3_mismatch_self_reported";
+  else if (supportRoleMismatchFlag) lostReason = "support_role_mismatch";
   else if (cohortDeclineFlag) lostReason = "cohort_decline";
 
   // Tracks whether Step 8's DB flip actually succeeded. When false, we
@@ -294,6 +303,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const noteBody =
       lostReason === "l3_mismatch_self_reported"
         ? `Learner self-flagged L3 mismatch on the fastrack form. Auto-moved to Lost (reason: ${reasonHuman}).`
+        : lostReason === "support_role_mismatch"
+        ? `Learner reconfirmed they are not in a qualifying support or guidance role. Auto-moved to Lost (reason: ${reasonHuman}).`
         : `Learner declined the cohort dates on the fastrack form. Auto-moved to Lost (reason: ${reasonHuman}).`;
 
     try {
@@ -458,7 +469,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // Qualifying condition by funding route: FCFJ clears on l3_reconfirmed===false
   // (no L3 mismatch); AEB (team-leading) clears on earnings_reconfirmed===true
   // (reconfirmed under £30k). Either path fires the same "you're qualified" ack.
-  if (cohortConfirmed === true && (l3Reconfirmed === false || earningsReconfirmed === true) && parent.email) {
+  // Support-role courses clear on a reconfirmed sector that isn't "none".
+  // Without this clause the ack never fires on them: l3Reconfirmed and
+  // earningsReconfirmed are both NULL (neither question is asked), so the
+  // original two-way condition is always false.
+  const supportRoleCleared = supportRoleReconfirmed !== null && !supportRoleMismatchFlag;
+  if (
+    cohortConfirmed === true &&
+    (l3Reconfirmed === false || earningsReconfirmed === true || supportRoleCleared) &&
+    parent.email
+  ) {
     const templateId = Number(Deno.env.get("BREVO_TEMPLATE_U_FASTRACK_QUALIFIED") ?? "0");
     if (templateId > 0) {
       const recipientName = [parent.first_name, parent.last_name]
@@ -559,6 +579,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         voice,
         l3MismatchFlag,
         earningsReconfirmed,
+        supportRoleReconfirmed,
       });
 
       const sheetPayload: Record<string, unknown> = {
@@ -778,6 +799,7 @@ function composeFastrackNotes(args: {
   voice: string | null;
   l3MismatchFlag: boolean;
   earningsReconfirmed?: boolean | null;
+  supportRoleReconfirmed?: string | null;
 }): string {
   const docsLine = args.docsReady === false ? "no ⚠ Docs gathering needed" : yn(args.docsReady);
   const l3Line = args.l3MismatchFlag ? "yes ⚠ MISMATCH" : yn(args.l3Reconfirmed);
@@ -792,13 +814,33 @@ function composeFastrackNotes(args: {
   if (args.earningsReconfirmed !== null && args.earningsReconfirmed !== undefined) {
     parts.push(`Earnings under £30k reconfirmed: ${yn(args.earningsReconfirmed)}`);
   }
+  // Support-role fastracks carry a sector reconfirm. The sector itself is the
+  // useful bit for the adviser's call, so surface the value, not a yes/no.
+  // NULL on every other course → not appended, so their summaries are unchanged.
+  if (args.supportRoleReconfirmed) {
+    const sector = args.supportRoleReconfirmed === "none"
+      ? "none ⚠ MISMATCH"
+      : SUPPORT_ROLE_SECTOR_LABELS[args.supportRoleReconfirmed] ?? args.supportRoleReconfirmed;
+    parts.push(`Support role reconfirmed: ${sector}`);
+  }
   const tail = `Notes: ${args.voice ?? "—"}`;
   return `${parts.join(" | ")}\n${tail}`;
 }
 
+const SUPPORT_ROLE_SECTOR_LABELS: Record<string, string> = {
+  social_care: "Social care or support work",
+  justice: "Justice, probation or prison services",
+  substance_misuse: "Drug or alcohol services",
+  other_support: "Another supporting/guiding role",
+  none: "None of these",
+};
+
 function lostReasonHumanText(reason: LostReason): string {
   if (reason === "l3_mismatch_self_reported") {
     return "L3 mismatch (self-reported on fastrack)";
+  }
+  if (reason === "support_role_mismatch") {
+    return "Not in a qualifying support role (self-reported on fastrack)";
   }
   return "Cohort decline (couldn't commit to start date)";
 }

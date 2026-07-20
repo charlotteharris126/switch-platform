@@ -80,6 +80,7 @@ export interface SubmissionRow {
   outcome_interest: string | null;
   why_this_course: string | null;
   earnings_band: string | null;
+  support_role_sector: string | null;
   postcode: string | null;
   region: string | null;
   reason: string | null;
@@ -174,7 +175,7 @@ export async function routeLead(
              first_name, last_name, email, phone,
              la, region_scheme, age_band, employment_status,
              prior_level_3_or_higher, can_start_on_intake_date,
-             outcome_interest, why_this_course, earnings_band,
+             outcome_interest, why_this_course, earnings_band, support_role_sector,
              postcode, region, reason, interest, situation,
              qualification, start_when, budget, courses_selected,
              is_dq, dq_reason, primary_routed_to, archived_at,
@@ -1223,7 +1224,7 @@ export const SUBMISSION_FULL_COLUMNS = `id, submitted_at, course_id, funding_cat
        first_name, last_name, email, phone,
        la, region_scheme, age_band, employment_status,
        prior_level_3_or_higher, can_start_on_intake_date,
-       outcome_interest, why_this_course, earnings_band,
+       outcome_interest, why_this_course, earnings_band, support_role_sector,
        postcode, region, reason, interest, situation,
        qualification, start_when, budget, courses_selected,
        is_dq, dq_reason, primary_routed_to, archived_at,
@@ -1310,7 +1311,7 @@ export async function upsertLearnerInBrevoNoMatch(
            first_name, last_name, email, phone,
            la, region_scheme, age_band, employment_status,
            prior_level_3_or_higher, can_start_on_intake_date,
-           outcome_interest, why_this_course, earnings_band,
+           outcome_interest, why_this_course, earnings_band, support_role_sector,
            postcode, region, reason, interest, situation,
            qualification, start_when, budget, courses_selected,
            is_dq, dq_reason, primary_routed_to, archived_at,
@@ -1480,6 +1481,7 @@ async function appendToProviderSheet(
     outcome_interest: lc(submission.outcome_interest),
     why_this_course: lc(submission.why_this_course),
     earnings_band: lc(submission.earnings_band),
+    support_role_sector: lc(submission.support_role_sector),
     postcode: lc(submission.postcode),
     region: lc(submission.region),
     reason: lc(submission.reason),

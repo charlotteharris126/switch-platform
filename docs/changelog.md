@@ -1,5 +1,23 @@
 # Platform - Changelog
 
+## 2026-07-20 — support_role qualifier step persistence (migrations 0224-0226)
+
+New funded course `counselling-skills-support-roles-south-tyneside` (EMS, South Tyneside, intake 25 Aug 2026) introduces a `support_role` qualifier step: the learner must already work in a support or guidance role. It is a course ENTRY requirement, not a funding gate, so it never offers the private-pay route.
+
+- **0224** `leads.submissions.support_role_sector` (text, nullable). Mirrors 0200 (`earnings_band`). Values: `social_care` / `justice` / `substance_misuse` / `other_support` (pass), `none` (DQ at gate).
+- **0225** `leads.fastrack_submissions.support_role_reconfirmed` (text, nullable). Mirrors 0201. TEXT not boolean, because which sector is the useful part for the adviser call.
+- **0226** widens `crm.enrolments.enrolments_lost_reason_chk` to permit `support_role_mismatch`. Verified against the live constraint first: the value was absent, so the fastrack lost-flip would have thrown 23514 at runtime.
+
+Code, all additive:
+- `_shared/ingest.ts` — reads `support_role_sector` off the funded payload, inserts it.
+- `_shared/route-lead.ts` — column added to the three SELECT lists and the provider sheet/summary payload.
+- `fastrack-receive` — persists `support_role_reconfirmed`, flips to lost on `none`, adds the sector line to the provider fastrack summary, and clears the "you're qualified" ack on a passing sector (without which the ack could never fire on this course, since neither the L3 nor the earnings reconfirm is asked).
+- `app/provider/leads/[id]` — sector shown on the portal lead detail.
+
+Related site-side fix (no platform action): the fastrack form chose its eligibility reconfirm questions by FUNDING ROUTE, which assumed one course per route. Now driven by the course's own `qualifier_steps`. Two live consequences: the counselling page no longer inherits the management course's "£30,000" question (which would have DQ'd eligible learners), and LIFT Digital Marketing Futures no longer asks learners to reconfirm a Level 3 it never gated on.
+
+Not yet deployed. Awaiting owner go-ahead: `supabase db push` for 0224-0226, then redeploy `netlify-lead-router` + `fastrack-receive` (both import changed `_shared` modules), then push the admin app.
+
 Most recent at top. Every schema change, data migration, access policy change, and significant decision logged here. See `.claude/rules/data-infrastructure.md` for entry format rules.
 
 ---

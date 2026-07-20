@@ -110,6 +110,7 @@ export interface CanonicalSubmission {
   // Funded income gate (the `earnings` qualifier step, EMS team-leading page).
   // under_30k passes / over_30k DQ'd at the gate. Added 2026-06-08.
   earnings_band: string | null;
+  support_role_sector: string | null;
 
   // Client-generated UUIDv4 set by the funded form's pre-submit JS so
   // the post-redirect /funded/thank-you/?ref=<uuid> link and the
@@ -367,7 +368,7 @@ export async function insertSubmission(
         fbclid, gclid, referrer, event_id, fbp, fbc,
         first_name, last_name, email, phone, la, age_band,
         employment_status, prior_level_3_or_higher, can_start_on_intake_date,
-        outcome_interest, why_this_course, earnings_band,
+        outcome_interest, why_this_course, earnings_band, support_role_sector,
         preferred_intake_id, acceptable_intake_ids,
         postcode, region, reason, interest, situation, qualification,
         start_when, budget, courses_selected,
@@ -386,7 +387,7 @@ export async function insertSubmission(
         ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.event_id}, ${row.fbp}, ${row.fbc},
         ${eff.first_name}, ${eff.last_name}, ${row.email}, ${row.phone}, ${eff.la}, ${row.age_band},
         ${row.employment_status}, ${row.prior_level_3_or_higher}, ${row.can_start_on_intake_date},
-        ${row.outcome_interest}, ${row.why_this_course}, ${row.earnings_band},
+        ${row.outcome_interest}, ${row.why_this_course}, ${row.earnings_band}, ${row.support_role_sector},
         ${row.preferred_intake_id}, ${row.acceptable_intake_ids},
         ${eff.postcode}, ${eff.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
@@ -558,6 +559,9 @@ function normalise(
     // Read generically so both the main funded form (hidden field) and the
     // injected DQ waitlist row (over_30k) land the declared band.
     earnings_band: firstString(data["earnings_band"], data["earnings-band"]),
+    // Support/guidance sector from the funded support_role qualifier step.
+    // Present only on courses declaring that step; null everywhere else.
+    support_role_sector: firstString(data["support_role_sector"], data["support-role-sector"]),
 
     // Schema 1.2 cohort fields. preferred_intake_id is a single string
     // (slug like "tv-may-06"). acceptable_intake_ids comes from a hidden
