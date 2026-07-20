@@ -19,17 +19,16 @@ Diagnostic session, no code or schema changes. Confirmed the enrolment pipeline 
 4. **Revoke leaked GitHub PAT** (carried from S81, still not actioned).
 5. **Verify B2C CAPI fix** on next organic DQ lead: `is_dq=true` row with no new Lead row in `leads.capi_log` (carried from S81).
 
-## Inbound from switchable/site (2026-07-20, Mable) — support_role, BUILT, NOT DEPLOYED
+## Inbound from switchable/site (2026-07-20, Mable) — support_role, DEPLOYED and verified
 New funded course `counselling-skills-support-roles-south-tyneside` (EMS, South Tyneside, intake 25 Aug 2026) adds a `support_role` qualifier step. Course ENTRY requirement, not a funding gate, so no private-pay fork.
 
-Everything below is written and typechecked but NOT applied. See `platform/docs/changelog.md` (2026-07-20) for the full rationale.
+Fully deployed this session. Migrations 0224-0226 applied via `supabase db push` and verified against the live schema. `netlify-lead-router` (v167) and `fastrack-receive` (v61) redeployed, both confirmed reachable without a JWT so the Netlify webhooks don't 401. Admin app pushed. Full rationale in `platform/docs/changelog.md` (2026-07-20).
 
-**Deploy order when the owner gives the go-ahead:**
-1. `supabase db push` — migrations 0224 (submissions column), 0225 (fastrack column), 0226 (widens the `lost_reason` CHECK; without it the fastrack lost-flip throws 23514).
-2. Redeploy `netlify-lead-router` AND `fastrack-receive`. Both import changed `_shared` modules (`ingest.ts`, `route-lead.ts`), which bundle at deploy, so both must go even though only one file each changed.
-3. Push the admin app for the provider-portal lead-detail field.
+Proven end to end with owner test lead 722 / fastrack 119: `support_role_sector` and `support_role_reconfirmed` both stored `social_care`; `l3_reconfirmed` and `earnings_reconfirmed` both null. Lead was `dq_reason='owner_test_submission'`, so it did NOT route to EMS: the provider notification, portal write, and Brevo learner emails are still unproven and need one live-shaped (non-owner) test.
 
-Order matters: EF before migration means inserting a column that doesn't exist.
+**Two Claude smoke-test rows in `leads.dead_letter`** (received_at 19:44, "Missing form_name") from confirming the two EFs were reachable. Not real failures. Clear from `/admin/errors` or leave.
+
+**Owner action still open:** `crm.providers.regional_contacts.by_la` has no `south-tyneside` entry. `resolveRepFirstName` falls back to the owner's name (Andy) and `renderProviderContactValues` returns an empty phone, so every learner email for this course names the wrong person and drops the "save this number" line. Add `{name, first_name, phone}` under `by_la.south-tyneside` once EMS confirms who works those leads. This is the launch blocker, not a nice-to-have.
 
 **Verify after deploy:** submit a test lead on the new page, confirm `leads.submissions.support_role_sector` is populated, then run the fastrack and confirm `leads.fastrack_submissions.support_role_reconfirmed` lands and the sector shows on the portal lead detail.
 
