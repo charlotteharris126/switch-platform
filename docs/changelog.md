@@ -1,5 +1,18 @@
 # Platform - Changelog
 
+## 2026-07-23 — S4B general-funnel backend: focus_area + trust-line reframe (migrations 0227-0228)
+
+The employer funnel moved to the general "government-funded training" page (`/business/funded-training/`, Mable 2026-07-22), replacing the single Project-Management page. Backend wiring to match:
+
+- **0227** `leads.submissions.focus_area` (text, nullable). The general employer form asks "Which area are you looking to train in?" and emits `focus_area` (`management_leadership` / `hr_people` / `business_admin_ops` / `mixed_unsure`). It replaces the old hardcoded `standards_interested` course name (the general page now sends `standards_interested = "General enquiry, provider scopes on call"`). Additive, mirrors 0224. Previously survived only in `raw_payload` JSON.
+- **0228** one-row content update to `crm.providers.b2b_trust_line` for `riverside-training`: "delivering **apprenticeships** for over 30 years" → "delivering **government-funded training** for over 30 years". Rendered in the U1-employer Brevo ack email; owner steer is "apprentice gone entirely" from employer-facing surfaces. Shipped as a migration (not a data-op) because this automated session had no SQL-editor/psql write path to the main project. Not a Brevo contact attribute, so no stale-contact backfill.
+
+Code:
+- `netlify-employer-lead-router` (redeployed): added `focus_area` to the row type, payload extract, and the `leads.submissions` INSERT. Also changed the stale `standards_interested` fallback from `"Project Management Level 4"` → `"General enquiry"`.
+- Provider portal lead detail (`app/app/provider/leads/[id]/`): `page.tsx` query selects `focus_area`; `lead-detail-view.tsx` adds a "Focus area" row (with a slug→label map) and retitles the "Apprenticeship interest" section to "Training interest".
+
+Impact (§8): all additive / one-row. `leads.submissions` consumers (Brevo sync, profit tracker, audit views) are additive-safe. Riverside is the only employer-lead provider (v1). No schema_version bump. Owner-directed build (Charlotte switched to the platform seat). Verified: column live, trust line clear of "apprentic", end-to-end test lead below.
+
 ## 2026-07-20 — support_role qualifier step persistence (migrations 0224-0226)
 
 New funded course `counselling-skills-support-roles-south-tyneside` (EMS, South Tyneside, intake 25 Aug 2026) introduces a `support_role` qualifier step: the learner must already work in a support or guidance role. It is a course ENTRY requirement, not a funding gate, so it never offers the private-pay route.

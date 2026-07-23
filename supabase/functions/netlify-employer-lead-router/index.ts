@@ -101,6 +101,7 @@ interface EmployerSubmissionRow {
   existing_apprentices: string | null;
   headcount_estimate: string | null;
   standards_interested: string | null;
+  focus_area: string | null;
   additional_notes: string | null;
   ern: string;
   // Consent
@@ -330,7 +331,8 @@ function normalise(data: Record<string, JsonValue>, rawBody: JsonValue): Employe
     candidate_in_mind: strOrNull(data.candidate_in_mind),
     existing_apprentices: strOrNull(data.existing_apprentices),
     headcount_estimate: strOrNull(data.headcount_estimate),
-    standards_interested: strOrNull(data.standards_interested) ?? "Project Management Level 4",
+    standards_interested: strOrNull(data.standards_interested) ?? "General enquiry",
+    focus_area: strOrNull(data.focus_area),
     additional_notes: trimOrNull(strOrNull(data.additional_notes)),
     ern: strOrNull(data.ern) ?? "",
     terms_accepted,
@@ -384,7 +386,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         first_name, last_name, email, phone, role_title,
         company_name, company_size_band, sector, levy_status,
         interest, urgency, candidate_in_mind, existing_apprentices,
-        headcount_estimate, standards_interested, additional_notes, ern,
+        headcount_estimate, standards_interested, focus_area, additional_notes, ern,
         terms_accepted, terms_accepted_at, marketing_opt_in,
         page_url, utm_source, utm_medium, utm_campaign, utm_content,
         fbclid, gclid, referrer, event_id, fbp, fbc, experiment_id, experiment_variant, raw_payload, is_dq
@@ -394,7 +396,7 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         ${row.first_name}, ${row.last_name}, ${row.email}, ${row.phone}, ${row.role_title},
         ${row.company_name}, ${row.company_size_band}, ${row.sector}, ${row.levy_status},
         ${row.interest}, ${row.urgency}, ${row.candidate_in_mind}, ${row.existing_apprentices},
-        ${row.headcount_estimate}, ${row.standards_interested}, ${row.additional_notes}, ${row.ern},
+        ${row.headcount_estimate}, ${row.standards_interested}, ${row.focus_area}, ${row.additional_notes}, ${row.ern},
         ${row.terms_accepted}, ${row.terms_accepted_at}, ${row.marketing_opt_in},
         ${row.page_url}, ${row.utm_source}, ${row.utm_medium}, ${row.utm_campaign}, ${row.utm_content},
         ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.event_id}, ${row.fbp}, ${row.fbc}, ${row.experiment_id}, ${row.experiment_variant}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"}

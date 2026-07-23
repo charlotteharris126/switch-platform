@@ -73,7 +73,18 @@ export interface LeadDetailSubmission {
   existing_apprentices: string | null;
   headcount_estimate: string | null;
   standards_interested: string | null;
+  focus_area: string | null;
   additional_notes: string | null;
+}
+
+const FOCUS_AREA_LABEL: Record<string, string> = {
+  management_leadership: "Management & leadership",
+  hr_people: "HR & people",
+  business_admin_ops: "Business admin & operations",
+  mixed_unsure: "A mix, or not sure yet",
+};
+function labelFocusArea(v: string | null): string | null {
+  return v ? (FOCUS_AREA_LABEL[v] ?? v) : v;
 }
 
 export interface LeadDetailEnrolment {
@@ -354,9 +365,10 @@ export function LeadDetailView({
                 <Row label="Levy status" value={submission.levy_status} />
               </Section>
 
-              <Section title="Apprenticeship interest">
+              <Section title="Training interest">
                 <Row label="Interest" value={submission.interest} />
                 <Row label="Urgency" value={submission.urgency} />
+                <Row label="Focus area" value={labelFocusArea(submission.focus_area)} />
                 <Row label="Standard" value={submission.standards_interested} />
                 <Row label="Candidate in mind" value={submission.candidate_in_mind} />
               </Section>
