@@ -430,6 +430,7 @@ export default async function LeadDetailPage({
               <FieldRow label="Company size" value={lead.company_size_band} />
               <FieldRow label="Levy status" value={lead.levy_status} />
               <FieldRow label="Interest" value={lead.interest} />
+              <FieldRow label="Focus area" value={lead.focus_area} />
               <FieldRow label="Urgency" value={lead.urgency} />
               <FieldRow label="Candidate in mind" value={lead.candidate_in_mind} />
               <FieldRow label="Existing apprentices" value={lead.existing_apprentices} />
