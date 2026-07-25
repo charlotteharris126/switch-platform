@@ -1,5 +1,13 @@
 # Platform - Changelog
 
+## 2026-07-25 — focus_area display on provider portal + admin preview (incident + lesson)
+
+- Change: added `focus_area` to the explicit `select(...)` on the provider lead route (`app/app/provider/leads/[id]/page.tsx`) and the admin "View as provider" preview route (`app/app/admin/preview/[provider_id]/leads/[lead_id]/page.tsx`). No schema/migration.
+- Why: ads went live; `focus_area` (0227) was correct in the DB and on the admin lead detail (`select("*")`) but showed blank on Riverside's portal and the preview, both of which enumerate columns for data-minimisation and hadn't been updated.
+- Incident: hours lost chasing DB/grants/query/build-cache. A `DBG-SRV` server-side render proved the query returned the value (`key=true, err=null`); the real gaps were (a) the two explicit-select routes missing the column and (b) those routes needing a **clear-cache rebuild** (normal redeploy serves a stale compiled fetch). Grants were fine (`authenticated=r` covers new columns).
+- Impact: provider portal now shows Focus area (verified live, #729). Preview fix + a temp `DBG-SRV` banner removal are pushed (1e15b6c, e4fd854) and gated on a clear-cache deploy (Hub task, high). Lesson saved as memory `feedback_new_column_needs_explicit_select_routes_plus_clean_rebuild`.
+- Signed off: Owner (session 2026-07-25).
+
 ## 2026-07-23 — S4B general-funnel backend: focus_area + trust-line reframe (migrations 0227-0228)
 
 The employer funnel moved to the general "government-funded training" page (`/business/funded-training/`, Mable 2026-07-22), replacing the single Project-Management page. Backend wiring to match:
