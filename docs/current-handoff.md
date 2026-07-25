@@ -1,8 +1,8 @@
-# Platform Handoff, Session 83, 2026-07-24
+# Platform Handoff, Session 84, 2026-07-25
 
 ## Current state
 
-Owner-directed build session: wired the backend for the new general employer funnel (`/business/funded-training/`, Mable S84). `focus_area` is now captured and shown; the Riverside employer email trust line is reframed off "apprenticeships". Migrations 0227-0231 applied, router redeployed, admin + provider portal pushed, end-to-end tested, all test data cleaned. The S82 revenue-backfill decision is still open and untouched this session.
+Owner-directed build session: wired the backend for the new general employer funnel (`/business/funded-training/`, Mable S84). `focus_area` is now captured and shown; the Riverside employer email trust line is reframed off "apprenticeships". Migrations 0227-0232 applied, router redeployed, admin + provider portal pushed, end-to-end tested, all test data cleaned. Ads went live and real leads are flowing; a Netlify field-registration bug that was dropping `focus_area` on live leads was diagnosed and fixed (site-side) + verified. The S82 revenue-backfill decision is still open and untouched this session.
 
 ## What was done this session
 
@@ -13,6 +13,7 @@ Owner-directed build session: wired the backend for the new general employer fun
 - **End-to-end tested:** DQ test lead #723 proved `focus_area` persists via the live router; routed test #724 (under `TEST_MODE`, provider notify redirected off Freya) proved the routed path + `focus_area` + the U1 employer Brevo ack **sent** (email_log status sent, Brevo message id) carrying the reframed trust line.
 - **Cleanup:** **0229** deleted test leads 723/724 + all children (enrolment, email_log, routing_log, capi_log); **0231** deleted the persistent admin test lead 725; `TEST_MODE`/`OWNER_TEST_EMAIL` secrets unset. No test data left. (Migration numbering has 0230 unused — 0231 followed 0229 after an interim.)
 - Confirmed for Wren (email): the two employer templates carrying the old course-name injection are #61 (`s4b_employer_u1`, `contact.B2B_STANDARD`) and #66 (`s4b_employer_chaser`, `params.STANDARD`). Owner edited both to "for funded training". Hub task done.
+- **Netlify focus_area drop diagnosed + fixed (2026-07-25):** ads went live, first real lead #726 landed with `focus_area` NULL. Ruled out browser (POSTed the field via curl straight to Netlify, still dropped). Root cause: Netlify hadn't registered `focus_area` in the form's field set, so it silently strips it. Site-side fix (Mable's build script, hidden field on all s4b instances + redeploy to force Netlify re-detection); verified with a post-fix curl POST capturing `focus_area=hr_people`. **0232** deleted the two diagnostic test leads (#727 pre-fix, #728 post-fix) + children; TEST_MODE toggled on for the test and off after.
 
 ## Next steps
 
@@ -30,7 +31,7 @@ Owner-directed build session: wired the backend for the new general employer fun
 
 ## Watch items
 
-- **No new real leads since 2 July** (ads off). The general employer funnel has no traffic until Solis builds the ads.
+- **Ads live, employer leads now flowing** through the general funnel (#726 onward). Confirm `focus_area` populates on the next few real leads (fix verified via curl; #726 predates the fix so its focus_area is NULL).
 - **Meta spend stale since 1 July** (`ads_switchable.meta_daily`) — carried S82.
 - **26 sheet-stale drift rows** in `/admin/errors` — carried, clear on EMS sheet teardown.
 - **Submission id sequence has a gap at 723-725** (deleted test leads) — expected, harmless.
