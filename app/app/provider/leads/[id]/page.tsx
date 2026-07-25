@@ -194,6 +194,9 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
         ]}
         channel={`rt-provider-lead-${submission.id}`}
       />
+      <div style={{ padding: 8, background: "#ffeeba", color: "#111", fontSize: 12, fontFamily: "monospace" }}>
+        DBG-SRV focus_area={JSON.stringify(submission.focus_area)} key={String("focus_area" in submission)} err={JSON.stringify(submissionResult.error)}
+      </div>
       <LeadDetailView
         submission={submission}
         enrol={enrol}
