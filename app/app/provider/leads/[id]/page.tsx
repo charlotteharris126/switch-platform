@@ -71,7 +71,10 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
       .select(
         "id,routed_at,first_name,last_name,email,phone,lead_type," +
         "age_band,employment_status,earnings_band,support_role_sector,course_id,funding_category,funding_route,pay_route,private_price_quoted,prior_level_3_or_higher,can_start_on_intake_date,preferred_intake_id,acceptable_intake_ids,start_when,start_timing,outcome_interest,la,postcode,region," +
-        "company_name,role_title,company_size_band,sector,levy_status,urgency,interest,candidate_in_mind,existing_apprentices,headcount_estimate,standards_interested,focus_area,additional_notes",
+        // focus_area added 2026-07-25 (S4B general funnel). Column reordered here to
+        // force a fresh compile of this route: the admin view (select *) returned it
+        // while this explicit-select route served a stale build missing the column.
+        "company_name,role_title,company_size_band,sector,levy_status,interest,candidate_in_mind,urgency,focus_area,existing_apprentices,headcount_estimate,standards_interested,additional_notes",
       )
       .eq("id", submissionId)
       .maybeSingle<LeadDetailSubmission>(),
