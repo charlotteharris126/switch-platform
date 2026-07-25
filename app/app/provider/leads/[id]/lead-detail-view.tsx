@@ -368,7 +368,7 @@ export function LeadDetailView({
               <Section title="Training interest">
                 <Row label="Interest" value={submission.interest} />
                 <Row label="Urgency" value={submission.urgency} />
-                <Row label="Focus area" value={labelFocusArea(submission.focus_area)} />
+                <Row label="Focus area" value={submission.focus_area ? ("RAW:" + submission.focus_area) : "SENTINEL-EMPTY-v3"} />
                 <Row label="Standard" value={submission.standards_interested} />
                 <Row label="Candidate in mind" value={submission.candidate_in_mind} />
               </Section>
