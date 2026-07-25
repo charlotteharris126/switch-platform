@@ -31,7 +31,7 @@ Owner-directed build session: wired the backend for the new general employer fun
 
 ## Watch items
 
-- **Ads live, employer leads now flowing** through the general funnel (#726 onward). Confirm `focus_area` populates on the next few real leads (fix verified via curl; #726 predates the fix so its focus_area is NULL).
+- **Ads live, employer leads now flowing** through the general funnel. `focus_area` capture now confirmed on a real lead: #729 (G Ginger ltd, 2026-07-25) captured `management_leadership`; only #726 (pre-fix) stays NULL. Watch closed.
 - **Meta spend stale since 1 July** (`ads_switchable.meta_daily`) — carried S82.
 - **26 sheet-stale drift rows** in `/admin/errors` — carried, clear on EMS sheet teardown.
 - **Submission id sequence has a gap at 723-725** (deleted test leads) — expected, harmless.
