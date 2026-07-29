@@ -1,5 +1,22 @@
 # Platform - Changelog
 
+## 2026-07-29 — Meta Instant Form receiver for the S4B employer route (new EF, no migration)
+
+New intake path for a Riverside Employer-Lead Meta **Instant Form** (lead ad) campaign. Instant Forms never touch the site, so the on-site Netlify pipeline can't fire; leads are pulled out of Meta by a Zapier/Make "Facebook Lead Ads" trigger and POSTed to a new Edge Function that lands them in `leads.submissions` identically to the on-site `/business/` form.
+
+- **No migration / no schema_version bump.** Reuses existing employer columns; the only new thing is a distinct `source_form` value (`s4b-employer-lead-meta-instant-v1`), which is just a string.
+- **Refactor (no behaviour change):** lifted the normalise + INSERT + routing_log + `ensure_open_enrolment` + sheet/U1/U2/audit/CAPI fan-out out of `netlify-employer-lead-router/index.ts` into new `_shared/employer-lead-core.ts`. `netlify-employer-lead-router` is now a thin handler over that core (form_name gate, `source_form='s4b-employer-lead-v1'`, `fireCapi=true`) — byte-identical behaviour, redeployed.
+- **New EF `meta-instant-employer-lead-router`:** thin handler over the same core. Differs in exactly three ways: (1) auth is a shared-secret header `x-instant-secret` == `META_INSTANT_LEAD_SECRET` (endpoint URL could leak; constant-time compare, fails closed if unset), (2) `source_form='s4b-employer-lead-meta-instant-v1'`, (3) `fireCapi=false` — an Instant Form submission is an on-Meta conversion Meta already counts, so a server CAPI Lead would double-count (and there's no browser pixel fire, so no event_id/fbp/fbc to dedup anyway). `verify_jwt=false` in config.toml.
+- **Why Zapier/Make, not our own Meta webhook:** the Graph API `leadgen` webhook needs `leads_retrieval` approved on our Meta app, which is low-trust — do not expand that surface (memory `feedback_meta_app_low_trust_endpoint_expansion`). Zapier/Make hold that approval, so our app is untouched.
+
+Impact (§8): additive only. `leads.submissions` consumers are additive-safe (new `source_form` value). Riverside is the sole employer-lead provider (v1), routing still hardcoded. Both employer EFs must be redeployed together (shared core). Rollback: revert both EFs to the pre-refactor single-file version; the new EF has no traffic until Zapier is pointed at it.
+
+Middleware chosen: **Make** (not Zapier). Zapier's Webhooks action is paywalled; Make's free tier carries the FB Lead Ads trigger + HTTP module and holds Meta's `leads_retrieval` approval on its own app, so ours stays untouched. Ad-level attribution maps into `utm_content` (ad id) + `utm_source='meta'` / `utm_medium='instant_form'`.
+
+DEPLOYED + LIVE this session: both EFs deployed to prod (`igvlngouxcirqhlsrhga`), `META_INSTANT_LEAD_SECRET` set, endpoint auth smoke-tested (401 no/wrong secret, 405 GET), routed test #740/#741 proven end-to-end (Make → EF → routed to Riverside → provider email), test rows cleaned, `TEST_MODE` unset, Make scenario ON. Still open: `utm_content` ad-id mapping unverifiable until the first real lead (test tool carries no ad); add Make + new EF to Notion Tech Stack; Clara to review B2B consent wording on the Meta form.
+
+- Signed off: Owner (session 2026-07-29, live).
+
 ## 2026-07-25 — focus_area display on provider portal + admin preview (incident + lesson)
 
 - Change: added `focus_area` to the explicit `select(...)` on the provider lead route (`app/app/provider/leads/[id]/page.tsx`) and the admin "View as provider" preview route (`app/app/admin/preview/[provider_id]/leads/[lead_id]/page.tsx`). No schema/migration.

@@ -1,47 +1,50 @@
-# Platform Handoff, Session 84, 2026-07-25
+# Platform Handoff, Session 85, 2026-07-29
 
 ## Current state
 
-Owner-directed build session: wired the backend for the new general employer funnel (`/business/funded-training/`, Mable S84). `focus_area` is now captured and shown; the Riverside employer email trust line is reframed off "apprenticeships". Migrations 0227-0232 applied, router redeployed, admin + provider portal pushed, end-to-end tested, all test data cleaned. Ads went live and real leads are flowing; a Netlify field-registration bug that was dropping `focus_area` on live leads was diagnosed and fixed (site-side) + verified. The S82 revenue-backfill decision is still open and untouched this session.
+Built and shipped a new lead-intake path: a Meta **Instant Form** (lead ad) campaign for the Riverside Employer-Lead route. New Edge Function `meta-instant-employer-lead-router` is deployed and live, wired Meta → Make → function → `leads.submissions` → routed to Riverside, proven end-to-end with test leads, and now switched to live (Make scenario ON, `TEST_MODE` off). The S84 clear-cache deploy and the S82 revenue-backfill decision remain open and untouched this session.
 
 ## What was done this session
 
-- **0227** `leads.submissions.focus_area` (text, nullable). The general employer form's "which area" answer (management_leadership / hr_people / business_admin_ops / mixed_unsure). Additive, mirrors 0224.
-- **`netlify-employer-lead-router` redeployed:** persists `focus_area` (row type + payload extract + INSERT); changed the stale `standards_interested` fallback from `"Project Management Level 4"` to `"General enquiry"`.
-- **Provider portal + admin lead detail** now show "Focus area": `app/app/provider/leads/[id]/` (query + view + slug-to-label map, retitled "Apprenticeship interest" to "Training interest") and `app/app/admin/leads/[id]/page.tsx` (already `select(*)`, added the row).
-- **0228** one-row `crm.providers.b2b_trust_line` for `riverside-training`: "delivering apprenticeships" to "delivering government-funded training" (U1 employer Brevo email). YAML mirror updated site-side same day. Not a Brevo contact attribute, so no stale-contact backfill.
-- **End-to-end tested:** DQ test lead #723 proved `focus_area` persists via the live router; routed test #724 (under `TEST_MODE`, provider notify redirected off Freya) proved the routed path + `focus_area` + the U1 employer Brevo ack **sent** (email_log status sent, Brevo message id) carrying the reframed trust line.
-- **Cleanup:** **0229** deleted test leads 723/724 + all children (enrolment, email_log, routing_log, capi_log); **0231** deleted the persistent admin test lead 725; `TEST_MODE`/`OWNER_TEST_EMAIL` secrets unset. No test data left. (Migration numbering has 0230 unused — 0231 followed 0229 after an interim.)
-- Confirmed for Wren (email): the two employer templates carrying the old course-name injection are #61 (`s4b_employer_u1`, `contact.B2B_STANDARD`) and #66 (`s4b_employer_chaser`, `params.STANDARD`). Owner edited both to "for funded training". Hub task done.
-- **Netlify focus_area drop diagnosed + fixed (2026-07-25):** ads went live, first real lead #726 landed with `focus_area` NULL. Ruled out browser (POSTed the field via curl straight to Netlify, still dropped). Root cause: Netlify hadn't registered `focus_area` in the form's field set, so it silently strips it. Site-side fix (Mable's build script, hidden field on all s4b instances + redeploy to force Netlify re-detection); verified with a post-fix curl POST capturing `focus_area=hr_people`. **0232** deleted the two diagnostic test leads (#727 pre-fix, #728 post-fix) + children; TEST_MODE toggled on for the test and off after.
-- **Provider-portal focus_area display fixed after a long chase (2026-07-25).** Lead #729 (G Ginger) had `focus_area=management_leadership` in the DB and on admin (which uses `select("*")`) but showed "-" on Riverside's portal (explicit-select route). Ruled out, in order: grants (`authenticated=r` on the table covers all columns incl focus_area), the query source (correct + committed), any prop reconstruction (none, `submission` passed whole), and build cache. A server-side diagnostic (`DBG-SRV`) rendered on the page proved the server query DID return `focus_area="management_leadership"` (key=true, err=null) — so query/DB/grants were all fine. The break was **deploy/build lag on the provider route**: it kept serving a stale compiled build whose fetch predated the column; normal redeploys reused it; a fully fresh rebuild finally propagated and the portal now shows "Management & leadership". Also added `focus_area` to the **admin "View as provider" preview** route (`app/app/admin/preview/[provider_id]/leads/[lead_id]/page.tsx`), which had the same explicit-select gap. Swept all lead-detail pages, no other route missing it. Diagnostic banner removed.
+- **Refactor (no behaviour change):** lifted the employer-lead normalise + INSERT + routing_log + `ensure_open_enrolment` + sheet/U1/U2/audit/CAPI fan-out out of `netlify-employer-lead-router/index.ts` into new `_shared/employer-lead-core.ts`. `netlify-employer-lead-router` is now a thin handler over that core (form_name gate, `source_form='s4b-employer-lead-v1'`, `fireCapi=true`). Redeployed, byte-identical behaviour.
+- **New EF `meta-instant-employer-lead-router`** (deployed, `verify_jwt=false` in config.toml). Thin handler over the shared core. Three deliberate differences from the Netlify path: (1) auth is a shared-secret header `x-instant-secret` == `META_INSTANT_LEAD_SECRET` (constant-time compare, fails closed if unset), (2) `source_form='s4b-employer-lead-meta-instant-v1'`, (3) `fireCapi=false` (Instant Form is an on-Meta conversion Meta already counts; server CAPI would double-count).
+- **No migration.** Reuses existing employer columns; only new thing is the distinct `source_form` string value. Ad-level attribution maps into `utm_content` (ad id), `utm_source='meta'`, `utm_medium='instant_form'`; full body archived in `raw_payload`.
+- **Middleware = Make (not Zapier).** Zapier's Webhooks action is paywalled; Make's free tier carries the Facebook Lead Ads trigger + HTTP module and holds Meta's `leads_retrieval` approval, so our own low-trust Meta app is untouched. Scenario: FB Lead Ads (Watch Leads webhook) → HTTP POST (raw JSON, `x-instant-secret` header).
+- **Proven end-to-end:** after fixing a trailing-comma JSON error (Make refused to send) and empty test-tool leads, routed test #740 then #741 landed `routing_outcome=routed`, `primary_routed_to=riverside-training`, sector + qualifiers captured, provider notify email received (redirected to owner under `TEST_MODE`).
+- **Go-live:** `TEST_MODE`/`OWNER_TEST_EMAIL` unset (real provider emails now reach Riverside), Make scenario toggled ON.
+- **Cleanup:** owner ran the delete SQL for test leads 737-740; **741 delete SQL handed to owner this session** (see Next steps 1).
+- Changelog entry added (2026-07-29) and updated to deployed/live.
 
 ## Next steps
 
-1. **DO FIRST (owner, ~2 min): clear-cache deploy the platform app.** Two pushed commits need it: removes the temporary `DBG-SRV` yellow debug banner still live on Riverside's provider portal, and activates `focus_area` on the admin "View as provider" preview. Netlify → platform app site → Deploys → Trigger deploy → "Clear cache and deploy site" (a normal redeploy is NOT enough for provider/preview route changes — that was the whole S84 lesson).
-2. **CARRIED FROM S82, the main open platform item. Owner decides:** (a) build a revenue-backfill button on `/admin/data-ops` + surface revenue/profit on the tracker, (b) also add sheet edits to `vw_audit_actions`, or (c) leave. No revenue is booked in the DB despite ~£2,100 collected (`billed_amount` null on all enrolments, `crm.billing_events` empty). Bring the decision before any build.
-2. **Revenue backfill (gated on 1a):** populate `crm.billing_events` + `enrolments.billed_amount/billed_at/paid_at` for the 14 billable EMS + 1 WYK. Accrual £2,250, cash £2,100, #601 owed £150, first 3 per provider free.
-3. **EMS Google Sheet teardown still blocked** (Nick actively working it). 26 sheet-stale drift rows in `/admin/errors` clear on teardown.
-4. **Revoke leaked GitHub PAT** (carried S81, still not actioned).
-5. **Verify B2C CAPI fix** on next organic DQ lead (carried S81).
+1. **Run the 741 cleanup if not already done.** Routed test #741 created a real Riverside enrolment that would show as "dummy data" in their portal. Delete SQL was handed over this session (submission 741 + children across crm.email_log/enrolments/routing_log etc.). Confirm it ran; the submission-id sequence otherwise carries a harmless gap at 737-741.
+2. **First real Instant Form lead check (the one thing testing could not verify).** Test-tool leads have no ad behind them, so `utm_content` (ad id) is unverifiable until a genuine lead lands. On the first real one: confirm the ad id populated `utm_content`, sector + qualifiers came through, it routed to Riverside, and the provider email reached **Riverside** (guard is off). If `utm_content` is blank, the Make token `{{2.adId}}` needs correcting.
+3. **Add Make + the new EF to the Notion Tech Stack** (infra-change rule: new tool + new function). Hub task filed.
+4. **Clara: review the B2B consent wording** on the Riverside Meta Instant Form before spend scales. Hub task filed.
+5. **CARRIED FROM S84 (DO FIRST, owner ~2 min): clear-cache deploy the platform app.** Removes the `DBG-SRV` debug banner still live on Riverside's portal and activates `focus_area` on the admin "View as provider" preview. Netlify → platform app → Deploys → "Clear cache and deploy site" (normal redeploy is not enough for provider/preview routes).
+6. **CARRIED FROM S82, main open platform item. Owner decides:** (a) build a revenue-backfill button on `/admin/data-ops` + surface revenue/profit on the tracker, (b) also add sheet edits to `vw_audit_actions`, or (c) leave. ~£2,100 collected but no revenue booked (`billed_amount` null on all enrolments, `crm.billing_events` empty). Then backfill the 14 EMS + 1 WYK billable if a/b.
+7. **CARRIED: EMS Google Sheet teardown** blocked (Nick working it); 26 sheet-stale drift rows in `/admin/errors` clear on teardown.
+8. **CARRIED: revoke leaked GitHub PAT** (S81). **CARRIED: verify B2C CAPI fix** on next organic DQ lead (S81).
 
 ## Decisions and open questions
 
-- **Decision: `focus_area` additive, no schema_version bump** (data-infra §2). Consumers (Brevo sync, profit tracker, audit views) additive-safe. Producer = employer router; consumer = provider + admin lead detail.
-- **Decision: the Riverside trust-line data fix shipped as migration 0228** (not a data-ops script) because this automated session had no SQL-editor/psql write path to the main project (the Supabase MCP is scoped to a different project, the Provider OS build `caoldoqyrswkcbnmhkuh`).
-- **Lesson (new memory `feedback_new_column_needs_explicit_select_routes_plus_clean_rebuild`):** when a new `leads.submissions` column must show on the provider portal or the admin "View as provider" preview, two things are required, and both were missed this session, costing hours: (1) add the column to those routes' **explicit `select(...)` lists** (admin lead detail is immune because it uses `select("*")`, but the provider + preview routes enumerate columns for data-minimisation); (2) trigger a **clear-cache rebuild** of the platform app, a normal redeploy serves a stale compiled fetch for those routes. Verify on the live portal, not by inference. Next new field is a two-minute job if both are done up front.
-- **Open (carried S82):** does a provider marking "Presumed Enrolled" in the sheet ever become billable? Needs a policy call before any presumed is billed.
+- **Decision: Make over Zapier over own-webhook.** Zapier paywalls its Webhooks action; own Meta `leadgen` webhook needs `leads_retrieval` approved on our low-trust Meta app (memory `feedback_meta_app_low_trust_endpoint_expansion`, do not expand). Make holds the approval on its own app, free tier covers it, our app stays untouched.
+- **Decision: `source_form='s4b-employer-lead-meta-instant-v1'`, no migration, no schema_version bump.** Additive string value; distinct origin so Instant Form vs on-site `/business/` performance is comparable in reporting.
+- **Decision: CAPI off for the Instant Form path** (`fireCapi=false`). Meta records the Instant Form submission natively; a server CAPI Lead would double-count, and there's no browser pixel fire so no event_id/fbp/fbc to dedup against.
+- **Decision: shared `_shared/employer-lead-core.ts`** so both employer receivers can never drift. Changing it means redeploying BOTH functions.
+- **Open (carried S82):** does a provider marking "Presumed Enrolled" ever become billable? Policy call needed before any presumed is billed.
 
 ## Watch items
 
-- **Ads live, employer leads now flowing** through the general funnel. `focus_area` capture now confirmed on a real lead: #729 (G Ginger ltd, 2026-07-25) captured `management_leadership`; only #726 (pre-fix) stays NULL. Watch closed.
-- **Meta spend stale since 1 July** (`ads_switchable.meta_daily`) — carried S82.
-- **26 sheet-stale drift rows** in `/admin/errors` — carried, clear on EMS sheet teardown.
-- **Submission id sequence has a gap at 723-729** (deleted test leads 723/724/725/727/728) — expected, harmless. #726 and #729 are real leads.
-- **`DBG-SRV` yellow debug banner is live on Riverside's provider portal** until the clear-cache deploy (Next steps 1) lands. Removed in code (commit `1e15b6c`), pending deploy.
+- **First real Instant Form employer lead** is the live verification (see Next steps 2). Guard is OFF, so a real lead's provider email now goes to Riverside (Freya) directly.
+- **`utm_content` ad-id mapping unverified** until the first real lead (test tool can't carry an ad id).
+- **Test row 741** pending owner cleanup (see Next steps 1) or it pollutes Riverside's portal.
+- **CARRIED: `DBG-SRV` yellow debug banner** live on Riverside's portal until the clear-cache deploy lands.
+- **CARRIED: Meta spend stale since 1 July** (`ads_switchable.meta_daily`).
+- **CARRIED: 26 sheet-stale drift rows** in `/admin/errors`, clear on EMS sheet teardown.
 
 ## Next session
 
 - **Folder:** `platform/`
-- **First task:** Confirm the clear-cache deploy landed (Next steps 1: `DBG-SRV` banner gone from Riverside's portal, `focus_area` showing on the admin "View as provider" preview). Then get the owner's a/b/c decision on the revenue backfill + tracker revenue column (carried from S82) and build per choice via `/admin/data-ops`.
-- **Cross-project:** None new. The employer-funnel backend is done and its site source is `switchable/site/` (Mable S84). The Wren email fix is complete.
+- **First task:** Confirm test lead 741 was cleaned, then check the first real Meta Instant Form employer lead landed clean (ad id in `utm_content`, routed to Riverside, provider email reached Riverside). Then the carried S84 clear-cache deploy and the S82 revenue-backfill owner decision.
+- **Cross-project:** None in-repo. The Instant Form itself lives in Meta Ads Manager and the middleware in Make (both external, no workspace folder). Riverside is Nell's client (`switchleads/clients/`) but no action is required there this session.
