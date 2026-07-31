@@ -1,5 +1,14 @@
 # Platform - Changelog
 
+## 2026-07-31 — Meta Instant Form live + verified with real leads (S86)
+
+The Instant Form path (EF shipped 2026-07-29) is now live and proven with genuine leads.
+
+- **Verified end to end:** #745 (Emma, Zenco) and #746 (Sam, SecureDigital) came through the Instant Form → Make → `meta-instant-employer-lead-router` → routed to Riverside, with real Meta ad ids in `utm_content`. Closes the ad-id-unverified item (test-tool leads carry no ad).
+- **Go-live incident + lesson:** real leads were "stuck at Meta" because the Make scenario was never toggled ON (a "Run once" test ≠ the live scheduling toggle). Make's FB Lead Ads trigger is a real-time webhook and does NOT backfill; leads that land while it's off must be recovered via Meta Lead Center export. Scenario-ON is load-bearing.
+- **Two employer intake channels now feed Riverside**, split by `source_form`: `s4b-employer-lead-v1` (on-site `/business/` form, Meta ad → landing page, full site fingerprint) and `s4b-employer-lead-meta-instant-v1` (Instant Form via Make, ~11 mapped fields). Cross-channel employer duplicates are expected and are NOT a billing issue (Employer Signed bills once per employer). Same-email intake dedup deferred until/unless frequent.
+- Cleaned test lead #744 + cross-channel dupe #747; real leads #742/#743/#745/#746 retained. Notion Tech Stack updated (Make active). Signed off: Owner (live).
+
 ## 2026-07-29 — Meta Instant Form receiver for the S4B employer route (new EF, no migration)
 
 New intake path for a Riverside Employer-Lead Meta **Instant Form** (lead ad) campaign. Instant Forms never touch the site, so the on-site Netlify pipeline can't fire; leads are pulled out of Meta by a Zapier/Make "Facebook Lead Ads" trigger and POSTed to a new Edge Function that lands them in `leads.submissions` identically to the on-site `/business/` form.
