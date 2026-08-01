@@ -111,6 +111,12 @@ export interface CanonicalSubmission {
   // under_30k passes / over_30k DQ'd at the gate. Added 2026-06-08.
   earnings_band: string | null;
   support_role_sector: string | null;
+  // Business-owner Skills Bootcamp entry + funding gate (the `business_status`
+  // qualifier step, EMS York & North Yorkshire courses). sole_trader /
+  // limited_company / partnership (pass) / not_trading (DQ on Digital Edge +
+  // Immediate Impact; pass on Creative Catapult). Drives the 90/100% funding
+  // split the provider settles at enrolment. Added 2026-07-30.
+  business_status: string | null;
 
   // Client-generated UUIDv4 set by the funded form's pre-submit JS so
   // the post-redirect /funded/thank-you/?ref=<uuid> link and the
@@ -368,7 +374,7 @@ export async function insertSubmission(
         fbclid, gclid, referrer, event_id, fbp, fbc,
         first_name, last_name, email, phone, la, age_band,
         employment_status, prior_level_3_or_higher, can_start_on_intake_date,
-        outcome_interest, why_this_course, earnings_band, support_role_sector,
+        outcome_interest, why_this_course, earnings_band, support_role_sector, business_status,
         preferred_intake_id, acceptable_intake_ids,
         postcode, region, reason, interest, situation, qualification,
         start_when, budget, courses_selected,
@@ -387,7 +393,7 @@ export async function insertSubmission(
         ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.event_id}, ${row.fbp}, ${row.fbc},
         ${eff.first_name}, ${eff.last_name}, ${row.email}, ${row.phone}, ${eff.la}, ${row.age_band},
         ${row.employment_status}, ${row.prior_level_3_or_higher}, ${row.can_start_on_intake_date},
-        ${row.outcome_interest}, ${row.why_this_course}, ${row.earnings_band}, ${row.support_role_sector},
+        ${row.outcome_interest}, ${row.why_this_course}, ${row.earnings_band}, ${row.support_role_sector}, ${row.business_status},
         ${row.preferred_intake_id}, ${row.acceptable_intake_ids},
         ${eff.postcode}, ${eff.region}, ${row.reason}, ${row.interest}, ${row.situation}, ${row.qualification},
         ${row.start_when}, ${row.budget}, ${row.courses_selected},
@@ -562,6 +568,9 @@ function normalise(
     // Support/guidance sector from the funded support_role qualifier step.
     // Present only on courses declaring that step; null everywhere else.
     support_role_sector: firstString(data["support_role_sector"], data["support-role-sector"]),
+    // Business status from the funded business_status qualifier step. Present
+    // only on courses declaring that step; null everywhere else.
+    business_status: firstString(data["business_status"], data["business-status"]),
 
     // Schema 1.2 cohort fields. preferred_intake_id is a single string
     // (slug like "tv-may-06"). acceptable_intake_ids comes from a hidden

@@ -268,6 +268,8 @@ CREATE TABLE leads.submissions (
   outcome_interest           TEXT,
   why_this_course            TEXT,
   earnings_band              TEXT, -- funded income gate (earnings qualifier step, EMS team-leading). under_30k / over_30k. Added migration 0200.
+  support_role_sector        TEXT, -- support-role entry gate (support_role qualifier step, EMS counselling South Tyneside). social_care / justice / substance_misuse / other_support / none. Added migration 0224.
+  business_status            TEXT, -- business-owner Skills Bootcamp entry + funding gate (business_status qualifier step, EMS York & North Yorkshire). sole_trader / limited_company / partnership / not_trading. Drives the 90/100% funding split. Added migration 0233.
 
   -- Cohort-aware intake fields (added in migration 0041; lead payload schema v1.2).
   -- preferred_intake_id: the cohort the learner picked first when offered multiple

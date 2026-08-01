@@ -64,7 +64,7 @@ const VOICE_OF_LEARNER_MAX_LEN = 1000;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type LostReason = "l3_mismatch_self_reported" | "cohort_decline" | "support_role_mismatch";
+type LostReason = "l3_mismatch_self_reported" | "cohort_decline" | "support_role_mismatch" | "business_status_mismatch";
 
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") {
@@ -156,6 +156,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // funding gates there is no pay fork that rescues it.
   const supportRoleReconfirmed = firstString(data.support_role_reconfirmed);
   const supportRoleMismatchFlag = supportRoleReconfirmed === "none";
+  // Business-status fastrack (EMS York & North Yorkshire Skills Bootcamps):
+  // learner reconfirms their business structure. NULL where not asked. The
+  // disqualifying answer is PER-COURSE (eligibility.business_status allow-list),
+  // so unlike support_role's hardcoded "none" the page computes the mismatch
+  // from matrix.json and posts business_status_mismatch; we trust that flag.
+  // A mismatch is a hard DQ: a course ENTRY + funding gate, no pay fork.
+  const businessStatusReconfirmed = firstString(data.business_status_reconfirmed);
+  const businessStatusMismatchFlag = toBool(data.business_status_mismatch) === true;
   const voiceRaw = firstString(data.voice_of_learner_intro);
   const voice = voiceRaw
     ? voiceRaw.trim().slice(0, VOICE_OF_LEARNER_MAX_LEN)
@@ -184,6 +192,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
           l3_mismatch_flag,
           earnings_reconfirmed,
           support_role_reconfirmed,
+          business_status_reconfirmed,
+          business_status_mismatch_flag,
           voice_of_learner_intro,
           terms_accepted,
           marketing_opt_in,
@@ -200,6 +210,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ${l3MismatchFlag},
           ${earningsReconfirmed},
           ${supportRoleReconfirmed},
+          ${businessStatusReconfirmed},
+          ${businessStatusMismatchFlag},
           ${voice},
           ${termsAccepted},
           ${marketingOptIn},
@@ -289,6 +301,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   let lostReason: LostReason | null = null;
   if (l3MismatchFlag && !fastrackPay) lostReason = "l3_mismatch_self_reported";
   else if (supportRoleMismatchFlag) lostReason = "support_role_mismatch";
+  else if (businessStatusMismatchFlag) lostReason = "business_status_mismatch";
   else if (cohortDeclineFlag) lostReason = "cohort_decline";
 
   // Tracks whether Step 8's DB flip actually succeeded. When false, we
@@ -305,6 +318,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
         ? `Learner self-flagged L3 mismatch on the fastrack form. Auto-moved to Lost (reason: ${reasonHuman}).`
         : lostReason === "support_role_mismatch"
         ? `Learner reconfirmed they are not in a qualifying support or guidance role. Auto-moved to Lost (reason: ${reasonHuman}).`
+        : lostReason === "business_status_mismatch"
+        ? `Learner reconfirmed a business status that isn't eligible for this course. Auto-moved to Lost (reason: ${reasonHuman}).`
         : `Learner declined the cohort dates on the fastrack form. Auto-moved to Lost (reason: ${reasonHuman}).`;
 
     try {
@@ -841,6 +856,9 @@ function lostReasonHumanText(reason: LostReason): string {
   }
   if (reason === "support_role_mismatch") {
     return "Not in a qualifying support role (self-reported on fastrack)";
+  }
+  if (reason === "business_status_mismatch") {
+    return "Business status not eligible for this course (self-reported on fastrack)";
   }
   return "Cohort decline (couldn't commit to start date)";
 }

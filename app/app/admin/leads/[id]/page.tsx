@@ -460,6 +460,9 @@ export default async function LeadDetailPage({
               <FieldRow label="Funding scheme" value={lead.funding_route} />
               <FieldRow label="Age band" value={lead.age_band} />
               <FieldRow label="Employment" value={lead.employment_status} />
+              <FieldRow label="Earnings band" value={lead.earnings_band} />
+              <FieldRow label="Support role sector" value={lead.support_role_sector} />
+              <FieldRow label="Business status" value={lead.business_status} />
               <FieldRow
                 label="Prior L3+"
                 value={lead.prior_level_3_or_higher == null ? null : String(lead.prior_level_3_or_higher)}
