@@ -1,5 +1,14 @@
 # Platform - Changelog
 
+## 2026-08-02 — Backfill interest (funding-use) for pre-mapping Instant Form leads
+
+- Migration: `0237_backfill_instant_form_interest.sql` (applied via `supabase db push`).
+- Change: set `leads.submissions.interest` on 5 Instant Form employer leads that predated the Make `interest` mapping: 745 (Zenco) `both`, 746 (SecureDigital) `upskilling_existing`, 749 (Serps Invaders) `upskilling_existing`, 750 ("Why") `not_sure_yet`, 754 (Your Best Solution) `upskilling_existing`. Values from Meta by owner, stored as option slugs to match live capture. 743 (Richard) already held `both` (on-site form); 751 (archived owner-test dupe) skipped.
+- Why: the "what would you use the funding for?" question was only mapped into Make on 2026-08-02.
+- Note: 750 `not_sure_yet` is inferred from the slug pattern (only funding-use value not yet seen from a live lead); correctable if Meta uses a different option value.
+- Impact: data fix, 5 rows, existing nullable text column. No consumer breaks.
+- Signed off: Owner (session 2026-08-02).
+
 ## 2026-08-02 — Backfill additional_notes for pre-mapping employer leads
 
 - Migration: `0236_backfill_instant_form_additional_notes.sql` (applied via `supabase db push`).
