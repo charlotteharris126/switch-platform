@@ -1,5 +1,14 @@
 # Platform Handoff, Session 86, 2026-07-31
 
+## ⚡ PUSH FROM Mable (switchable/site) 2026-08-02: business_status migrations applied + 3 EFs deployed; 14-EF sweep outstanding
+
+The EMS York & North Yorkshire Skills Bootcamp launch (switchable/site S87) shipped platform changes straight to production:
+- Migrations applied via `supabase db push`: 0233 (`leads.submissions.business_status`), 0234 (`fastrack_submissions.business_status_reconfirmed` + `business_status_mismatch_flag`), 0235 (`crm.enrolments.lost_reason` CHECK += `business_status_mismatch`). All additive; 0235 verified as a proper superset of the live 15-value constraint. Logged in `docs/changelog.md`.
+- Deployed `netlify-lead-router`, `netlify-leads-reconcile`, `fastrack-receive` (they carry the `_shared/ingest.ts` + `route-lead.ts` business_status changes). `verify_jwt=false` honoured from config.
+- Admin + provider portal lead-detail now render `business_status` (plus the previously-missing `earnings_band` / `support_role_sector`). Both `switch-platform` + `switchable-site` branches merged to `main` + pushed.
+- **OUTSTANDING (no live risk, keeps deployed = committed):** 14 other EFs import the changed `_shared` modules and still run the old code. Sweep them: admin-brevo-resync, admin-notify-callback, admin-test-email, backfill-sw-provider-contact-block, brevo-attribute-reconcile, drift-digest-daily, iris-daily-flags, meta-ads-ingest, republish-provider-sheet, routing-confirm, sheet-drift-reconcile-daily, sheet-edit-mirror, sms-chaser-attempt-1, sms-fastrack-prompt-cron.
+- **Also parked:** Riverside S4B Instant Form free-text mapping (add the free-text field to the Make.com mapping). Hub tasks NOT filed (capture key permission denied this session).
+
 ## Current state
 
 The Meta Instant Form employer-lead campaign is fully live and verified end to end. Instant Form → Make → `meta-instant-employer-lead-router` → routed to Riverside, with real leads now landing (Emma Franklin / Zenco #745, Sam Daramola / SecureDigital #746) carrying real Meta ad ids. The on-site `/business/` funnel is also converting Meta ad traffic (Nick #742, Richard #743). Both employer intake channels feed Riverside cleanly. The S84 clear-cache deploy and the S82 revenue-backfill decision remain open and untouched.

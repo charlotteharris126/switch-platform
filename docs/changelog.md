@@ -1,5 +1,15 @@
 # Platform - Changelog
 
+## 2026-08-02 — business_status DEPLOYED to production (EMS York & N.Yorks Skills Bootcamps)
+
+- Supersedes the 2026-07-30 "PREPARED, NOT YET DEPLOYED" entry below. The wrong-MCP-project blocker is cleared: the `~/Code/Switchable` session's Supabase MCP + CLI are both correctly on `igvlngouxcirqhlsrhga`.
+- Applied 0233, 0234, 0235 via `supabase db push` (only these three pending; local/remote in sync through 0232). Post-apply verified: `leads.submissions.business_status` present, both `fastrack_submissions` columns present, `enrolments_lost_reason_chk` now includes `business_status_mismatch` (proper superset of the prior 15 values, nothing dropped).
+- Deployed `netlify-lead-router`, `netlify-leads-reconcile`, `fastrack-receive` (essential writers + fastrack); `verify_jwt=false` honoured from config.
+- Admin + provider portal display shipped via the `switch-platform` main merge (Netlify auto-deploy).
+- Verified live: test lead id 753 captured `business_status='sole_trader'`, correctly DQ'd as `owner_test_submission`, not routed to EMS. All three course pages 200 on production with new content.
+- OUTSTANDING: the other ~14 `_shared` importer EFs still run pre-business_status code (benign, additive) — sweep to keep deployed = committed. A real `?ref` fastrack pass is still needed to trust the auto-DQ end to end.
+- Signed off: Owner (session 2026-08-02).
+
 ## 2026-07-30 — Add leads.submissions.business_status (EMS York & N.Yorks Skills Bootcamps) — PREPARED, NOT YET DEPLOYED
 
 - Migrations: `0233_submissions_business_status.sql`; `0234_fastrack_business_status_reconfirmed.sql` (`leads.fastrack_submissions.business_status_reconfirmed` + `business_status_mismatch_flag`, mirrors 0225); `0235_lost_reason_business_status_mismatch.sql` (widens the `crm.enrolments` lost_reason CHECK, mirrors 0226).
