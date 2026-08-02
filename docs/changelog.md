@@ -1,5 +1,13 @@
 # Platform - Changelog
 
+## 2026-08-02 — Backfill additional_notes for pre-mapping employer leads
+
+- Migration: `0236_backfill_instant_form_additional_notes.sql` (applied via `supabase db push`).
+- Change: set `leads.submissions.additional_notes` on 5 employer leads that predated the Make free-text mapping fix: 745 (Zenco) "Quality of applicants", 746 (SecureDigital) "Leadership gaps", 749 (Serps Invaders) "Productivity", 750 ("Why") "Keeping going in a secter that challenging" (verbatim), 743 (Brunel Stone Masonry) combined its existing "Upskilling" with "Hiring experienced good people" (owner option b; its Instant Form dupe #747 was deleted earlier).
+- Why: the Riverside S4B Meta Instant Form free-text question was only mapped into Make on 2026-08-02, so earlier employer leads landed with NULL notes. Values retrieved from Meta Lead Center by owner.
+- Impact: data fix only, 5 rows, existing nullable text column. No consumer breaks. DOWN restores prior values (NULL for the four, "Upskilling" for 743).
+- Signed off: Owner (session 2026-08-02).
+
 ## 2026-08-02 — business_status DEPLOYED to production (EMS York & N.Yorks Skills Bootcamps)
 
 - Supersedes the 2026-07-30 "PREPARED, NOT YET DEPLOYED" entry below. The wrong-MCP-project blocker is cleared: the `~/Code/Switchable` session's Supabase MCP + CLI are both correctly on `igvlngouxcirqhlsrhga`.
