@@ -1,5 +1,15 @@
 # Platform - Changelog
 
+## 2026-08-03 — SMS: send number-less when no rep/general phone (unblocks no-rep courses)
+
+- Code (no migration): `_shared/sms-utility.ts`, `_shared/route-lead.ts` (ProviderRow + `contact_phone`), `sms-chaser-attempt-1`, `fastrack-receive` (added `contact_phone` to both SMS provider SELECTs). Deployed all three sms-utility bundlers (sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron).
+- Why: the save-number + chaser SMS gate hard-required a regional rep phone for the learner's LA. Only EMS has reps, and only for the Tees Valley LAs, so every other SMS-enabled provider AND EMS's York & N.Yorks bootcamp learners could never be SMS'd. Charlotte tried to chase Alan Jones (758, york) and it was silently gated out.
+- Change: (1) `resolveSmsContact` prefers the named regional rep, else the provider general line (`contact_phone`), else empty. (2) Dropped the rep-phone gate; the send now proceeds on any gov/loan lead with a recipient phone at an SMS-enabled provider. (3) Number-less body variants drop the "Save their number" clause and attribute the call to the company name when no phone resolves.
+- **Scope decision (owner): ALL SMS-enabled providers**, not EMS-only. This newly activates SMS for providers that had the flags on but never sent (blocked by the old gate): WYK Digital + Riverside on gov/loan leads. Courses Direct stays blocked by the funding gate (self-funded). **Demo providers (demo-b2b/b2c/provider-ltd) are also SMS-enabled** — they'll send if they ever have a real gov/loan lead with a real phone; recommend turning their SMS flags off (not done this session).
+- Verified: fired the chaser for Alan (submission 758) end to end — `sms_log` 315, status `sent`, body "Hi Alan, Enterprise Made Simple tried calling about your Immediate Impact place. They'll try again soon, so keep an eye out for a call. Switchable", phone normalised `+447885482655`.
+- `crm.providers.contact_phone` remains NULL for all providers; set it per-provider to get the "save their number: X" variant instead of the number-less one.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — Disable EMS sheet writes (portal cutover complete)
 
 - Data-ops: `053_disable_ems_sheet_writes_2026_08_03.sql`. Set `crm.providers.sheet_webhook_url = NULL` for `enterprise-made-simple` only.
