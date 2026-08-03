@@ -728,7 +728,8 @@ const BREVO_SMS_RETRY_DELAYS_MS = [250, 1000, 4000] as const;
 export type SmsLogType =
   | "call_reminder_fastrack_link"
   | "call_reminder_save_number"
-  | "chaser_call_attempt";
+  | "chaser_call_attempt"
+  | "employer_intro";
 
 export interface SendSmsArgs {
   sql: Sql;

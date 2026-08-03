@@ -27,6 +27,12 @@ import {
   type BrevoAttributes,
 } from "./brevo.ts";
 import { logCapiSend, sendCapiLead } from "./meta-capi.ts";
+import { fireEmployerInitialSms } from "./sms-utility.ts";
+import {
+  type ProviderRow,
+  type SubmissionRow,
+  SUBMISSION_FULL_COLUMNS,
+} from "./route-lead.ts";
 
 const DATABASE_URL = Deno.env.get("SUPABASE_DB_URL");
 if (!DATABASE_URL) {
@@ -296,8 +302,9 @@ function buildPostRouteTask(
         await sendEmployerAckU1(insertedId, row);
       })(),
       sendProviderNotifyU2(insertedId, row),
+      sendEmployerInitialSmsLeg(insertedId),
     ]);
-    const legNames = ["sheet-append", "U1-employer", "U2-provider"];
+    const legNames = ["sheet-append", "U1-employer", "U2-provider", "employer-SMS"];
     results.forEach((result, idx) => {
       if (result.status === "rejected") {
         console.error(
@@ -310,6 +317,7 @@ function buildPostRouteTask(
     const sheetAppended = results[0].status === "fulfilled";
     const employerAcked = results[1].status === "fulfilled";
     const providerNotified = results[2].status === "fulfilled";
+    const employerSmsSent = results[3].status === "fulfilled";
     try {
       await sql`
         SELECT public.log_system_action_v1(
@@ -327,6 +335,7 @@ function buildPostRouteTask(
             sheet_appended: sheetAppended,
             provider_notified: providerNotified,
             employer_ack_sent: employerAcked,
+            employer_sms_sent: employerSmsSent,
           })}
         )
       `;
@@ -371,6 +380,35 @@ function buildPostRouteTask(
       }
     }
   })().catch((e) => console.error("post-route fan-out failed:", describeError(e)));
+}
+
+// Employer initial SMS leg. Re-reads the just-inserted submission (so the SMS
+// helpers get the same SubmissionRow shape the chaser uses) + the routed
+// provider, then fires the first-touch employer SMS. Best-effort: any skip
+// (no phone, provider SMS off) is logged, not thrown, so it never fails the
+// fan-out. Idempotent on (submission_id, 'employer_intro') via sendSms.
+async function sendEmployerInitialSmsLeg(submissionId: number): Promise<void> {
+  const [submission] = await sql<SubmissionRow[]>`
+    SELECT ${sql.unsafe(SUBMISSION_FULL_COLUMNS)}
+      FROM leads.submissions
+     WHERE id = ${submissionId}
+     LIMIT 1
+  `;
+  if (!submission?.primary_routed_to) return;
+  const [provider] = await sql<ProviderRow[]>`
+    SELECT provider_id, company_name, contact_email, contact_name, contact_phone,
+           sheet_id, sheet_webhook_url, crm_webhook_url, cc_emails,
+           active, archived_at, auto_route_enabled,
+           trust_line, regions, portal_enabled, regional_contacts
+      FROM crm.providers
+     WHERE provider_id = ${submission.primary_routed_to}
+     LIMIT 1
+  `;
+  if (!provider) return;
+  const outcome = await fireEmployerInitialSms({ sql, submission, provider });
+  if (outcome.kind === "skipped") {
+    console.log(`employer-initial SMS skipped (submission ${submissionId}): ${outcome.reason}`);
+  }
 }
 
 async function appendToRiversideSheet(submissionId: number, row: EmployerSubmissionRow): Promise<void> {

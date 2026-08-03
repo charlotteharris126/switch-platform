@@ -71,6 +71,16 @@ const EMPLOYER_CHASER_BODY_TEMPLATE =
 const EMPLOYER_CHASER_NO_PHONE_BODY_TEMPLATE =
   "Hi {{FIRSTNAME}}, {{REP_FIRST_NAME}} tried calling about your training enquiry. They'll try again shortly, keep an eye out. Switchable";
 
+// Employer/apprenticeship initial acknowledgement. Fires once when the employer
+// lead is routed to a provider (post-route fan-out in employer-lead-core),
+// alongside the U1 employer email — first-touch so the later chaser isn't the
+// first they hear from us. Utility message (uses sms_utility_enabled, not the
+// chaser flag). Same no-"apprenticeship" framing as the employer chaser.
+const B2B_INITIAL_BODY_TEMPLATE =
+  "Hi {{FIRSTNAME}}, thanks for your enquiry. {{REP_FIRST_NAME}} will be in touch shortly about funded training for your team. Save their number: {{PROVIDER_PHONE}}. Switchable";
+const B2B_INITIAL_NO_PHONE_BODY_TEMPLATE =
+  "Hi {{FIRSTNAME}}, thanks for your enquiry. {{REP_FIRST_NAME}} will be in touch shortly about funded training for your team. Switchable";
+
 // Trigger A — fastrack-link prompt. Fires 10 minutes after routing for any
 // matched lead that hasn't fastracked yet. Uses {{PROVIDER_NAME}} (company)
 // rather than {{REP_FIRST_NAME}} because the rep hasn't tried to call yet
@@ -151,6 +161,31 @@ export async function fireChaserSms(args: FireSmsArgs): Promise<SmsHelperOutcome
     tag: "chaser-attempt-1",
     triggerSource: args.triggerSourceOverride ?? "attempt_1_no_answer",
     cooldownHours: args.cooldownHours,
+  });
+  return { kind: "sent", result };
+}
+
+// --- Employer initial: first-touch ack when an employer lead is routed ---
+// Fires once per employer lead from the employer-lead-core post-route fan-out.
+// Utility message; only employer leads get it (learner leads have their own
+// first-touch flows). No-phone variant used when no rep/general line resolves.
+
+export async function fireEmployerInitialSms(args: FireSmsArgs): Promise<SmsHelperOutcome> {
+  if (args.submission.lead_type !== "employer_apprenticeship") {
+    return { kind: "skipped", reason: "not an employer lead" };
+  }
+  const gate = await runSharedGates(args.sql, args.submission, args.provider, "employer_initial");
+  if (!gate.ok) return { kind: "skipped", reason: gate.reason ?? "gate" };
+
+  const result = await renderAndSend({
+    sql: args.sql,
+    submission: args.submission,
+    provider: args.provider,
+    template: B2B_INITIAL_BODY_TEMPLATE,
+    templateNoPhone: B2B_INITIAL_NO_PHONE_BODY_TEMPLATE,
+    commType: "employer_intro",
+    tag: "employer-initial",
+    triggerSource: "employer_lead_routed",
   });
   return { kind: "sent", result };
 }
@@ -262,7 +297,7 @@ async function runSharedGates(
   sql: Sql,
   submission: SubmissionRow,
   provider: ProviderRow,
-  variant: "save_number" | "chaser",
+  variant: "save_number" | "chaser" | "employer_initial",
 ): Promise<SmsGateResult> {
   // Funding gate: gov/loan only for learner leads (self-funded has no callback
   // pattern). Employer/apprenticeship leads carry no funding_category (they're
@@ -293,7 +328,9 @@ async function runSharedGates(
   `;
   const flags = flagRows[0];
   if (!flags) return { ok: false, reason: "provider not found at SMS flag lookup" };
-  if (variant === "save_number" && !flags.sms_utility_enabled) {
+  // save_number + employer_initial are utility messages (sms_utility_enabled);
+  // the chaser uses its own flag.
+  if ((variant === "save_number" || variant === "employer_initial") && !flags.sms_utility_enabled) {
     return { ok: false, reason: "provider has sms_utility_enabled=false" };
   }
   if (variant === "chaser" && !flags.sms_chaser_enabled) {
