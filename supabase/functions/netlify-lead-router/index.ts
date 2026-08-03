@@ -312,7 +312,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
           );
           return;
         }
-        await sendOwnerAutoRouteFyiEmail(result.id, row, outcome.providerCompany, outcome.providerId, outcome.sheetAppended, outcome.providerNotified);
+        // Auto-route FYI email removed 2026-08-03 (owner request). The per-lead
+        // "no action needed" heads-up was redundant with /admin/leads and, since
+        // the sheet retirement (EMS portal-only etc.), misreported the skipped
+        // sheet append as "Sheet append failed — paste manually". Genuine
+        // side-effect failures still land in leads.dead_letter for Sasha's
+        // Monday scan; action-needed emails (manual-confirm, fallback) are
+        // separate and unaffected.
       })().catch((err) => console.error("auto-route task failed:", describeError(err)));
 
       if (runtime?.waitUntil) runtime.waitUntil(autoRouteTask);
@@ -335,47 +341,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   return json({ status: "ok", submission_id: result.id, form_name: formName });
 });
-
-// ----- Owner FYI email (auto-route path) -----
-
-async function sendOwnerAutoRouteFyiEmail(
-  submissionId: number,
-  row: CanonicalSubmission,
-  providerCompany: string,
-  providerId: string,
-  sheetAppended: boolean,
-  providerNotified: boolean,
-): Promise<void> {
-  const ownerEmail = getOwnerEmail();
-  if (!ownerEmail) {
-    console.error("No owner email address configured for auto-route FYI");
-    return;
-  }
-
-  const leadId = formatLeadId(submissionId, row.submitted_at);
-  const fullName = [row.first_name, row.last_name].filter(Boolean).join(" ") || "(no name)";
-  const dashboardUrl = adminLeadUrl(submissionId);
-
-  const sideEffectsLine = sheetAppended && providerNotified
-    ? "Sheet appended, provider notified."
-    : !sheetAppended
-      ? "<strong>Sheet append failed</strong> — check the dead_letter row, paste manually."
-      : "Sheet appended, but <strong>provider notification email failed</strong> — message them manually.";
-
-  const html = `
-    <p>Auto-routed lead ${leadId} (${fullName}, ${row.email ?? "no email"}) to <strong>${providerCompany}</strong>.</p>
-    <p>${sideEffectsLine}</p>
-    <p><a href="${dashboardUrl}">Open lead in dashboard</a></p>
-    <p style="color:#666;font-size:12px;margin-top:24px;">This is an FYI — no action needed unless side effects flagged above. Auto-routing fires when there's exactly one candidate provider and that provider has auto_route_enabled = true. To turn it off for ${providerId}, edit the provider in the dashboard.</p>
-  `.trim();
-
-  await sendBrevoEmail({
-    to: [{ email: ownerEmail, name: "Charlotte" }],
-    subject: `Auto-routed: ${leadId} → ${providerCompany}`,
-    htmlContent: html,
-    tags: ["lead-router", "auto-route-fyi"],
-  });
-}
 
 // ----- Re-application handler -----
 //

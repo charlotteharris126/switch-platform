@@ -1,5 +1,12 @@
 # Platform - Changelog
 
+## 2026-08-03 — Remove auto-route owner FYI email
+
+- Code (no migration): `netlify-lead-router/index.ts` — removed `sendOwnerAutoRouteFyiEmail` (call + function). Redeployed netlify-lead-router.
+- Why: owner request. The per-lead "auto-routed, no action needed" FYI was redundant with /admin/leads, and since the sheet retirement (EMS portal-only) it misreported the intentionally-skipped sheet append as "Sheet append failed — check the dead_letter row, paste manually" on EMS leads — a false alarm (nothing to paste; provider sees it in the portal).
+- Kept: action-needed emails are separate and unaffected — manual-confirm (`notifyOwnerOfRoutableLead`, multi-candidate / non-auto-route) and the auto-route fallback on routeLead failure. Genuine side-effect failures still land in `leads.dead_letter` for Sasha's Monday scan.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — SMS: B2B initial ack on employer-lead routing
 
 - Code (no migration; `comm_type` is unconstrained text): `_shared/brevo.ts` (SmsLogType += `employer_intro`), `_shared/sms-utility.ts` (B2B initial templates + `fireEmployerInitialSms` + `employer_initial` gate variant = utility flag), `_shared/employer-lead-core.ts` (4th post-route leg + audit field `employer_sms_sent`). Redeployed netlify-employer-lead-router, meta-instant-employer-lead-router, sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron.
