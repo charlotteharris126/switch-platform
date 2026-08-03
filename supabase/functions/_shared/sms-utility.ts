@@ -51,6 +51,16 @@ const CHASER_BODY_TEMPLATE =
   "Hi {{FIRSTNAME}}, {{REP_FIRST_NAME}} tried calling about your {{COURSE_NAME}} place. They'll try again, keep an eye out. Save their number: {{PROVIDER_PHONE}}. Switchable";
 // Worst-case: "Hi Catherine, George tried calling about your Social Media for E-commerce place. They'll try again, keep an eye out. Save their number: 01642 123456. Switchable" = 161 chars (sits right on the 160 single-segment boundary — most renders fit, longest course names tip to 2 segments).
 
+// No-phone variants. Used when neither a regional rep phone nor the provider's
+// general line (contact_phone) resolves — the "Save their number" clause is
+// dropped rather than rendering an empty number. {{REP_FIRST_NAME}} falls back
+// to the company name in this case (see resolveSmsContact). Same 160-char
+// budget; these are shorter than the phone variants so they stay in-segment.
+const SAVE_NUMBER_NO_PHONE_BODY_TEMPLATE =
+  "Hi {{FIRSTNAME}}, you've passed the stage 1 eligibility check. {{REP_FIRST_NAME}} will be in touch about your {{COURSE_NAME}} place soon, so keep an eye out for a call. Switchable";
+const CHASER_NO_PHONE_BODY_TEMPLATE =
+  "Hi {{FIRSTNAME}}, {{REP_FIRST_NAME}} tried calling about your {{COURSE_NAME}} place. They'll try again soon, so keep an eye out for a call. Switchable";
+
 // Trigger A — fastrack-link prompt. Fires 10 minutes after routing for any
 // matched lead that hasn't fastracked yet. Uses {{PROVIDER_NAME}} (company)
 // rather than {{REP_FIRST_NAME}} because the rep hasn't tried to call yet
@@ -103,6 +113,7 @@ export async function fireSaveNumberSms(args: FireSmsArgs): Promise<SmsHelperOut
     submission: args.submission,
     provider: args.provider,
     template: SAVE_NUMBER_BODY_TEMPLATE,
+    templateNoPhone: SAVE_NUMBER_NO_PHONE_BODY_TEMPLATE,
     commType: "call_reminder_save_number",
     tag: "save-number",
     triggerSource: "fastrack_qualify_pass",
@@ -121,6 +132,7 @@ export async function fireChaserSms(args: FireSmsArgs): Promise<SmsHelperOutcome
     submission: args.submission,
     provider: args.provider,
     template: CHASER_BODY_TEMPLATE,
+    templateNoPhone: CHASER_NO_PHONE_BODY_TEMPLATE,
     commType: "chaser_call_attempt",
     tag: "chaser-attempt-1",
     triggerSource: args.triggerSourceOverride ?? "attempt_1_no_answer",
@@ -266,14 +278,11 @@ async function runSharedGates(
   if (variant === "chaser" && !flags.sms_chaser_enabled) {
     return { ok: false, reason: "provider has sms_chaser_enabled=false" };
   }
-  // Phone-for-the-body gate. The body's "Save their number / they tried
-  // calling on ..." needs a number. Prefer the learner's regional rep; fall
-  // back to the provider's general line (contact_phone) for LAs/courses with no
-  // dedicated rep. Skip only when neither resolves.
-  const smsContact = resolveSmsContact(provider, submission);
-  if (!smsContact.phone) {
-    return { ok: false, reason: "no regional rep phone or general provider phone for SMS body" };
-  }
+  // No rep-phone gate. The body carries a number when one resolves (regional
+  // rep, else the provider's general line via resolveSmsContact) and drops the
+  // "Save their number" clause when none does (no-phone template variant).
+  // Either way the send proceeds — the recipient-phone gate above is the only
+  // hard phone requirement.
   return { ok: true };
 }
 
@@ -281,7 +290,10 @@ interface RenderAndSendArgs {
   sql: Sql;
   submission: SubmissionRow;
   provider: ProviderRow;
+  /** Body used when a phone (regional rep or provider general line) resolves. */
   template: string;
+  /** Body used when no phone resolves — drops the "Save their number" clause. */
+  templateNoPhone: string;
   commType: SmsLogType;
   tag: string;
   triggerSource: string;
@@ -293,7 +305,7 @@ async function renderAndSend(args: RenderAndSendArgs): Promise<SendSmsResult> {
   const courseName = matrix.courseTitle ?? "your course";
   const smsContact = resolveSmsContact(args.provider, args.submission);
 
-  const body = args.template
+  const body = (smsContact.phone ? args.template : args.templateNoPhone)
     .replace("{{FIRSTNAME}}", args.submission.first_name ?? "there")
     .replace("{{REP_FIRST_NAME}}", smsContact.repName)
     .replace("{{COURSE_NAME}}", courseName)
