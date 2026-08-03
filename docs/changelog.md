@@ -1,5 +1,13 @@
 # Platform - Changelog
 
+## 2026-08-03 — Disable EMS sheet writes (portal cutover complete)
+
+- Data-ops: `053_disable_ems_sheet_writes_2026_08_03.sql`. Set `crm.providers.sheet_webhook_url = NULL` for `enterprise-made-simple` only.
+- Why: EMS have fully moved to the provider portal (6 users, 5 logged in, last login 2026-08-03; no EMS-side sheet activity since 2026-07-15). Charlotte removed EMS's Google Drive access to the sheet 2026-08-03, so the DB→sheet append was writing to a file no one can read.
+- Effect: netlify-lead-router + fastrack-receive skip the sheet append for EMS (existing `if (provider?.sheet_webhook_url)` guard). Portal unaffected (reads DB directly). WYK Digital + Courses Direct keep their webhooks and stay on the sheet route; the shared reconcile-sheet-to-db cron (0115) stays scheduled for them and simply has nothing to reconcile for EMS.
+- `sheet_id` left in place as a record. Fully reversible — old webhook URL preserved in the data-ops DOWN.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — Fastrack: portal/admin reconfirm display + qualify-ack gate now cover business-status (and all variant gates)
 
 - Not a schema change (no migration). Edge Function + admin-app code fix. Surfaced by Alan (submission 758), the first real Immediate Impact fastrack: his provider portal showed "L3 reconfirmed: No" (a question II never asks) and "Transport help: No" (also not asked), while hiding his actual attestation `business_status_reconfirmed='sole_trader'`. Root cause: when business_status shipped (0233-0235, 2026-07-30) the fastrack *reconfirm* display and the qualify-ack *send gate* were never extended past L3.
