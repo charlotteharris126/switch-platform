@@ -1,5 +1,14 @@
 # Platform - Changelog
 
+## 2026-08-03 — SMS: employer chaser path (Riverside employer leads)
+
+- Code (no migration): `_shared/sms-utility.ts`, `_shared/route-lead.ts` (`lead_type` added to `SubmissionRow` + `SUBMISSION_FULL_COLUMNS`). Redeployed sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron.
+- Why: employer leads (`lead_type='employer_apprenticeship'`, e.g. Riverside) carry no `funding_category`, so every SMS gate blocked them at the gov/loan funding check. Charlotte tried to chase Shelley Levene (736, Riverside) and it silently skipped.
+- Change: employer leads are exempt from the funding gate (route on lead_type instead) and the chaser picks an employer-worded body — "tried calling about your training enquiry", no course/"your place", and avoids "apprenticeship" per Riverside's steer. Save-number + fastrack-prompt stay learner-only (employers never reach them: fastrack is learner-funnel; fastrack-prompt keeps its own gov/loan gate).
+- Verified: fired the chaser for Shelley (736) — `sms_log` 316, `sent`, body "Hi Shelley, Riverside Training Limited tried calling about your training enquiry. They'll try again shortly, keep an eye out. Switchable".
+- Polish flagged (not done): {{REP_FIRST_NAME}} renders the full company_name "Riverside Training Limited" — the "Limited" reads stiff mid-sentence. Trim the stored name or strip Ltd/Limited in the SMS render.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — SMS: send number-less when no rep/general phone (unblocks no-rep courses)
 
 - Code (no migration): `_shared/sms-utility.ts`, `_shared/route-lead.ts` (ProviderRow + `contact_phone`), `sms-chaser-attempt-1`, `fastrack-receive` (added `contact_phone` to both SMS provider SELECTs). Deployed all three sms-utility bundlers (sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron).
