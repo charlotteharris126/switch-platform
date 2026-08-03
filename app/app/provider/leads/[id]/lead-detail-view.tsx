@@ -98,11 +98,22 @@ export interface LeadDetailEnrolment {
 export interface FastrackDetail {
   id: number;
   submitted_at: string;
-  cohort_confirmed: boolean;
-  transport_help_requested: boolean;
-  docs_ready: boolean;
-  l3_reconfirmed: boolean;
+  // Booleans are nullable: a fastrack only asks the questions THIS course gates
+  // on, so a field is null when the learner was never asked it (e.g. transport
+  // help isn't asked on the York bootcamps). Null renders as "not asked" (row
+  // hidden), never as "No".
+  cohort_confirmed: boolean | null;
+  transport_help_requested: boolean | null;
+  docs_ready: boolean | null;
+  // Reconfirm questions: exactly one is populated per submission (the hard gate
+  // this course has); the rest are null. L3 for Free Courses for Jobs, earnings
+  // for AEB, support-role sector or business-status structure for the bootcamps.
+  l3_reconfirmed: boolean | null;
   l3_mismatch_flag: boolean;
+  earnings_reconfirmed: boolean | null;
+  support_role_reconfirmed: string | null;
+  business_status_reconfirmed: string | null;
+  business_status_mismatch_flag: boolean | null;
   voice_of_learner_intro: string | null;
   terms_accepted: boolean;
   marketing_opt_in: boolean;
@@ -544,6 +555,52 @@ function IntakeRow({
   );
 }
 
+// "sole_trader" -> "Sole trader", "substance_misuse" -> "Substance misuse".
+function titleizeReconfirm(v: string): string {
+  const words = v.split("_");
+  return words
+    .map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+// The fastrack re-asks whichever hard gate THIS course has, so exactly one
+// reconfirm question is answered per submission and the rest are null (never
+// asked). Surface only the one the learner actually saw — never a question
+// they were never asked. Warn drives the mismatch banner + the rose colour.
+function reconfirmRow(
+  detail: FastrackDetail,
+): { label: string; display: string; warn: boolean } | null {
+  if (detail.l3_reconfirmed !== null) {
+    return {
+      label: "Level 3 reconfirmed",
+      display: detail.l3_reconfirmed ? "Yes" : "No",
+      warn: detail.l3_mismatch_flag,
+    };
+  }
+  if (detail.earnings_reconfirmed !== null) {
+    return {
+      label: "Earns under £30k reconfirmed",
+      display: detail.earnings_reconfirmed ? "Yes" : "No",
+      warn: detail.earnings_reconfirmed === false,
+    };
+  }
+  if (detail.support_role_reconfirmed !== null) {
+    return {
+      label: "Support-role sector reconfirmed",
+      display: titleizeReconfirm(detail.support_role_reconfirmed),
+      warn: detail.support_role_reconfirmed === "none",
+    };
+  }
+  if (detail.business_status_reconfirmed !== null) {
+    return {
+      label: "Business status reconfirmed",
+      display: titleizeReconfirm(detail.business_status_reconfirmed),
+      warn: detail.business_status_mismatch_flag === true,
+    };
+  }
+  return null;
+}
+
 function FastrackSection({ detail }: { detail: FastrackDetail }) {
   const submitted = new Date(detail.submitted_at).toLocaleString("en-GB", {
     day: "numeric",
@@ -552,6 +609,7 @@ function FastrackSection({ detail }: { detail: FastrackDetail }) {
     hour: "2-digit",
     minute: "2-digit",
   });
+  const reconfirm = reconfirmRow(detail);
   return (
     <div className="bg-violet-50 border border-violet-200 rounded-xl p-5">
       <div className="flex items-baseline justify-between gap-3 mb-3">
@@ -561,25 +619,54 @@ function FastrackSection({ detail }: { detail: FastrackDetail }) {
         </div>
       </div>
 
-      {detail.l3_mismatch_flag && (
+      {reconfirm?.warn && (
         <div className="mb-3 bg-rose-100 border border-rose-300 rounded-md p-3 text-sm text-rose-900">
-          <strong>L3 mismatch flagged.</strong> The learner&apos;s reconfirmed Level 3 status doesn&apos;t
-          match what we routed on. Confirm with them before enrolling, or it routes via the
-          waitlist if not resolved.
+          <strong>Eligibility mismatch flagged.</strong> What the learner reconfirmed here
+          doesn&apos;t match what we routed on. Confirm with them before enrolling, or it routes
+          via the waitlist if not resolved.
         </div>
       )}
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-        <FastrackRow label="Cohort confirmed" value={detail.cohort_confirmed} />
+        {detail.cohort_confirmed !== null && (
+          <FastrackRow
+            label="Cohort confirmed"
+            value={detail.cohort_confirmed ? "Yes" : "No"}
+            positive={detail.cohort_confirmed}
+          />
+        )}
+        {reconfirm && (
+          <FastrackRow
+            label={reconfirm.label}
+            value={reconfirm.display}
+            positive={!reconfirm.warn}
+            tone={reconfirm.warn ? "warn" : "default"}
+          />
+        )}
+        {detail.docs_ready !== null && (
+          <FastrackRow
+            label="Docs ready"
+            value={detail.docs_ready ? "Yes" : "No"}
+            positive={detail.docs_ready}
+          />
+        )}
+        {detail.transport_help_requested !== null && (
+          <FastrackRow
+            label="Transport help requested"
+            value={detail.transport_help_requested ? "Yes" : "No"}
+            positive={detail.transport_help_requested}
+          />
+        )}
         <FastrackRow
-          label="L3 reconfirmed"
-          value={detail.l3_reconfirmed}
-          tone={detail.l3_mismatch_flag ? "warn" : "default"}
+          label="Terms accepted"
+          value={detail.terms_accepted ? "Yes" : "No"}
+          positive={detail.terms_accepted}
         />
-        <FastrackRow label="Docs ready" value={detail.docs_ready} />
-        <FastrackRow label="Transport help requested" value={detail.transport_help_requested} />
-        <FastrackRow label="Terms accepted" value={detail.terms_accepted} />
-        <FastrackRow label="Opted in to marketing" value={detail.marketing_opt_in} />
+        <FastrackRow
+          label="Opted in to marketing"
+          value={detail.marketing_opt_in ? "Yes" : "No"}
+          positive={detail.marketing_opt_in}
+        />
       </div>
 
       {detail.voice_of_learner_intro && detail.voice_of_learner_intro.trim().length > 0 && (
@@ -599,10 +686,12 @@ function FastrackSection({ detail }: { detail: FastrackDetail }) {
 function FastrackRow({
   label,
   value,
+  positive,
   tone = "default",
 }: {
   label: string;
-  value: boolean;
+  value: string;
+  positive: boolean;
   tone?: "default" | "warn";
 }) {
   return (
@@ -610,14 +699,14 @@ function FastrackRow({
       <span className="text-violet-700">{label}</span>
       <span
         className={`text-sm font-medium ${
-          tone === "warn" && !value
+          tone === "warn"
             ? "text-rose-700"
-            : value
+            : positive
               ? "text-emerald-700"
               : "text-slate-500"
         }`}
       >
-        {value ? "Yes" : "No"}
+        {value}
       </span>
     </div>
   );

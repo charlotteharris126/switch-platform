@@ -485,13 +485,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // (no L3 mismatch); AEB (team-leading) clears on earnings_reconfirmed===true
   // (reconfirmed under £30k). Either path fires the same "you're qualified" ack.
   // Support-role courses clear on a reconfirmed sector that isn't "none".
-  // Without this clause the ack never fires on them: l3Reconfirmed and
-  // earningsReconfirmed are both NULL (neither question is asked), so the
-  // original two-way condition is always false.
+  // Business-status courses (York & North Yorkshire bootcamps: Immediate Impact,
+  // Digital Edge, Creative Catapult) clear on a reconfirmed structure whose
+  // mismatch flag is false. Each gate must add its own clause here: on courses
+  // that don't ask a given question its reconfirm value is NULL, so without the
+  // matching clause the ack (and the sister save-number SMS below) never fires
+  // for that gate's learners — this was the business-status gap that let Alan's
+  // Immediate Impact fastrack land with no confirmation (fixed 2026-08-03).
   const supportRoleCleared = supportRoleReconfirmed !== null && !supportRoleMismatchFlag;
+  const businessStatusCleared = businessStatusReconfirmed !== null && !businessStatusMismatchFlag;
   if (
     cohortConfirmed === true &&
-    (l3Reconfirmed === false || earningsReconfirmed === true || supportRoleCleared) &&
+    (l3Reconfirmed === false || earningsReconfirmed === true || supportRoleCleared ||
+      businessStatusCleared) &&
     parent.email
   ) {
     const templateId = Number(Deno.env.get("BREVO_TEMPLATE_U_FASTRACK_QUALIFIED") ?? "0");

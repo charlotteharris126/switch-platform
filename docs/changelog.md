@@ -1,5 +1,14 @@
 # Platform - Changelog
 
+## 2026-08-03 — Fastrack: portal/admin reconfirm display + qualify-ack gate now cover business-status (and all variant gates)
+
+- Not a schema change (no migration). Edge Function + admin-app code fix. Surfaced by Alan (submission 758), the first real Immediate Impact fastrack: his provider portal showed "L3 reconfirmed: No" (a question II never asks) and "Transport help: No" (also not asked), while hiding his actual attestation `business_status_reconfirmed='sole_trader'`. Root cause: when business_status shipped (0233-0235, 2026-07-30) the fastrack *reconfirm* display and the qualify-ack *send gate* were never extended past L3.
+- **Portal display fix** (`app/provider/leads/[id]/lead-detail-view.tsx` + `page.tsx` select, and `app/admin/leads/[id]/page.tsx`): the fastrack section now renders whichever reconfirm the course actually asked (L3 / earnings / support-role sector / business-status structure), keyed off which column is non-null, and hides not-asked boolean rows instead of rendering NULL as "No". Mismatch banner + badges generalised from L3-only to any eligibility mismatch. Provider `FastrackRow` now takes a string value (was boolean) so text reconfirms (sole_trader etc.) render.
+- **Qualify-ack gate fix** (`fastrack-receive/index.ts`): added `businessStatusCleared` to the `u_fastrack_qualified` send condition. Business-status learners had `l3_reconfirmed`, `earnings_reconfirmed`, `support_role_reconfirmed` all NULL, so the OR gate never fired — no confirmation email AND no save-number SMS (Trigger B sits inside the same block). Same class of gap the support-role clause already warns about.
+- Impact: display is read-only, no data touched. Gate change is additive (fires the ack for a cohort that currently gets nothing). Missed sends to date: Alan (758) only — the one other business-status fastrack (753, owner Digital Edge test) had cohort_confirmed=false and wouldn't qualify anyway.
+- Deploy: admin app via Netlify (switch-platform); `fastrack-receive` via `supabase functions deploy`. Alan's ack email + SMS backfill pending owner decision.
+- Signed off: pending owner (session 2026-08-03).
+
 ## 2026-08-02 — Backfill interest (funding-use) for pre-mapping Instant Form leads
 
 - Migration: `0237_backfill_instant_form_interest.sql` (applied via `supabase db push`).

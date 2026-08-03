@@ -149,7 +149,7 @@ export default async function ProviderLeadDetailPage({ params }: Props) {
         .schema("leads")
         .from("fastrack_submissions")
         .select(
-          "id, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in",
+          "id, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, earnings_reconfirmed, support_role_reconfirmed, business_status_reconfirmed, business_status_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in",
         )
         .eq("parent_submission_id", submissionId)
         .order("submitted_at", { ascending: false })

@@ -124,7 +124,7 @@ export default async function LeadDetailPage({
     supabase
       .schema("leads")
       .from("fastrack_submissions")
-      .select("id, parent_submission_id, schema_version, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in, created_at")
+      .select("id, parent_submission_id, schema_version, submitted_at, cohort_confirmed, transport_help_requested, docs_ready, l3_reconfirmed, l3_mismatch_flag, earnings_reconfirmed, support_role_reconfirmed, business_status_reconfirmed, business_status_mismatch_flag, voice_of_learner_intro, terms_accepted, marketing_opt_in, created_at")
       .eq("parent_submission_id", leadId)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -281,12 +281,32 @@ export default async function LeadDetailPage({
         docs_ready: boolean | null;
         l3_reconfirmed: boolean | null;
         l3_mismatch_flag: boolean;
+        earnings_reconfirmed: boolean | null;
+        support_role_reconfirmed: string | null;
+        business_status_reconfirmed: string | null;
+        business_status_mismatch_flag: boolean | null;
         voice_of_learner_intro: string | null;
         terms_accepted: boolean;
         marketing_opt_in: boolean;
         created_at: string;
       }
     | null;
+
+  // The fastrack re-asks whichever hard gate the course has; exactly one
+  // reconfirm question is answered, the rest are null (never asked). Surface
+  // only the one asked — mirrors the provider portal, never shows a question
+  // the learner never saw (e.g. an L3 row on a business-status bootcamp).
+  const fastrackReconfirm = !fastrack
+    ? null
+    : fastrack.l3_reconfirmed !== null
+      ? { label: "L3 reconfirmed", value: fastrack.l3_reconfirmed ? "Yes" : "No" }
+      : fastrack.earnings_reconfirmed !== null
+        ? { label: "Earns under £30k reconfirmed", value: fastrack.earnings_reconfirmed ? "Yes" : "No" }
+        : fastrack.support_role_reconfirmed !== null
+          ? { label: "Support-role sector reconfirmed", value: fastrack.support_role_reconfirmed }
+          : fastrack.business_status_reconfirmed !== null
+            ? { label: "Business status reconfirmed", value: fastrack.business_status_reconfirmed }
+            : null;
 
   const fullName = [lead.first_name, lead.last_name].filter(Boolean).join(" ") || "—";
   const isEmployerLead = lead.lead_type === "employer_apprenticeship";
@@ -546,6 +566,12 @@ export default async function LeadDetailPage({
                   {fastrack.l3_mismatch_flag && (
                     <Badge variant="destructive">L3 mismatch (self-reported)</Badge>
                   )}
+                  {fastrack.business_status_mismatch_flag && (
+                    <Badge variant="destructive">Business status mismatch</Badge>
+                  )}
+                  {fastrack.support_role_reconfirmed === "none" && (
+                    <Badge variant="destructive">Support-role mismatch</Badge>
+                  )}
                   {fastrack.cohort_confirmed === false && (
                     <Badge variant="destructive">Cohort declined</Badge>
                   )}
@@ -565,18 +591,19 @@ export default async function LeadDetailPage({
                   label="Cohort confirmed"
                   value={fastrack.cohort_confirmed == null ? null : fastrack.cohort_confirmed ? "Yes" : "No"}
                 />
-                <FieldRow
-                  label="Transport help"
-                  value={fastrack.transport_help_requested == null ? null : fastrack.transport_help_requested ? "Yes" : "No"}
-                />
+                {fastrack.transport_help_requested != null && (
+                  <FieldRow
+                    label="Transport help"
+                    value={fastrack.transport_help_requested ? "Yes" : "No"}
+                  />
+                )}
                 <FieldRow
                   label="Docs ready"
                   value={fastrack.docs_ready == null ? null : fastrack.docs_ready ? "Yes" : "No"}
                 />
-                <FieldRow
-                  label="L3 reconfirmed"
-                  value={fastrack.l3_reconfirmed == null ? null : fastrack.l3_reconfirmed ? "Yes" : "No"}
-                />
+                {fastrackReconfirm && (
+                  <FieldRow label={fastrackReconfirm.label} value={fastrackReconfirm.value} />
+                )}
                 <FieldRow label="Marketing opt-in (this submission)" value={String(fastrack.marketing_opt_in)} />
                 <FieldRow label="Terms accepted" value={String(fastrack.terms_accepted)} />
                 {fastrack.voice_of_learner_intro && (
