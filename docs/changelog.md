@@ -1,5 +1,14 @@
 # Platform - Changelog
 
+## 2026-08-03 — Fix: allow 'employer_intro' in sms_log.comm_type (B2B initial was silently failing)
+
+- Migration: `0238_sms_log_comm_type_employer_intro.sql` (applied via `supabase db push`). Widened `crm.sms_log.comm_type` CHECK to include `employer_intro`.
+- Why: `crm.sms_log` HAS a `sms_log_comm_type_check` CHECK (only the three learner values). The B2B initial SMS logs `employer_intro`, so every send was rejected at insert and rolled back — `sendSms` catches the insert failure and returns without surfacing, so it looked silent, and the fan-out audit field `employer_sms_sent` read `true` (it only means the leg didn't throw, not that an SMS sent). First real hit: Paul Malcolm McGuire (763, Riverside, 18:30). The earlier B2B-initial changelog entry wrongly said comm_type was unconstrained (a two-statement diagnostic showed only the second result); corrected there too.
+- Backfill: Paul (763) initial re-fired via the new `kind` param on `sms-chaser-attempt-1` — `sms_log` 320, sent.
+- Also added: `sms-chaser-attempt-1` now takes an optional `kind` ('chaser' default | 'employer_initial') so the initial (which normally auto-fires on routing) has a manual trigger for testing + one-off backfills.
+- Follow-up (not done): `sendSms` swallows the sms_log insert failure — a future unknown comm_type would fail silently again. Consider surfacing insert failures (dead_letter) and making the `employer_sms_sent` audit field reflect actual send, not leg-completion.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — Remove auto-route owner FYI email
 
 - Code (no migration): `netlify-lead-router/index.ts` — removed `sendOwnerAutoRouteFyiEmail` (call + function). Redeployed netlify-lead-router.
@@ -9,7 +18,7 @@
 
 ## 2026-08-03 — SMS: B2B initial ack on employer-lead routing
 
-- Code (no migration; `comm_type` is unconstrained text): `_shared/brevo.ts` (SmsLogType += `employer_intro`), `_shared/sms-utility.ts` (B2B initial templates + `fireEmployerInitialSms` + `employer_initial` gate variant = utility flag), `_shared/employer-lead-core.ts` (4th post-route leg + audit field `employer_sms_sent`). Redeployed netlify-employer-lead-router, meta-instant-employer-lead-router, sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron.
+- Code + migration 0238 (see 2026-08-03 constraint-fix entry above — the initial's `employer_intro` comm_type needed adding to the `sms_log_comm_type_check` CHECK; the original claim here that `comm_type` was unconstrained was WRONG): `_shared/brevo.ts` (SmsLogType += `employer_intro`), `_shared/sms-utility.ts` (B2B initial templates + `fireEmployerInitialSms` + `employer_initial` gate variant = utility flag), `_shared/employer-lead-core.ts` (4th post-route leg + audit field `employer_sms_sent`). Redeployed netlify-employer-lead-router, meta-instant-employer-lead-router, sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron.
 - Why: employers had no first-touch SMS — the chaser would be the first thing they heard from us. This adds an acknowledgement when their enquiry is routed to the provider, alongside the existing U1 employer email.
 - Behaviour: fires once per routed employer lead (idempotent on `submission_id`+`employer_intro`), best-effort in the fan-out (never fails routing). Utility message, gated on `sms_utility_enabled` + phone present. Body: "Hi {first}, thanks for your enquiry. {provider} will be in touch shortly about funded training for your team. [Save their number: {phone}.] Switchable". No-phone variant drops the number clause.
 - B2B SMS set is now 2 (initial + chaser); no fastrack/save-number equivalents (employers don't hit those funnels).

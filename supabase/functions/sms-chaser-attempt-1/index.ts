@@ -24,7 +24,7 @@
 // affected.
 
 import postgres from "npm:postgres@3";
-import { fireChaserSms } from "../_shared/sms-utility.ts";
+import { fireChaserSms, fireEmployerInitialSms } from "../_shared/sms-utility.ts";
 import {
   SUBMISSION_FULL_COLUMNS,
   type ProviderRow,
@@ -49,6 +49,10 @@ async function getAuditSharedSecret(): Promise<string> {
 interface RequestBody {
   submission_id?: unknown;
   cooldown_hours?: unknown;
+  // 'chaser' (default) fires the no-answer chaser; 'employer_initial' fires the
+  // B2B first-touch ack. The latter normally auto-fires on routing; this manual
+  // path exists for testing + one-off backfills of leads that missed it.
+  kind?: unknown;
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -112,7 +116,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
   if (!provider) return json({ error: "routed provider not found" }, 404);
 
-  const outcome = await fireChaserSms({ sql, submission, provider, cooldownHours, triggerSourceOverride });
+  const kind = body.kind === "employer_initial" ? "employer_initial" : "chaser";
+  const outcome = kind === "employer_initial"
+    ? await fireEmployerInitialSms({ sql, submission, provider })
+    : await fireChaserSms({ sql, submission, provider, cooldownHours, triggerSourceOverride });
   if (outcome.kind === "skipped") {
     return json({ ok: true, status: "skipped", reason: outcome.reason });
   }
