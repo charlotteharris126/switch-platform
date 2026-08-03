@@ -70,6 +70,9 @@ export interface SubmissionRow {
   course_id: string | null;
   funding_category: string | null;
   funding_route: string | null;
+  // 'employer_apprenticeship' for B2B/employer leads (no funding_category, no
+  // course); NULL/other for funded learner leads. Drives the employer SMS path.
+  lead_type: string | null;
   first_name: string | null;
   last_name: string | null;
   email: string | null;
@@ -1225,6 +1228,7 @@ async function sendU1Transactional(
 // aligned. Exposed so the Brevo reconciler can pull a submission row once
 // and feed both build helpers without duplicating the SELECT.
 export const SUBMISSION_FULL_COLUMNS = `id, submitted_at, course_id, funding_category, funding_route,
+       lead_type,
        first_name, last_name, email, phone,
        la, region_scheme, age_band, employment_status,
        prior_level_3_or_higher, can_start_on_intake_date,

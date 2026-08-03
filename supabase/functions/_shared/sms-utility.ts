@@ -61,6 +61,16 @@ const SAVE_NUMBER_NO_PHONE_BODY_TEMPLATE =
 const CHASER_NO_PHONE_BODY_TEMPLATE =
   "Hi {{FIRSTNAME}}, {{REP_FIRST_NAME}} tried calling about your {{COURSE_NAME}} place. They'll try again soon, so keep an eye out for a call. Switchable";
 
+// Employer/apprenticeship chaser. B2B contacts (HRDs etc.), so no course, no
+// "your place", and the word "apprenticeship" is deliberately avoided per
+// Riverside's steer (reads as trades-only to employers) — framed as a training
+// enquiry. {{REP_FIRST_NAME}} renders as the provider company name when there's
+// no named rep (the usual case for these leads).
+const EMPLOYER_CHASER_BODY_TEMPLATE =
+  "Hi {{FIRSTNAME}}, {{REP_FIRST_NAME}} tried calling about your training enquiry. They'll try again shortly, keep an eye out. Save their number: {{PROVIDER_PHONE}}. Switchable";
+const EMPLOYER_CHASER_NO_PHONE_BODY_TEMPLATE =
+  "Hi {{FIRSTNAME}}, {{REP_FIRST_NAME}} tried calling about your training enquiry. They'll try again shortly, keep an eye out. Switchable";
+
 // Trigger A — fastrack-link prompt. Fires 10 minutes after routing for any
 // matched lead that hasn't fastracked yet. Uses {{PROVIDER_NAME}} (company)
 // rather than {{REP_FIRST_NAME}} because the rep hasn't tried to call yet
@@ -127,12 +137,16 @@ export async function fireChaserSms(args: FireSmsArgs): Promise<SmsHelperOutcome
   const gate = await runSharedGates(args.sql, args.submission, args.provider, "chaser");
   if (!gate.ok) return { kind: "skipped", reason: gate.reason ?? "gate" };
 
+  // Employer leads get the training-enquiry wording; learners keep the
+  // course-place wording. Both fall back to the no-phone variant automatically.
+  const isEmployerLead = args.submission.lead_type === "employer_apprenticeship";
+
   const result = await renderAndSend({
     sql: args.sql,
     submission: args.submission,
     provider: args.provider,
-    template: CHASER_BODY_TEMPLATE,
-    templateNoPhone: CHASER_NO_PHONE_BODY_TEMPLATE,
+    template: isEmployerLead ? EMPLOYER_CHASER_BODY_TEMPLATE : CHASER_BODY_TEMPLATE,
+    templateNoPhone: isEmployerLead ? EMPLOYER_CHASER_NO_PHONE_BODY_TEMPLATE : CHASER_NO_PHONE_BODY_TEMPLATE,
     commType: "chaser_call_attempt",
     tag: "chaser-attempt-1",
     triggerSource: args.triggerSourceOverride ?? "attempt_1_no_answer",
@@ -250,9 +264,16 @@ async function runSharedGates(
   provider: ProviderRow,
   variant: "save_number" | "chaser",
 ): Promise<SmsGateResult> {
-  // Funding gate: gov/loan only (matches spec — self-funded has no
-  // callback pattern, no rep phone reliably set).
-  if (submission.funding_category !== "gov" && submission.funding_category !== "loan") {
+  // Funding gate: gov/loan only for learner leads (self-funded has no callback
+  // pattern). Employer/apprenticeship leads carry no funding_category (they're
+  // B2B enquiries, not funded places) and are exempt — they route on lead_type
+  // and get the employer-worded body.
+  const isEmployerLead = submission.lead_type === "employer_apprenticeship";
+  if (
+    !isEmployerLead &&
+    submission.funding_category !== "gov" &&
+    submission.funding_category !== "loan"
+  ) {
     return { ok: false, reason: `funding_category=${submission.funding_category ?? "null"} not in (gov, loan)` };
   }
   // Learner phone gate.
