@@ -48,6 +48,9 @@ export interface ProviderRow {
   company_name: string;
   contact_email: string;
   contact_name: string | null;
+  // General provider phone. SMS bodies fall back to this when the learner's LA
+  // has no dedicated regional rep (see resolveSmsContact in _shared/sms-utility.ts).
+  contact_phone: string | null;
   sheet_id: string | null;
   sheet_webhook_url: string | null;
   crm_webhook_url: string | null;

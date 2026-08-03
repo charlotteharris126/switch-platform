@@ -548,7 +548,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
            LIMIT 1
         `;
         const [providerRow] = await sql<ProviderRow[]>`
-          SELECT provider_id, company_name, contact_email, contact_name,
+          SELECT provider_id, company_name, contact_email, contact_name, contact_phone,
                  sheet_id, sheet_webhook_url, crm_webhook_url, cc_emails,
                  active, archived_at, auto_route_enabled,
                  trust_line, regions, portal_enabled, regional_contacts

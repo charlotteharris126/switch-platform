@@ -209,6 +209,29 @@ function buildFastrackUrlForSms(submission: SubmissionRow): string {
 
 // --- shared internals ---
 
+// Resolve the phone number + "who's calling" name for an SMS body. Prefer the
+// named regional rep for the learner's LA; when the course/LA has no dedicated
+// rep (e.g. the York & North Yorkshire bootcamps, which have no per-LA rep),
+// fall back to the provider's general line (crm.providers.contact_phone),
+// attributed to the company name rather than a specific person. Returns
+// phone="" only when neither a regional rep phone nor a general line is set —
+// the caller then skips, because every SMS body needs a number to save/call.
+function resolveSmsContact(
+  provider: ProviderRow,
+  submission: SubmissionRow,
+): { phone: string; repName: string } {
+  const regional = renderProviderContactValues(provider, submission);
+  if (regional.phone) {
+    return {
+      phone: regional.phone,
+      repName: resolveRepFirstName(provider, submission) || provider.company_name,
+    };
+  }
+  const general = (provider.contact_phone ?? "").trim();
+  if (general) return { phone: general, repName: provider.company_name };
+  return { phone: "", repName: provider.company_name };
+}
+
 async function runSharedGates(
   sql: Sql,
   submission: SubmissionRow,
@@ -243,12 +266,14 @@ async function runSharedGates(
   if (variant === "chaser" && !flags.sms_chaser_enabled) {
     return { ok: false, reason: "provider has sms_chaser_enabled=false" };
   }
-  // Regional rep phone gate. Without a regional contact resolving to a
-  // phone, the body's "Save their number / call you back on ..." can't
-  // render meaningfully. We don't fall back to a generic provider company
-  // phone — spec is explicit that non-regional providers don't get SMS.
-  const contact = renderProviderContactValues(provider, submission);
-  if (!contact.phone) return { ok: false, reason: "no regional rep phone for submission.la" };
+  // Phone-for-the-body gate. The body's "Save their number / they tried
+  // calling on ..." needs a number. Prefer the learner's regional rep; fall
+  // back to the provider's general line (contact_phone) for LAs/courses with no
+  // dedicated rep. Skip only when neither resolves.
+  const smsContact = resolveSmsContact(provider, submission);
+  if (!smsContact.phone) {
+    return { ok: false, reason: "no regional rep phone or general provider phone for SMS body" };
+  }
   return { ok: true };
 }
 
@@ -266,14 +291,13 @@ interface RenderAndSendArgs {
 async function renderAndSend(args: RenderAndSendArgs): Promise<SendSmsResult> {
   const matrix = await getMatrixContext(args.submission.course_id, args.submission.preferred_intake_id);
   const courseName = matrix.courseTitle ?? "your course";
-  const repFirstName = resolveRepFirstName(args.provider, args.submission);
-  const contact = renderProviderContactValues(args.provider, args.submission);
+  const smsContact = resolveSmsContact(args.provider, args.submission);
 
   const body = args.template
     .replace("{{FIRSTNAME}}", args.submission.first_name ?? "there")
-    .replace("{{REP_FIRST_NAME}}", repFirstName || args.provider.company_name)
+    .replace("{{REP_FIRST_NAME}}", smsContact.repName)
     .replace("{{COURSE_NAME}}", courseName)
-    .replace("{{PROVIDER_PHONE}}", contact.phone);
+    .replace("{{PROVIDER_PHONE}}", smsContact.phone);
 
   const recipientPhone = normaliseUkPhoneToE164(args.submission.phone ?? "");
 
