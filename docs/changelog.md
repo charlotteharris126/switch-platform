@@ -1,5 +1,15 @@
 # Platform - Changelog
 
+## 2026-08-03 — SMS: B2B initial ack on employer-lead routing
+
+- Code (no migration; `comm_type` is unconstrained text): `_shared/brevo.ts` (SmsLogType += `employer_intro`), `_shared/sms-utility.ts` (B2B initial templates + `fireEmployerInitialSms` + `employer_initial` gate variant = utility flag), `_shared/employer-lead-core.ts` (4th post-route leg + audit field `employer_sms_sent`). Redeployed netlify-employer-lead-router, meta-instant-employer-lead-router, sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron.
+- Why: employers had no first-touch SMS — the chaser would be the first thing they heard from us. This adds an acknowledgement when their enquiry is routed to the provider, alongside the existing U1 employer email.
+- Behaviour: fires once per routed employer lead (idempotent on `submission_id`+`employer_intro`), best-effort in the fan-out (never fails routing). Utility message, gated on `sms_utility_enabled` + phone present. Body: "Hi {first}, thanks for your enquiry. {provider} will be in touch shortly about funded training for your team. [Save their number: {phone}.] Switchable". No-phone variant drops the number clause.
+- B2B SMS set is now 2 (initial + chaser); no fastrack/save-number equivalents (employers don't hit those funnels).
+- Not live-tested end to end (would ping Riverside with a fake lead); send path proven by the Shelley chaser, wiring mirrors the email legs. Verify on the next real employer lead.
+- Open polish (both B2B messages): {{REP_FIRST_NAME}} renders full company_name incl "Limited". Trim Ltd/Limited in the SMS render when convenient.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — SMS: employer chaser path (Riverside employer leads)
 
 - Code (no migration): `_shared/sms-utility.ts`, `_shared/route-lead.ts` (`lead_type` added to `SubmissionRow` + `SUBMISSION_FULL_COLUMNS`). Redeployed sms-chaser-attempt-1, fastrack-receive, sms-fastrack-prompt-cron.
