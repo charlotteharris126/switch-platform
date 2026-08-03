@@ -19,7 +19,7 @@ Platform SMS and fastrack surfaces were overhauled this session around the EMS Y
 ## Next steps
 
 1. **Verify the B2B initial SMS auto-fires on the NEXT real employer lead.** Paul's was a manual backfill via `kind`; the automatic fan-out path has not fired a fresh lead since the 0238 constraint fix. Watch the next genuine `/business/` or Instant Form employer enquiry land an `employer_intro` row in `crm.sms_log`.
-2. **CARRIED FROM S84 (owner ~2 min): clear-cache deploy the platform app.** Removes the `DBG-SRV` banner on Riverside's portal + activates `focus_area` on the admin preview. Netlify to platform app to Deploys to "Clear cache and deploy site".
+2. ~~CARRIED FROM S84: clear-cache deploy for the `DBG-SRV` banner~~ **LIKELY DONE, dropped as stale (S87 check).** The diagnostic banner was already removed from source (commit `1e15b6c`, "confirmed working on Riverside portal"), so the carried "clear-cache deploy to remove it" was stale. If the banner is somehow still visible on the live portal, a Netlify "Clear cache and deploy site" on the platform app clears it; otherwise nothing to do.
 3. **CARRIED FROM S82 (owner decides):** revenue-backfill button on `/admin/data-ops` + revenue/profit on the tracker. ~£2,100 collected, `billed_amount` null on every enrolment, `crm.billing_events` empty. Then backfill 14 EMS + 1 WYK if yes.
 4. **Optional polish:** trim "Ltd/Limited" from `company_name` in B2B SMS rendering (reads "Riverside Training Limited"). One-line in `resolveSmsContact` (`_shared/sms-utility.ts`).
 5. **Optional:** switch off `sms_utility_enabled` / `sms_chaser_enabled` on the 3 demo providers (demo-b2b / demo-b2c / demo-provider-ltd) so they can't fire real SMS now the rep-phone gate is gone.
@@ -40,7 +40,7 @@ Platform SMS and fastrack surfaces were overhauled this session around the EMS Y
 ## Watch items
 
 - **B2B initial SMS auto-fire** on the next real employer lead (unproven since the 0238 fix; Paul was a manual backfill).
-- **CARRIED: `DBG-SRV` banner** on Riverside's portal until the clear-cache deploy lands.
+- `DBG-SRV` banner: removed from source and confirmed gone per commit `1e15b6c`; only re-check if it visibly reappears on the live portal.
 - **CARRIED: Meta spend stale** in `ads_switchable.meta_daily` since 1 July.
 - **26 sheet-stale drift rows** in `/admin/errors` — watch they clear now the EMS sheet is off.
 - `platform/weekly-notes.md` has an uncommitted change not from this session (Sasha's Monday output); left as-is.
@@ -48,5 +48,5 @@ Platform SMS and fastrack surfaces were overhauled this session around the EMS Y
 ## Next session
 
 - **Folder:** `platform/`
-- **First task:** Verify the B2B initial SMS auto-fired on the latest real employer lead (`employer_intro` in `crm.sms_log`). Then the carried S84 clear-cache deploy and the S82 revenue-backfill owner decision.
+- **First task:** Verify the B2B initial SMS auto-fired on the latest real employer lead (`employer_intro` in `crm.sms_log`). Then the S82 revenue-backfill owner decision.
 - **Cross-project:** None required. Riverside is Nell's client (`switchleads/clients/`) but the employer SMS lifecycle is platform-internal; nothing pushed there.
