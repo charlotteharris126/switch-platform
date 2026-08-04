@@ -74,6 +74,11 @@ export interface EmployerSubmissionRow {
   routing_outcome: "routed" | "disqualified";
   routing_outcome_hint: string | null;
   routed_at: string | null;
+  // Cross-channel dedup: when a matching recent employer lead already exists
+  // for the same provider, this lead is flagged is_dq with dq_reason and linked
+  // to the canonical via parent_submission_id. NULL on a normal lead.
+  dq_reason: string | null;
+  duplicate_of: number | null;
   // Submitter contact
   first_name: string | null;
   last_name: string | null;
@@ -135,17 +140,66 @@ export async function processEmployerLead(
   opts: { sourceForm: string; fireCapi: boolean },
 ): Promise<ProcessResult> {
   const row = normalise(data, rawBody, opts.sourceForm);
+
+  // Cross-channel dedup (provider-agnostic). An employer who hits both the
+  // Instant Form and the on-site /business/ form (or submits twice) creates a
+  // duplicate. If a recent non-dupe employer lead already exists for the SAME
+  // provider with the same email (or phone, format-normalised), flag this one a
+  // duplicate and DON'T route it: no routing_log, no enrolment, no fan-out (no
+  // 2nd SMS / U1 / U2 / provider row / CAPI). Keeps the record, linked to the
+  // canonical. Keeps the FIRST arrival; a manual re-mark can flip it if the
+  // later one is richer (see Andy #767/#768, S87). Keyed on primary_routed_to
+  // so it works for any provider, not just Riverside.
+  if (row.routing_outcome === "routed") {
+    const dupeOf = await findEmployerDuplicate(row);
+    if (dupeOf !== null) {
+      row.routing_outcome = "disqualified";
+      row.primary_routed_to = null;
+      row.routed_at = null;
+      row.dq_reason = "cross_channel_duplicate";
+      row.duplicate_of = dupeOf;
+    }
+  }
+
   const submissionId = await insertEmployerLead(row);
 
   if (row.routing_outcome === "disqualified") {
-    // DQ only fires on truly malformed payloads (no email / no company). No
-    // email follow-up — by definition we either can't reach them or it's a bot.
-    // Row persisted with routing_outcome='disqualified' for audit.
+    // Malformed payload (no email / no company) OR a cross-channel duplicate.
+    // Row persisted for audit; no routing, no fan-out either way.
     return { submissionId, outcome: "disqualified", task: null };
   }
 
   const task = buildPostRouteTask(submissionId, row, opts.fireCapi);
   return { submissionId, outcome: "routed", task };
+}
+
+// Provider-agnostic cross-channel dedup lookup. Matches a routed employer lead
+// against a recent non-dupe employer lead for the SAME provider. Email is the
+// reliable key (Instant Form + on-site carry the same address); phone is a
+// fallback normalised to the last 10 digits so 07... and +447... match. Window
+// is deliberately short-ish to avoid suppressing a genuine later re-enquiry.
+const EMPLOYER_DEDUP_WINDOW_DAYS = 14;
+async function findEmployerDuplicate(row: EmployerSubmissionRow): Promise<number | null> {
+  if (!row.primary_routed_to) return null;
+  const email = (row.email ?? "").trim().toLowerCase() || null;
+  const phone10 = row.phone ? row.phone.replace(/\D/g, "").slice(-10) : null;
+  if (!email && (!phone10 || phone10.length < 10)) return null;
+
+  const rows = await sql<Array<{ id: number }>>`
+    SELECT id
+      FROM leads.submissions
+     WHERE lead_type = 'employer_apprenticeship'
+       AND primary_routed_to = ${row.primary_routed_to}
+       AND COALESCE(is_dq, false) = false
+       AND submitted_at > now() - make_interval(days => ${EMPLOYER_DEDUP_WINDOW_DAYS})
+       AND (
+         (${email}::text IS NOT NULL AND lower(email) = ${email})
+         OR (${phone10}::text IS NOT NULL AND right(regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = ${phone10})
+       )
+     ORDER BY id ASC
+     LIMIT 1
+  `;
+  return rows.length > 0 ? Number(rows[0].id) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +236,8 @@ function normalise(
     routing_outcome,
     routing_outcome_hint: strOrNull(data.routing_outcome_hint),
     routed_at: routing_outcome === "routed" ? now : null,
+    dq_reason: null,
+    duplicate_of: null,
     first_name,
     last_name,
     email: email ?? "",
@@ -247,7 +303,8 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         headcount_estimate, standards_interested, focus_area, additional_notes, ern,
         terms_accepted, terms_accepted_at, marketing_opt_in,
         page_url, utm_source, utm_medium, utm_campaign, utm_content,
-        fbclid, gclid, referrer, event_id, fbp, fbc, experiment_id, experiment_variant, raw_payload, is_dq
+        fbclid, gclid, referrer, event_id, fbp, fbc, experiment_id, experiment_variant, raw_payload, is_dq,
+        dq_reason, parent_submission_id
       ) VALUES (
         ${row.schema_version}, ${nowIso}, ${row.lead_type}, ${row.source_form}, ${row.primary_routed_to}, ${row.routing_outcome},
         ${row.routing_outcome_hint}, ${row.routed_at}, ${providerIds},
@@ -257,7 +314,8 @@ async function insertEmployerLead(row: EmployerSubmissionRow): Promise<number> {
         ${row.headcount_estimate}, ${row.standards_interested}, ${row.focus_area}, ${row.additional_notes}, ${row.ern},
         ${row.terms_accepted}, ${row.terms_accepted_at}, ${row.marketing_opt_in},
         ${row.page_url}, ${row.utm_source}, ${row.utm_medium}, ${row.utm_campaign}, ${row.utm_content},
-        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.event_id}, ${row.fbp}, ${row.fbc}, ${row.experiment_id}, ${row.experiment_variant}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"}
+        ${row.fbclid}, ${row.gclid}, ${row.referrer}, ${row.event_id}, ${row.fbp}, ${row.fbc}, ${row.experiment_id}, ${row.experiment_variant}, ${tx.json(row.raw_payload)}, ${row.routing_outcome === "disqualified"},
+        ${row.dq_reason}, ${row.duplicate_of}
       )
       RETURNING id
     `;

@@ -1,5 +1,13 @@
 # Platform - Changelog
 
+## 2026-08-03 — Cross-channel employer dedup (auto) + Andy dupe consolidation + migration 0239
+
+- Migration 0239: `crm.enrolments.lost_reason` CHECK += `duplicate`.
+- Andy Lyden cross-channel dupe (Instant Form #767 05:38 + on-site #768 05:41, same email, filled differently): kept #768 canonical; marked #767 is_dq `cross_channel_duplicate`, `parent_submission_id=768`, archived, enrolment 786 -> lost `duplicate`. Data fix via db query. Both had already fired the initial SMS + provider notify (pre-dedup) — not clawed back.
+- **Auto-dedup (provider-agnostic)** in `_shared/employer-lead-core.ts`: `findEmployerDuplicate` matches a routed employer lead against a recent (14-day) non-dupe employer lead for the SAME `primary_routed_to`, by email (primary) or phone normalised to last-10-digits (so 07... and +447... match). On match: lead flagged is_dq `cross_channel_duplicate` + `parent_submission_id`, routing_outcome flipped to `disqualified` -> NO routing_log, enrolment, or fan-out (no 2nd SMS/U1/U2/CAPI/portal row). Keeps the FIRST arrival. `EmployerSubmissionRow` + the INSERT gained `dq_reason` + `parent_submission_id`. Keyed on the resolved provider, so it works for any provider's Instant Form, not just Riverside. Deployed netlify-employer-lead-router + meta-instant-employer-lead-router.
+- **NOT provider-agnostic yet: routing.** `employer-lead-core` still hardcodes `RIVERSIDE_PROVIDER_ID` for `primary_routed_to`. Launching Instant Forms for OTHER providers needs the router to resolve the provider from the form/payload first — separate build (the dedup is ready for it).
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — New EF provider-renotify + backfilled 3 missed EMS notifications
 
 - New EF `provider-renotify` (verify_jwt=false, x-audit-key auth): manually re-sends the standard new-enquiry provider notification for an already-routed lead via the shared `sendProviderNotification`. For backfills / one-offs; not part of the normal routing path.
