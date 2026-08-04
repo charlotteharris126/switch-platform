@@ -1,5 +1,12 @@
 # Platform - Changelog
 
+## 2026-08-04 — Sheet retirement completed (WYK + CD webhooks nulled)
+
+- Data-op 054: nulled `sheet_webhook_url` for wyk-digital + courses-direct (both active=false / dormant; owner confirmed they return on the portal). Now 0 providers have a sheet webhook. Combined with EMS (053) + the already-disabled sheet-drift cron, no provider writes to or is reconciled against a Google Sheet.
+- Admin: removed the "Sheet activity" tab from the admin nav (`admin-shell.tsx`); the /admin/sheet-activity page + /admin/errors sheet panel remain but are now orphaned/dormant.
+- Deferred housekeeping (no live impact — nothing uses these now): remove the sheet code paths (route-lead/employer-lead-core sheet append, reconcile-sheet-to-db + sheet-edit-mirror + sheet-drift-reconcile-daily EFs), the /admin/sheet-activity page + errors sheet panel, and eventually drop the `crm.providers.sheet_webhook_url` / `sheet_id` columns (migration).
+- Signed off: Owner (session 2026-08-04).
+
 ## 2026-08-03 — Cross-channel employer dedup (auto) + Andy dupe consolidation + migration 0239
 
 - Migration 0239: `crm.enrolments.lost_reason` CHECK += `duplicate`.
