@@ -1,54 +1,51 @@
-# Platform Handoff, Session 87, 2026-08-03
+# Platform Handoff, Session 87, 2026-08-04
 
 ## Current state
 
-Platform SMS and fastrack surfaces were overhauled this session around the EMS York bootcamp and Riverside employer launches. Learner fastrack display + confirmation now handle all four reconfirm gates (L3 / earnings / support-role / business-status); SMS sends without a rep number for no-rep courses; the B2B employer SMS lifecycle (initial-on-routing + chaser) is live. EMS is fully cut over to the portal (sheet writes off, Google access revoked). Carried items from S82 (revenue backfill), S84 (clear-cache deploy), and S86 (14-EF sweep, Clara consent) remain open and untouched.
+Large SMS + fastrack + sheet session. Learner fastrack display + confirmation now handle all four reconfirm gates (L3 / earnings / support-role / business-status); SMS sends without a rep number for no-rep courses; the B2B employer SMS lifecycle (initial-on-routing + chaser) is live and auto-fire is verified; cross-channel employer dedup is live and provider-agnostic. Sheets are retired operationally — 0 providers write to a sheet. A null-webhook regression (from the EMS cutover) was found and fixed mid-session.
 
 ## What was done this session
 
-- **Fastrack display fix (provider portal + admin).** The fastrack panel was hardcoded to L3, so EMS saw a phantom "L3 reconfirmed: No" on Immediate Impact (a business-status course) while the real answer was hidden. Now renders whichever reconfirm the course actually asked (L3 / earnings / support-role / business-status), keyed off the non-null column, and hides not-asked rows. Files: provider `lead-detail-view.tsx` + `page.tsx`, admin `leads/[id]/page.tsx`.
-- **Fastrack qualify-ack gate fix (fastrack-receive).** The `u_fastrack_qualified` email + save-number SMS gate only covered L3 / earnings / support-role, so business-status learners got no confirmation. Added the business-status clause. Backfilled Alan (758) via data-op 052 (delete child row + replay stored raw_payload through the fixed EF): email sent; save-number SMS correctly skipped (York has no dedicated rep).
-- **EMS sheet cutover.** Owner removed EMS's Google Drive access; nulled EMS `sheet_webhook_url` (data-op 053). EMS confirmed active on the portal (6 users, last login 2026-08-03). WYK + Courses Direct stay on sheets.
-- **Removed the auto-route owner FYI email** (netlify-lead-router) — it false-alarmed "Sheet append failed, paste manually" on EMS portal-only leads. Action-needed emails (manual-confirm, fallback) untouched; real failures still hit dead_letter.
-- **SMS no-rep fallback + number-less variants.** `resolveSmsContact` prefers the regional rep, else the provider general line (`contact_phone`), else a number-less body that drops the "save their number" clause. Dropped the rep-phone gate. Owner decision: applies to ALL sms-enabled providers, not EMS-only. Alan's York chaser sent.
-- **Employer (B2B) SMS path.** Threaded `lead_type` through `SubmissionRow` + `SUBMISSION_FULL_COLUMNS`; employer leads bypass the gov/loan funding gate; employer chaser wording ("training enquiry", no course/"your place", no "apprenticeship" per Riverside's steer). Shelley (736) test chaser sent.
-- **B2B initial SMS** (`fireEmployerInitialSms`) as a 4th leg in the employer post-route fan-out (fires on routing, alongside the U1 employer email).
-- **Migration 0238** added `employer_intro` to the `sms_log_comm_type_check` CHECK. The B2B initial was silently failing (constraint reject swallowed by sendSms); first hit Paul (763). Backfilled Paul via a new optional `kind` param on `sms-chaser-attempt-1` (`chaser` | `employer_initial`): sent.
-- **Fixed a regression from the sheet cutover (data-op 053).** A null `sheet_webhook_url` was treated as a sheet-append FAILURE, so every EMS learner lead post-cutover dead-lettered + emailed the owner "sheet append failed" AND returned early before the provider notification (EMS got no new-lead email). Fix in `_shared/route-lead.ts`: null webhook = clean skip → flow reaches the portal-aware `sendProviderNotification`; sheet backup link gated on the webhook too. Redeployed netlify-lead-router + routing-confirm. Wrote off dead_letter 1218/1220/1221.
-- **Deployed** to switch-platform main: fastrack-receive, netlify-lead-router, routing-confirm, sms-chaser-attempt-1, sms-fastrack-prompt-cron, netlify-employer-lead-router, meta-instant-employer-lead-router. All changes committed; changelog updated per change.
+- **Fastrack display fix (provider portal + admin).** Was hardcoded to L3 (EMS saw a phantom "L3 reconfirmed: No" on Immediate Impact). Now renders whichever reconfirm the course asked; hides not-asked rows. Also fixed the qualify-ack gate in fastrack-receive to cover business_status. Alan (758) backfilled via data-op 052.
+- **EMS sheet cutover (data-op 053)** + **fixed the regression it caused.** A null `sheet_webhook_url` was treated as a sheet-append FAILURE in `_shared/route-lead.ts`, so EMS learner leads dead-lettered, emailed the owner "sheet append failed", and returned early BEFORE the provider notification. Fix: null webhook = clean skip; sheet backup link gated on the webhook. Redeployed netlify-lead-router + routing-confirm.
+- **New EF `provider-renotify`** (x-audit-key auth): re-sends the standard provider notification for a routed lead. Backfilled the 3 EMS leads (762/764/766) that missed theirs during the regression window.
+- **Removed the auto-route owner FYI email** (was false-alarming "sheet append failed" on EMS).
+- **SMS no-rep fallback + number-less variants** (all sms-enabled providers, owner decision). Alan's York chaser sent.
+- **B2B employer SMS.** Employer chaser (Shelley #736 test sent) + B2B initial-on-routing. Migration 0238 (`sms_log.comm_type` CHECK += `employer_intro`) fixed the initial silently failing; Paul (763) backfilled via a new `kind` param on sms-chaser-attempt-1. **Auto-fire VERIFIED**: Andy (#767/#768) both got `employer_intro` automatically.
+- **Cross-channel employer dedup (provider-agnostic)** in `_shared/employer-lead-core.ts`. Matches a routed employer lead by email (or phone normalised to last-10-digits) to a recent (14-day) non-dupe lead for the SAME `primary_routed_to`; flags dupe + skips routing/fan-out. Migration 0239 (`enrolments.lost_reason` += `duplicate`). Andy #767 marked dupe of #768 (kept richer), enrolment 786 closed.
+- **Sheet retirement completed.** WYK + Courses Direct webhooks nulled (data-op 054; both dormant/inactive). Sheet-activity tab removed from admin nav. 0 providers on sheets; drift cron already disabled.
+- Deployed many EFs; changelog updated per change. Memory index consolidated (12 files → 5).
 
 ## Next steps
 
-1. **Owner decision: re-send the 3 missed EMS provider notifications** (leads 762 Jonathan, 764 Ellie, 766 Richard — came in this afternoon after the cutover, before the null-webhook fix; visible in EMS's portal but no email nudge sent). Either re-send (needs a small one-off, no manual sendProviderNotification trigger exists) or flag to EMS directly.
-2. **Verify the B2B initial SMS auto-fires on the NEXT real employer lead.** Paul's was a manual backfill via `kind`; the automatic fan-out path has not fired a fresh lead since the 0238 constraint fix. Watch the next genuine `/business/` or Instant Form employer enquiry land an `employer_intro` row in `crm.sms_log`.
-2. ~~CARRIED FROM S84: clear-cache deploy for the `DBG-SRV` banner~~ **LIKELY DONE, dropped as stale (S87 check).** The diagnostic banner was already removed from source (commit `1e15b6c`, "confirmed working on Riverside portal"), so the carried "clear-cache deploy to remove it" was stale. If the banner is somehow still visible on the live portal, a Netlify "Clear cache and deploy site" on the platform app clears it; otherwise nothing to do.
-3. **CARRIED FROM S82 (owner decides):** revenue-backfill button on `/admin/data-ops` + revenue/profit on the tracker. ~£2,100 collected, `billed_amount` null on every enrolment, `crm.billing_events` empty. Then backfill 14 EMS + 1 WYK if yes.
-4. **Optional polish:** trim "Ltd/Limited" from `company_name` in B2B SMS rendering (reads "Riverside Training Limited"). One-line in `resolveSmsContact` (`_shared/sms-utility.ts`).
-5. **Optional:** switch off `sms_utility_enabled` / `sms_chaser_enabled` on the 3 demo providers (demo-b2b / demo-b2c / demo-provider-ltd) so they can't fire real SMS now the rep-phone gate is gone.
-6. **composeFastrackNotes** (fastrack-receive) omits `business_status_reconfirmed` from the EMS sheet summary. Cosmetic (portal shows it); fold into the next fastrack-receive change.
-7. **sendSms robustness:** it swallows sms_log insert failures (no throw, no dead_letter), and the employer fan-out audit field `employer_sms_sent` reads leg-completion not send-success. Surface insert failures + fix the audit field so a future bad comm_type isn't silent.
-8. **CARRIED FROM S86: 14-EF `_shared` sweep** (grew this session with more `_shared` edits). Still-stale importers to redeploy: admin-brevo-resync, admin-notify-callback, admin-test-email, backfill-sw-provider-contact-block, brevo-attribute-reconcile, drift-digest-daily, iris-daily-flags, meta-ads-ingest, republish-provider-sheet, routing-confirm, sheet-drift-reconcile-daily, sheet-edit-mirror. (sms-chaser-attempt-1 + sms-fastrack-prompt-cron now deployed.)
-9. **CARRIED:** Clara B2B consent-wording review (Hub open); Notion Tech Stack "Last updated" date bump; revoke leaked GitHub PAT (S81); verify B2C CAPI fix on next organic DQ lead (S81).
+1. **FINISH SHEET REMOVAL (owner + platform).** Owner: remove Google access from the existing WYK + Courses Direct sheets so no provider can accidentally use them (like EMS). Platform: remove the now-dormant sheet code — the sheet EFs (reconcile-sheet-to-db, sheet-edit-mirror, sheet-drift-reconcile-daily), the sheet-append paths in route-lead + employer-lead-core, the orphaned `/admin/sheet-activity` page + the `/admin/errors` sheet panel, then a migration to drop `crm.providers.sheet_webhook_url` + `sheet_id`. All dormant, no live impact.
+2. **PRETTY LINKS across SMS + email.** Audit every SMS + email we send for long ugly URLs and replace with short/pretty links. Example (owner-flagged): the fastrack-link SMS — "...quick form: https://switchable.org.uk/funded/thank-you/?ref=<uuid>&course=<slug>&m=1". Code already flags a deferred `/f/{token}` shortener handover to Mable (`buildFastrackUrlForSms` comment in `_shared/sms-utility.ts`). Also check referral URLs + any Brevo email deep-links. **Cross-project:** likely needs Mable (site — build the `/f/{token}` shortener) and Wren (email links).
+3. **Watch the B2B initial keeps auto-firing** on employer leads (verified once on Andy).
+4. **CARRIED S82 (owner decides):** revenue-backfill button + revenue/profit on the tracker (~£2,100 collected, `billed_amount` null on every enrolment, `crm.billing_events` empty).
+5. **Optional polish:** Ltd/Limited trim in B2B SMS ("Riverside Training Limited"); switch off `sms_utility_enabled`/`sms_chaser_enabled` on the 3 demo providers.
+6. **Multi-provider employer routing (only if launching Instant Forms for other providers).** `employer-lead-core` hardcodes Riverside as `primary_routed_to`; the dedup is already provider-agnostic but routing isn't. A design was drafted (payload `provider` field, validated, Riverside default, DQ on unknown) but NOT built this session.
+7. **CARRIED:** Clara B2B consent review; Notion Tech Stack date bump; revoke leaked GitHub PAT (S81); verify B2C CAPI on next organic DQ lead (S81).
+8. **CARRIED (grew): 14-EF `_shared` sweep** — many EFs bundle the changed `_shared` modules and run old code (no live risk). Redeploy to keep deployed = committed.
 
-**Note: Work Hub capture was blocked this session** (`get_task_capture_key` permission denied over the MCP, same as S86), so steps 4-7 above were NOT filed as Hub tasks. They live here in Next steps only. Would-have-filed (all `platform`): demo-provider SMS flags off; composeFastrackNotes business_status gap; sendSms swallows insert failures + `employer_sms_sent` audit accuracy; Ltd/Limited trim in B2B SMS.
+Note: Work Hub capture blocked again (`get_task_capture_key` permission denied over the MCP). Steps 1-6 live here only; the two big ones are finish-sheet-removal and pretty-links.
 
 ## Decisions and open questions
 
-- **Number-less SMS applies to ALL sms-enabled providers** (owner decision), not EMS-only. Newly activates SMS for WYK + Riverside on gov/loan leads, and the demo providers if they ever get a real lead, hence the demo-flags follow-up (step 5).
-- **`crm.sms_log.comm_type` has a CHECK constraint** (widened in 0238). Any new `SmsLogType` value needs a migration. Corrected an earlier wrong "comm_type is unconstrained" assumption from the B2B-initial build.
-- **EMS sheet retired** (writes off + Google access revoked). The 26 sheet-stale drift rows in `/admin/errors` should now settle. WYK + Courses Direct stay on the sheet route; the shared reconcile-sheet-to-db cron stays for them.
-- **Open (carried S82):** does a provider marking "Presumed Enrolled" ever become billable? Policy call needed before any presumed is billed. Revenue-backfill decision (step 3).
+- **Number-less SMS applies to ALL sms-enabled providers** (owner decision), not EMS-only.
+- **`sms_log.comm_type` (0238) and `crm.enrolments.lost_reason` (0239) both have CHECK constraints** — any new value needs a migration. (sendSms swallows an insert failure silently — a bad comm_type fails invisibly; noted as a robustness follow-up.)
+- **Auto-dedup keeps the FIRST arrival.** Andy was manually kept as the richer SECOND — automation can't predict richness, so first-wins is the default; re-mark by hand for exceptions.
+- **Sheets retired** (0 providers). Future providers onboard to the portal.
+- **Open (carried S82):** presumed-billing policy; revenue backfill.
 
 ## Watch items
 
-- **B2B initial SMS auto-fire** on the next real employer lead (unproven since the 0238 fix; Paul was a manual backfill).
-- `DBG-SRV` banner: removed from source and confirmed gone per commit `1e15b6c`; only re-check if it visibly reappears on the live portal.
+- **B2B initial SMS auto-fire** — verified once (Andy); keep an eye it keeps firing on real employer leads.
+- **Cross-channel dupes** now caught automatically; but Andy already got 2 SMS + 2 provider emails before the dedup shipped (pre-dedup, not clawed back).
 - **CARRIED: Meta spend stale** in `ads_switchable.meta_daily` since 1 July.
-- **26 sheet-stale drift rows** in `/admin/errors` — watch they clear now the EMS sheet is off.
 - `platform/weekly-notes.md` has an uncommitted change not from this session (Sasha's Monday output); left as-is.
 
 ## Next session
 
 - **Folder:** `platform/`
-- **First task:** Verify the B2B initial SMS auto-fired on the latest real employer lead (`employer_intro` in `crm.sms_log`). Then the S82 revenue-backfill owner decision.
-- **Cross-project:** None required. Riverside is Nell's client (`switchleads/clients/`) but the employer SMS lifecycle is platform-internal; nothing pushed there.
+- **First task:** Finish the sheet-code removal (owner pulls WYK/CD Google access in parallel), then the pretty-links audit across SMS + email.
+- **Cross-project:** Pretty links (step 2) likely needs `switchable/site` (Mable — build the `/f/{token}` short-link) and `switchable/email` (Wren — email deep-links). Flag to their handoffs when the shortener approach is decided.
