@@ -24,7 +24,6 @@ const NAV_SECTIONS: Array<{
       { href: "/actions", label: "Actions" },
       { href: "/leads", label: "Leads" },
       { href: "/admin/referrals", label: "Referrals" },
-      { href: "/sheet-activity", label: "Sheet activity" },
       { href: "/providers", label: "Providers" },
     ],
   },
