@@ -524,6 +524,9 @@ verify_jwt = false
 [functions.provider-renotify]
 verify_jwt = false
 
+[functions.go-resolve]
+verify_jwt = false
+
 [functions.sms-fastrack-prompt-cron]
 verify_jwt = false
 

@@ -1,5 +1,14 @@
 # Platform - Changelog
 
+## 2026-08-04 — Pretty short-links: platform half built (table + mint + resolver)
+
+- Migration 0240: `leads.short_links` (code PK -> submission_id, kind, unique per (submission,kind)) + RLS (functions_writer all, readonly_analytics select).
+- `_shared/short-link.ts`: `mintShortLink` (6-char code, charset excludes 0/o/1/l/i, idempotent per submission+kind, collision-retry) + `resolveShortLink` + `buildFastrackTarget`.
+- New EF `go-resolve` (verify_jwt=false): `?c=<code>` -> 302 to the full /funded/thank-you/ URL; unknown code -> homepage fallback. Verified end to end (code -> correct thank-you target; unknown -> home).
+- Design (owner-locked): `switchable.org.uk/go/<code>`. Only the fastrack URL needed shortening (referral + portal already clean).
+- REMAINING (not done tonight, must land together + be tested end to end): (1) the site `/go/<code>` route on switchable.org.uk (switchable/site, Mable) that fronts go-resolve; (2) wire the emit — make `buildFastrackUrl` (route-lead) + `buildFastrackUrlForSms` (sms-utility) mint a code + emit `/go/<code>` (async refactor of their callers, ideally behind a flag). Do NOT flip the emit before the site route is live or every fastrack link 404s.
+- Signed off: Owner (session 2026-08-04).
+
 ## 2026-08-04 — Sheet retirement completed (WYK + CD webhooks nulled)
 
 - Data-op 054: nulled `sheet_webhook_url` for wyk-digital + courses-direct (both active=false / dormant; owner confirmed they return on the portal). Now 0 providers have a sheet webhook. Combined with EMS (053) + the already-disabled sheet-drift cron, no provider writes to or is reconciled against a Google Sheet.
