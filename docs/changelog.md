@@ -1,5 +1,11 @@
 # Platform - Changelog
 
+## 2026-08-03 — New EF provider-renotify + backfilled 3 missed EMS notifications
+
+- New EF `provider-renotify` (verify_jwt=false, x-audit-key auth): manually re-sends the standard new-enquiry provider notification for an already-routed lead via the shared `sendProviderNotification`. For backfills / one-offs; not part of the normal routing path.
+- Used it to backfill the 3 EMS leads (762 Jonathan, 764 Ellie, 766 Richard) that missed their notification during the null-webhook regression window. All 3 sent.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — Fix: null sheet_webhook_url treated as a failure (regression from data-op 053)
 
 - Code (no migration): `_shared/route-lead.ts`. Redeployed netlify-lead-router + routing-confirm.
