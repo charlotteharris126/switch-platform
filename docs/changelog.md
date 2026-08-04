@@ -1,5 +1,13 @@
 # Platform - Changelog
 
+## 2026-08-04 — Pretty links LIVE: emit-flip (SMS + email now send switchable.org.uk/go/<code>)
+
+- Code: `_shared/route-lead.ts` new `buildFastrackUrlShort(sql, submissionId, ...)` — mints a short_links code + emits `switchable.org.uk/go/<code>`, FALLS BACK to the long /funded/thank-you/ URL on any mint failure (a fastrack link can never break). Wired into all 3 `SW_FASTRACK_URL` producers (buildLearnerBrevoAttributes, upsertLearnerInBrevo params, buildLearnerBrevoAttributesNoMatch) + the SMS `fireFastrackLinkSms` (sms-utility.ts). Removed the now-dead `buildFastrackUrlForSms`.
+- Site side already live (switchable-site: `/go/<code>` netlify function -> go-resolve EF). Verified end to end earlier this session.
+- Redeployed the SW_FASTRACK_URL emitters: netlify-lead-router, routing-confirm, fastrack-receive, sms-fastrack-prompt-cron, admin-brevo-resync, backfill-sw-provider-contact-block, brevo-attribute-reconcile.
+- **Brevo backfill flag (per CLAUDE.md wiring rule):** SW_FASTRACK_URL is the changed attribute. Existing Brevo contacts keep their OLD long URL until re-upserted — those long URLs STILL WORK (not broken), so no urgency. brevo-attribute-reconcile (redeployed) now computes the short URL as canonical and will converge contacts to it over its daily runs; a one-shot re-upsert backfill can force it sooner if wanted.
+- Signed off: Owner (session 2026-08-04).
+
 ## 2026-08-04 — Pretty short-links: platform half built (table + mint + resolver)
 
 - Migration 0240: `leads.short_links` (code PK -> submission_id, kind, unique per (submission,kind)) + RLS (functions_writer all, readonly_analytics select).

@@ -34,6 +34,7 @@ import {
   type SmsLogType,
 } from "./brevo.ts";
 import {
+  buildFastrackUrlShort,
   getMatrixContext,
   renderProviderContactValues,
   resolveRepFirstName,
@@ -224,7 +225,13 @@ export async function fireFastrackLinkSms(args: FireSmsArgs): Promise<SmsHelperO
   // rep hasn't called yet so REP_FIRST_NAME would be premature.
   const matrix = await getMatrixContext(args.submission.course_id, args.submission.preferred_intake_id);
   const courseName = matrix.courseTitle ?? "your course";
-  const fastrackUrl = buildFastrackUrlForSms(args.submission);
+  const fastrackUrl = await buildFastrackUrlShort(
+    args.sql,
+    args.submission.id,
+    args.submission.client_nonce,
+    args.submission.course_id,
+    args.submission.marketing_opt_in === true,
+  );
   if (!fastrackUrl) {
     return { kind: "skipped", reason: "no client_nonce — cannot build fastrack URL" };
   }
@@ -254,19 +261,8 @@ export async function fireFastrackLinkSms(args: FireSmsArgs): Promise<SmsHelperO
   return { kind: "sent", result };
 }
 
-// Inline fastrack URL composer for the SMS body. Mirrors the existing
-// buildFastrackUrl in route-lead.ts (kept private there to avoid two-callers
-// drift, copied here intentionally — when Mable ships /f/{token}, this is the
-// only call-site to update; route-lead.ts buildFastrackUrl keeps emitting the
-// long URL for Brevo SW_FASTRACK_URL because email contexts have unlimited
-// URL room).
-function buildFastrackUrlForSms(submission: SubmissionRow): string {
-  if (!submission.client_nonce) return "";
-  const params = [`ref=${encodeURIComponent(submission.client_nonce)}`];
-  if (submission.course_id) params.push(`course=${encodeURIComponent(submission.course_id)}`);
-  params.push(`m=${submission.marketing_opt_in ? "1" : "0"}`);
-  return `https://switchable.org.uk/funded/thank-you/?${params.join("&")}`;
-}
+// (The SMS fastrack URL is now the shared buildFastrackUrlShort from
+// route-lead.ts — mints switchable.org.uk/go/<code>, long-URL fallback.)
 
 // --- shared internals ---
 

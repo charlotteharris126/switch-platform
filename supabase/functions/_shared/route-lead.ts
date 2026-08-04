@@ -23,6 +23,7 @@
 // later from the owner-fallback email).
 
 import type { Sql } from "npm:postgres@3";
+import { mintShortLink } from "./short-link.ts";
 import { getOwnerEmail, adminLeadUrl } from "./owner-email.ts";
 import {
   type BrevoAttributes,
@@ -766,6 +767,31 @@ function buildFastrackUrl(
   return `https://switchable.org.uk/funded/thank-you/?${params.join("&")}`;
 }
 
+// Pretty short version: mints a switchable.org.uk/go/<code> short-link (resolves
+// via the go-resolve EF + the site /go/<code> route). Falls back to the full
+// long URL if minting fails for any reason — the short-link layer can NEVER
+// break a fastrack link. Returns "" when there's no client_nonce (nothing to
+// fastrack), matching buildFastrackUrl.
+export async function buildFastrackUrlShort(
+  sql: Sql,
+  submissionId: number,
+  clientNonce: string | null,
+  courseId: string | null,
+  marketingOptIn: boolean,
+): Promise<string> {
+  if (!clientNonce) return "";
+  try {
+    const code = await mintShortLink(sql, submissionId, "fastrack");
+    return `https://switchable.org.uk/go/${code}`;
+  } catch (err) {
+    console.error(
+      `buildFastrackUrlShort: mint failed for submission ${submissionId}, using long URL:`,
+      describeError(err),
+    );
+    return buildFastrackUrl(clientNonce, courseId, marketingOptIn);
+  }
+}
+
 // Resolves course / region / intake / sector for a submission, branching on
 // funding_category. Self-funded leads skip matrix.json entirely (their
 // course_id is a YAML id, not a page slug, so the lookup would silently miss)
@@ -883,6 +909,7 @@ export async function buildLearnerBrevoAttributes(
   // SW_ prefix so it doesn't collide with future SwitchLeads SL_-prefixed
   // attributes on the same Brevo contact (one email = one Brevo contact
   // across both brands). Decision 2026-04-29.
+  const fastrackUrl = await buildFastrackUrlShort(sql, submission.id, agg.clientNonce, agg.courseId, agg.marketingOptIn === true);
   return {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
@@ -933,7 +960,7 @@ export async function buildLearnerBrevoAttributes(
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: lostReason,
     SW_FASTRACK_COMPLETED: agg.canonicalFastracked,
-    SW_FASTRACK_URL: buildFastrackUrl(agg.clientNonce, agg.courseId, agg.marketingOptIn === true),
+    SW_FASTRACK_URL: fastrackUrl,
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
@@ -1158,6 +1185,7 @@ async function sendU1Transactional(
 
   const ctx = await composeBrevoCourseContext(submission);
 
+  const fastrackUrl = await buildFastrackUrlShort(sql, submission.id, submission.client_nonce, submission.course_id, submission.marketing_opt_in === true);
   const params: Record<string, string | number | boolean | null> = {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
@@ -1179,7 +1207,7 @@ async function sendU1Transactional(
     // to keep template renderers safe.
     SW_PHONE: submission.phone ?? "",
     SW_FASTRACK_COMPLETED: submission.fastracked_at != null,
-    SW_FASTRACK_URL: buildFastrackUrl(submission.client_nonce, submission.course_id, submission.marketing_opt_in === true),
+    SW_FASTRACK_URL: fastrackUrl,
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
@@ -1257,6 +1285,7 @@ export async function buildLearnerBrevoAttributesNoMatch(
   const dqReason = submission.is_dq ? (submission.dq_reason ?? "") : "";
   const agg = await loadEmailAggregateState(sql, submission.email ?? "");
 
+  const fastrackUrl = await buildFastrackUrlShort(sql, submission.id, agg.clientNonce, agg.courseId, agg.marketingOptIn === true);
   return {
     FIRSTNAME: submission.first_name ?? "",
     LASTNAME: submission.last_name ?? "",
@@ -1295,7 +1324,7 @@ export async function buildLearnerBrevoAttributesNoMatch(
     SW_PHONE: submission.phone ?? "",
     SW_LOST_REASON: "",
     SW_FASTRACK_COMPLETED: agg.canonicalFastracked,
-    SW_FASTRACK_URL: buildFastrackUrl(agg.clientNonce, agg.courseId, agg.marketingOptIn === true),
+    SW_FASTRACK_URL: fastrackUrl,
     SW_START_TIMING: submission.start_timing ?? "",
     SW_INTEREST_BREADTH: submission.interest_breadth ?? "",
     SW_INVESTMENT_WILLINGNESS: submission.investment_willingness ?? "",
