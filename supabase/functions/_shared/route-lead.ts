@@ -1454,7 +1454,13 @@ async function appendToProviderSheet(
   sheetNotes: string | null,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!provider.sheet_webhook_url) {
-    return { ok: false, error: "provider has no sheet_webhook_url configured" };
+    // Portal-only provider (cut over from sheets, e.g. EMS via data-op 053) or
+    // one never on sheets. Nothing to append — this is an intentional SKIP, not
+    // a failure. Return ok so routeLead does NOT dead-letter, does NOT email the
+    // owner "sheet append failed", and DOES continue to the provider
+    // notification (which is portal-aware). Real failures below still return
+    // ok:false.
+    return { ok: true };
   }
   const token = Deno.env.get("SHEETS_APPEND_TOKEN");
   if (!token) {
@@ -1649,7 +1655,11 @@ export async function sendProviderNotification(
   reApplicationContext?: ReApplicationContext,
 ): Promise<{ ok: boolean; error?: string }> {
   const leadId = formatLeadId(submission.id, submission.submitted_at);
-  const sheetLink = provider.sheet_id
+  // Only offer the sheet backup link if the provider is actually on sheets
+  // (has a live webhook). Portal-only providers keep sheet_id as a record but
+  // can't open the sheet (e.g. EMS lost Google access at cutover), so a sheet
+  // link would be dead — portal link only for them.
+  const sheetLink = provider.sheet_webhook_url && provider.sheet_id
     ? `https://docs.google.com/spreadsheets/d/${provider.sheet_id}/edit`
     : null;
   // Portal-enabled providers get a deep link into the portal lead detail.

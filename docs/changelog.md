@@ -1,5 +1,14 @@
 # Platform - Changelog
 
+## 2026-08-03 — Fix: null sheet_webhook_url treated as a failure (regression from data-op 053)
+
+- Code (no migration): `_shared/route-lead.ts`. Redeployed netlify-lead-router + routing-confirm.
+- Regression: data-op 053 nulled EMS `sheet_webhook_url` (portal cutover), but `appendToProviderSheet` returned `{ok:false, "provider has no sheet_webhook_url configured"}` for a null webhook. In `routeLead` that path dead-letters, sends the owner a "sheet append failed" email (`sendOwnerSheetFailureEmail`), and returns EARLY with `providerNotified:false` — so `sendProviderNotification` never ran. Result: every EMS learner lead since the cutover (762 Jonathan, 764 Ellie, 766 Richard) generated a spurious dead_letter row + owner failure email AND EMS got no new-lead notification.
+- Fix: (1) `appendToProviderSheet` returns `ok:true` for a null webhook — an intentional skip, not a failure, so routeLead proceeds to the (portal-aware) provider notification. (2) `sendProviderNotification` now gates the sheet backup link on `sheet_webhook_url` (not just `sheet_id`), so portal-only providers don't get a dead sheet link they can't open.
+- Cleanup: wrote off dead_letter rows 1218/1220/1221 (`replayed_at` set). (Old April row 89, submission 90, left as-is.)
+- Outstanding: 3 EMS leads (762/764/766) missed their provider-notification email; they are visible in EMS's portal. Owner decision on re-sending.
+- Signed off: Owner (session 2026-08-03).
+
 ## 2026-08-03 — Fix: allow 'employer_intro' in sms_log.comm_type (B2B initial was silently failing)
 
 - Migration: `0238_sms_log_comm_type_employer_intro.sql` (applied via `supabase db push`). Widened `crm.sms_log.comm_type` CHECK to include `employer_intro`.
